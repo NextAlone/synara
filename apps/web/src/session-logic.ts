@@ -30,6 +30,7 @@ export {
   deriveWorkLogEntries,
   isFileChangeWorkLogEntry,
   isProviderFileEditWorkLogEntry,
+  isRenderableToolLifecycleActivity,
   orderedActivities,
   type TimelineEntry,
   type WorkLogAutomation,

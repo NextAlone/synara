@@ -39,7 +39,11 @@ import {
 import { describeLinkChip } from "~/lib/linkChips";
 import { cn } from "~/lib/utils";
 
-import { isFileChangeWorkLogEntry, type WorkLogEntry } from "../../session-logic";
+import {
+  isFileChangeWorkLogEntry,
+  isRenderableToolLifecycleActivity,
+  type WorkLogEntry,
+} from "../../session-logic";
 import {
   formatAgentActivityEntryPreview,
   isAgentActivityWorkEntry,
@@ -304,12 +308,21 @@ function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
 // pairs that the label humanizer renders as "Synara: ...".
 function toolWorkEntryStatus(workEntry: TimelineWorkEntry): SynaraMcpToolStatus {
   if (workEntry.toolStatus) return workEntry.toolStatus;
-  return workEntry.activityKind !== undefined && workEntry.activityKind !== "tool.completed"
-    ? "running"
-    : "completed";
+  if (!isRenderableToolLifecycleActivity(workEntry.activityKind)) return "completed";
+  return workEntry.activityKind === "tool.completed" ? "completed" : "running";
+}
+
+function hasToolIdentity(workEntry: TimelineWorkEntry): boolean {
+  return (
+    workEntry.toolName !== undefined ||
+    workEntry.itemType !== undefined ||
+    workEntry.toolCallId !== undefined ||
+    isRenderableToolLifecycleActivity(workEntry.activityKind)
+  );
 }
 
 function isSynaraToolCall(workEntry: TimelineWorkEntry): boolean {
+  if (!hasToolIdentity(workEntry)) return false;
   return (
     deriveSynaraMcpToolTitle({
       toolName: workEntry.toolName,
@@ -354,12 +367,14 @@ function capitalizePhrase(value: string): string {
 }
 
 function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
-  const synaraTitle = deriveSynaraMcpToolTitle({
-    toolName: workEntry.toolName,
-    title: workEntry.toolTitle,
-    fallbackLabel: workEntry.label,
-    status: toolWorkEntryStatus(workEntry),
-  });
+  const synaraTitle = hasToolIdentity(workEntry)
+    ? deriveSynaraMcpToolTitle({
+        toolName: workEntry.toolName,
+        title: workEntry.toolTitle,
+        fallbackLabel: workEntry.label,
+        status: toolWorkEntryStatus(workEntry),
+      })
+    : null;
   if (synaraTitle) {
     return synaraTitle;
   }

@@ -498,7 +498,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     deriveSynaraMcpToolTitle({
       toolName,
       title: commandActionDisplay?.title ?? title,
-      fallbackLabel: activity.summary,
+      ...(isRenderableToolLifecycleActivity(activity.kind)
+        ? { fallbackLabel: activity.summary }
+        : {}),
       status: toolStatus,
     }) ??
     deriveReadableToolTitle({
@@ -918,8 +920,8 @@ function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | un
   return [itemType, normalizedLabel, requestKind, toolName, detailHint].join("\u001f");
 }
 
-function isRenderableToolLifecycleActivity(
-  kind: OrchestrationThreadActivity["kind"],
+export function isRenderableToolLifecycleActivity(
+  kind: OrchestrationThreadActivity["kind"] | undefined,
 ): kind is "tool.started" | "tool.updated" | "tool.completed" {
   return kind === "tool.started" || kind === "tool.updated" || kind === "tool.completed";
 }

@@ -2607,6 +2607,34 @@ describe("MessagesTimeline", () => {
     expect(failedMarkup).toContain("Claude rejected reasoningEffort");
   });
 
+  it("renders Synara runtime reconciliation as completed activity, not a running tool", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "entry-runtime-reconciled",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-runtime-reconciled",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Synara recovered a stale running state",
+              toolTitle: "Synara recovered a stale running state",
+              tone: "info",
+              activityKind: "provider.runtime.reconciled",
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Synara recovered a stale running state");
+    expect(markup).not.toContain("Synara is handling recovered a stale running state");
+    expect(markup).not.toContain('data-tool-icon="synara"');
+  });
+
   it("hides raw `ToolName: {json}` argument details behind the humanized heading", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const baseProps = makeTimelineBaseProps();

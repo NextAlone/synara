@@ -57,6 +57,7 @@ import {
   type CodexAppServerSendTurnInput,
   type CodexAppServerStartSessionInput,
 } from "../../codexAppServerManager.ts";
+import { CodexAppServerTransportError } from "../../codexAppServerTransport.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { acquireAgentGatewaySessionLease } from "../../agentGateway/sessionLease.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
@@ -206,6 +207,15 @@ function toSessionError(
 }
 
 function toRequestError(threadId: ThreadId, method: string, cause: unknown): ProviderAdapterError {
+  if (cause instanceof CodexAppServerTransportError && cause.reason === "write-closed") {
+    return new ProviderAdapterRequestError({
+      provider: PROVIDER,
+      method,
+      detail: toMessage(cause, `${method} failed`),
+      deliveryState: "not-sent",
+      cause,
+    });
+  }
   const sessionError = toSessionError(threadId, cause);
   if (sessionError) {
     return sessionError;
@@ -1946,7 +1956,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       Effect.sync(() => manager.listSessions());
 
     const hasSession: CodexAdapterShape["hasSession"] = (threadId) =>
-      Effect.sync(() => manager.hasSession(threadId));
+      Effect.sync(() => manager.hasRoutableSession(threadId));
 
     const stopAll: CodexAdapterShape["stopAll"] = () =>
       Effect.tryPromise({

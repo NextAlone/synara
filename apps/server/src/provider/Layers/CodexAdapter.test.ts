@@ -22,6 +22,7 @@ import {
   type CodexAppServerStartSessionInput,
   type CodexAppServerSendTurnInput,
 } from "../../codexAppServerManager.ts";
+import { CodexAppServerTransportError } from "../../codexAppServerTransport.ts";
 import { ServerConfig } from "../../config.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
@@ -298,6 +299,43 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         effort: "high",
         serviceTier: "fast",
       });
+    }),
+  );
+});
+
+const notSentManager = new FakeCodexManager();
+notSentManager.sendTurnImpl.mockImplementation(async () => {
+  throw new CodexAppServerTransportError({
+    reason: "write-closed",
+    maxBytes: 1024,
+    observedBytes: 64,
+  });
+});
+const notSentLayer = it.layer(
+  makeCodexAdapterLive({ manager: notSentManager }).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+notSentLayer("CodexAdapterLive delivery state", (it) => {
+  it.effect("marks a pre-write closed transport as definitely not sent", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const result = yield* adapter
+        .sendTurn({
+          threadId: asThreadId("thread-not-sent"),
+          input: "hello",
+          attachments: [],
+        })
+        .pipe(Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      if (result._tag !== "Failure") return;
+      assert.equal(result.failure._tag, "ProviderAdapterRequestError");
+      if (result.failure._tag !== "ProviderAdapterRequestError") return;
+      assert.equal(result.failure.deliveryState, "not-sent");
     }),
   );
 });

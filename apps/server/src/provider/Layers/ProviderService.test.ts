@@ -31,6 +31,7 @@ import { Deferred, Effect, Exit, Fiber, Layer, Option, PubSub, Ref, Scope, Strea
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
+  ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
   ProviderSessionDirectoryPersistenceError,
   ProviderUnsupportedError,
@@ -1375,6 +1376,48 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(startPayload.threadId, initial.threadId);
       }
       assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("recovers and retries once when a turn frame was definitely not sent", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const initial = yield* provider.startSession(asThreadId("thread-not-sent"), {
+        provider: "codex",
+        threadId: asThreadId("thread-not-sent"),
+        cwd: "/tmp/project-not-sent",
+        runtimeMode: "full-access",
+      });
+
+      routing.codex.startSession.mockClear();
+      routing.codex.sendTurn.mockClear();
+      routing.codex.sendTurn.mockImplementationOnce((input) =>
+        routing.codex.stopSession(input.threadId).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "codex",
+                method: "turn/start",
+                detail: "Codex app-server stdin closed before the frame was written.",
+                deliveryState: "not-sent",
+              }),
+            ),
+          ),
+        ),
+      );
+
+      const turn = yield* provider.sendTurn({
+        threadId: initial.threadId,
+        input: "retry exactly once",
+        attachments: [],
+      });
+
+      assert.equal(turn.threadId, initial.threadId);
+      assert.equal(routing.codex.sendTurn.mock.calls.length, 2);
+      assert.equal(routing.codex.startSession.mock.calls.length, 1);
+      const resumedStartInput = routing.codex.startSession.mock.calls[0]?.[0];
+      assert.deepEqual(resumedStartInput?.resumeCursor, initial.resumeCursor);
+      assert.equal(resumedStartInput?.cwd, "/tmp/project-not-sent");
     }),
   );
 

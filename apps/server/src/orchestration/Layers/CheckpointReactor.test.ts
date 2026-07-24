@@ -317,6 +317,15 @@ describe("CheckpointReactor", () => {
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(reactor.start.pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(reactor.drain);
+    const captureMessageStartBaseline = async (threadId: ThreadId, messageId: MessageId) => {
+      await runtime!.runPromise(
+        checkpointStore.captureCheckpoint({
+          cwd,
+          checkpointRef: checkpointRefForThreadMessageStart(threadId, messageId),
+        }),
+      );
+      await drain();
+    };
 
     const createdAt = new Date().toISOString();
     await Effect.runPromise(
@@ -381,6 +390,7 @@ describe("CheckpointReactor", () => {
       checkpointStore,
       cwd,
       drain,
+      captureMessageStartBaseline,
     };
   }
 
@@ -492,10 +502,7 @@ describe("CheckpointReactor", () => {
         createdAt,
       }),
     );
-    await waitForGitRefExists(
-      harness.cwd,
-      checkpointRefForThreadMessageStart(threadId, firstMessageId),
-    );
+    await harness.captureMessageStartBaseline(threadId, firstMessageId);
     harness.provider.emit({
       type: "turn.started",
       eventId: EventId.makeUnsafe("evt-turn-a-started"),
@@ -538,10 +545,7 @@ describe("CheckpointReactor", () => {
         createdAt: new Date().toISOString(),
       }),
     );
-    await waitForGitRefExists(
-      harness.cwd,
-      checkpointRefForThreadMessageStart(threadId, secondMessageId),
-    );
+    await harness.captureMessageStartBaseline(threadId, secondMessageId);
     harness.provider.emit({
       type: "turn.started",
       eventId: EventId.makeUnsafe("evt-turn-b-started"),
@@ -576,7 +580,7 @@ describe("CheckpointReactor", () => {
     expect(thread.checkpoints.at(-1)?.files?.map((file) => file.path)).toEqual(["b.txt"]);
   });
 
-  it("recreates a missing message-start baseline before aliasing the turn-start ref", async () => {
+  it("does not retry a missing message-start baseline after provider execution begins", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const threadId = ThreadId.makeUnsafe("thread-1");
     const messageId = MessageId.makeUnsafe("message-missing-baseline");
@@ -600,7 +604,12 @@ describe("CheckpointReactor", () => {
       }),
     );
     const messageStartRef = checkpointRefForThreadMessageStart(threadId, messageId);
-    await waitForGitRefExists(harness.cwd, messageStartRef);
+    await runtime!.runPromise(
+      harness.checkpointStore.captureCheckpoint({
+        cwd: harness.cwd,
+        checkpointRef: messageStartRef,
+      }),
+    );
 
     // Simulate a missing message-start baseline when the provider's
     // turn.started arrives, regardless of which startup path dropped it.
@@ -615,14 +624,13 @@ describe("CheckpointReactor", () => {
       turnId,
     });
     const turnStartRef = checkpointRefForThreadTurnStart(threadId, turnId);
-    await waitForGitRefExists(harness.cwd, turnStartRef);
+    await harness.drain();
 
-    // The reactor must re-establish the message-start baseline and alias the
-    // turn-start ref to it, not capture an independent turn-start snapshot.
-    expect(gitRefExists(harness.cwd, messageStartRef)).toBe(true);
-    expect(runGit(harness.cwd, ["rev-parse", messageStartRef]).trim()).toBe(
-      runGit(harness.cwd, ["rev-parse", turnStartRef]).trim(),
-    );
+    // ProviderCommandReactor owns the only pre-dispatch scan. Retrying after
+    // turn.started would both block the checkpoint worker and capture a late,
+    // invalid baseline.
+    expect(gitRefExists(harness.cwd, messageStartRef)).toBe(false);
+    expect(gitRefExists(harness.cwd, turnStartRef)).toBe(false);
   });
 
   it("waits briefly for the assistant message id before finalizing a completed turn checkpoint", async () => {
@@ -719,16 +727,9 @@ describe("CheckpointReactor", () => {
         createdAt,
       }),
     );
-    await waitForGitRefExists(
-      harness.cwd,
-      checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
-    );
-    await waitForGitRefExists(
-      harness.cwd,
-      checkpointRefForThreadMessageStart(
-        ThreadId.makeUnsafe("thread-1"),
-        MessageId.makeUnsafe("message-user-placeholder"),
-      ),
+    await harness.captureMessageStartBaseline(
+      ThreadId.makeUnsafe("thread-1"),
+      MessageId.makeUnsafe("message-user-placeholder"),
     );
 
     harness.provider.emit({
@@ -830,6 +831,7 @@ describe("CheckpointReactor", () => {
         createdAt,
       }),
     );
+    await harness.captureMessageStartBaseline(threadId, messageId);
 
     harness.provider.emit({
       type: "turn.started",
@@ -1162,20 +1164,23 @@ describe("CheckpointReactor", () => {
     ).toBe(true);
   });
 
-  it("captures pre-turn baseline from project workspace root when thread worktree is unset", async () => {
+  it("aliases the pre-turn baseline from project workspace root when thread worktree is unset", async () => {
     const harness = await createHarness({
       hasSession: false,
       seedFilesystemCheckpoints: false,
       threadWorktreePath: null,
     });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = MessageId.makeUnsafe("message-user-1");
+    const turnId = asTurnId("turn-project-root-baseline");
 
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.makeUnsafe("cmd-turn-start-for-baseline"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
+        threadId,
         message: {
-          messageId: MessageId.makeUnsafe("message-user-1"),
+          messageId,
           role: "user",
           text: "start turn",
           attachments: [],
@@ -1185,15 +1190,25 @@ describe("CheckpointReactor", () => {
         createdAt: new Date().toISOString(),
       }),
     );
+    await harness.captureMessageStartBaseline(threadId, messageId);
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-turn-started-project-root-baseline"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
+    });
 
     await waitForGitRefExists(
       harness.cwd,
-      checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
+      checkpointRefForThreadTurn(threadId, 0),
     );
+    await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, turnId));
     expect(
       gitShowFileAtRef(
         harness.cwd,
-        checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
+        checkpointRefForThreadTurn(threadId, 0),
         "README.md",
       ),
     ).toBe("v1\n");

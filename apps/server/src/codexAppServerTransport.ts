@@ -204,6 +204,15 @@ export class CodexJsonlWriter {
     return this.queuedBytes;
   }
 
+  get canWrite(): boolean {
+    return (
+      !this.closed &&
+      this.writable.writable &&
+      !this.writable.destroyed &&
+      !this.writable.writableEnded
+    );
+  }
+
   close(cause?: unknown): void {
     if (this.closed) return;
     this.closed = true;

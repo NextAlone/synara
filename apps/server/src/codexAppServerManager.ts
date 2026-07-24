@@ -1050,7 +1050,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           lastError: message,
         });
         this.emitErrorEvent(context, "session/startFailed", message);
-        await this.stopSession(threadId);
+        try {
+          await this.stopSession(threadId);
+        } catch (stopError) {
+          log.warn("failed to prove Codex process-tree exit after session start failure", {
+            threadId,
+            error: stopError,
+          });
+        }
       } else {
         gatewaySessionLease?.release();
         this.emitEvent({
@@ -1824,6 +1831,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return context !== undefined && this.isContextRoutable(context);
   }
 
+  hasRoutableSession(threadId: ThreadId): boolean {
+    const context = this.sessions.get(threadId);
+    return context !== undefined && this.isContextRoutable(context);
+  }
+
   async stopAll(): Promise<void> {
     const results = await Promise.allSettled([
       ...Array.from(this.sessions.keys(), (threadId) => this.stopSession(threadId)),
@@ -2025,7 +2037,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       !stdin.destroyed
     );
   }
-
   private async resolveContextForDiscovery(
     threadId?: string,
     cwd?: string,

@@ -549,6 +549,7 @@ describe("Codex app-server teardown", () => {
     // Unroutable immediately: follow-ups must fall through to thread/resume
     // instead of writing into the dying process's stdin.
     expect(manager.hasSession(threadId)).toBe(false);
+    expect(manager.hasRoutableSession(threadId)).toBe(false);
     expect(exitProven).toBe(false);
 
     child.exitCode = 0;
@@ -557,6 +558,7 @@ describe("Codex app-server teardown", () => {
     expect(revokeSessionToken).toHaveBeenCalledOnce();
     expect(exitProven).toBe(true);
     expect(manager.hasSession(threadId)).toBe(false);
+    expect(manager.hasRoutableSession(threadId)).toBe(false);
   });
 
   it("releases the session lease once when the app-server exits spontaneously", () => {
@@ -618,6 +620,57 @@ describe("Codex app-server teardown", () => {
 
     expect(revokeSessionToken).toHaveBeenCalledOnce();
     expect(manager.hasSession(threadId)).toBe(false);
+  });
+
+  it("keeps a failed teardown session fenced and unroutable", async () => {
+    class FakeCodexChild extends EventEmitter {
+      readonly pid = 5353;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      readonly stdin = new PassThrough();
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+    }
+    const child = new FakeCodexChild();
+    const manager = new CodexAppServerManager(undefined, {
+      teardownProcessTree: async () => {
+        throw new Error("exit proof unavailable");
+      },
+    });
+    const threadId = asThreadId("thread-codex-unproven-exit");
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child,
+      stdoutFramer: new CodexJsonlFramer(),
+      stdinWriter: new CodexJsonlWriter(child.stdin),
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    const sessions = (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions;
+    sessions.set(threadId, context);
+
+    await expect(manager.stopSession(threadId)).rejects.toThrow("exit proof unavailable");
+    expect(manager.hasSession(threadId)).toBe(false);
+    expect(manager.hasRoutableSession(threadId)).toBe(false);
+    expect(sessions.has(threadId)).toBe(true);
   });
 });
 
@@ -3356,6 +3409,7 @@ describe("CodexAppServerManager process teardown", () => {
     // stop begins, with teardown proof continuing behind the returned promise.
     expect(closedEvents).toEqual(["session/closed"]);
     expect(manager.hasSession(threadId)).toBe(false);
+    expect(manager.hasRoutableSession(threadId)).toBe(false);
     expect(manager.listSessions()).toHaveLength(0);
     expect(
       (

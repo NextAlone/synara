@@ -48,7 +48,7 @@ import {
 } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
-import { ProviderValidationError } from "../Errors.ts";
+import { ProviderAdapterRequestError, ProviderValidationError } from "../Errors.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import {
@@ -1446,12 +1446,48 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         }
         return yield* runTurnDispatch(input.threadId, (generation) =>
           Effect.gen(function* () {
-            const routed = yield* resolveRoutableSession({
+            let routed = yield* resolveRoutableSession({
               threadId: input.threadId,
               operation: "ProviderService.sendTurn",
               allowRecovery: true,
             });
-            const turn = yield* routed.adapter.sendTurn(input);
+            let turnExit = yield* Effect.exit(routed.adapter.sendTurn(input));
+            if (Exit.isFailure(turnExit)) {
+              const failure = Cause.findErrorOption(turnExit.cause);
+              const wasDefinitelyNotSent =
+                Option.isSome(failure) &&
+                Schema.is(ProviderAdapterRequestError)(failure.value) &&
+                failure.value.deliveryState === "not-sent";
+              if (!wasDefinitelyNotSent) {
+                return yield* Effect.failCause(turnExit.cause);
+              }
+
+              const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
+              if (!binding) {
+                return yield* Effect.failCause(turnExit.cause);
+              }
+              yield* Effect.logWarning("recovering provider session after pre-write turn failure", {
+                threadId: input.threadId,
+                provider: binding.provider,
+              });
+              const recoveredAdapter = yield* recoverSessionForThread({
+                binding,
+                operation: "ProviderService.sendTurn.recoverNotSent",
+              });
+              routed = {
+                adapter: recoveredAdapter,
+                isActive: true,
+                lifecycleGeneration: lifecycle.currentGeneration(input.threadId),
+              };
+              turnExit = yield* Effect.exit(recoveredAdapter.sendTurn(input));
+              if (Exit.isFailure(turnExit)) {
+                return yield* Effect.failCause(turnExit.cause);
+              }
+            }
+            if (Exit.isFailure(turnExit)) {
+              return yield* Effect.failCause(turnExit.cause);
+            }
+            const turn = turnExit.value;
             const persistenceInput: StartedTurnPersistenceInput = {
               threadId: input.threadId,
               provider: routed.adapter.provider,

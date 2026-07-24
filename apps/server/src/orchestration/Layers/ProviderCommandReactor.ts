@@ -149,6 +149,16 @@ export function classifyProviderAttemptOutcome(
   const failure = Cause.findErrorOption(exit.cause);
   if (Option.isNone(failure)) return { _tag: "uncertain", detail };
 
+  if (
+    Schema.is(ProviderAdapterRequestError)(failure.value) &&
+    failure.value.deliveryState === "not-sent"
+  ) {
+    // ProviderService already performs one in-place recovery attempt. A
+    // remaining pre-write failure is still known not to have reached the
+    // provider, so settle it without quarantining future user messages.
+    return { _tag: "rejected", detail };
+  }
+
   const tag = (failure.value as { readonly _tag?: string })._tag;
   switch (tag) {
     case "ProviderAdapterValidationError":
@@ -218,6 +228,8 @@ const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const PROVIDER_COMMAND_CLAIM_LEASE_MS = 30_000;
 const PROVIDER_COMMAND_SAFE_RETRY_LIMIT = 3;
 const PROVIDER_COMMAND_SAFE_RETRY_DELAY = Duration.millis(50);
+const PRE_TURN_CHECKPOINT_WAIT_MS = 2_000;
+const PRE_TURN_CHECKPOINT_RETRY_COOLDOWN_MS = 5 * 60_000;
 const PROVIDER_INPUT_SAFETY_MARGIN_CHARS = 1_000;
 const THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS = 2;
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
@@ -430,6 +442,7 @@ const make = Effect.gen(function* () {
   const editResendTurnStartKeys = new Set<string>();
   const quarantinedThreads = new Set<string>();
   const drainingQueuedTurns = new Set<string>();
+  const checkpointRetryAfterByCwd = new Map<string, number>();
   // Provider sessions with a drained queued turn whose promotion is in flight.
   // The reservation survives provider startup and binds to the exact turn that
   // must settle before another queue can drain, preventing late terminal events
@@ -1406,16 +1419,44 @@ const make = Effect.gen(function* () {
         return;
       }
 
+      const retryAfter = checkpointRetryAfterByCwd.get(cwd) ?? 0;
+      if (retryAfter > Date.now()) {
+        yield* Effect.logDebug("skipping pre-turn checkpoint during workspace cooldown", {
+          threadId: input.threadId,
+          messageId: input.messageId,
+          cwd,
+          retryAfter: new Date(retryAfter).toISOString(),
+        });
+        return;
+      }
+      checkpointRetryAfterByCwd.delete(cwd);
+
       // Capture before provider dispatch so the later turn diff is bounded by
       // the user's submit moment, not early provider edits. skipIfExists keeps
-      // a backup baseline from CheckpointReactor as the first-writer winner.
-      yield* checkpointStore.captureCheckpoint({
+      // an already completed baseline as the first-writer winner. Checkpointing
+      // is auxiliary: a slow repository must not block provider execution.
+      const completed = yield* checkpointStore
+        .captureCheckpoint({
+          cwd,
+          checkpointRef: checkpointRefForThreadMessageStart(
+            input.threadId,
+            MessageId.makeUnsafe(input.messageId),
+          ),
+          skipIfExists: true,
+        })
+        .pipe(Effect.timeoutOption(Duration.millis(PRE_TURN_CHECKPOINT_WAIT_MS)));
+      if (Option.isSome(completed)) {
+        return;
+      }
+
+      const nextRetryAt = Date.now() + PRE_TURN_CHECKPOINT_RETRY_COOLDOWN_MS;
+      checkpointRetryAfterByCwd.set(cwd, nextRetryAt);
+      yield* Effect.logWarning("pre-turn checkpoint exceeded its dispatch budget", {
+        threadId: input.threadId,
+        messageId: input.messageId,
         cwd,
-        checkpointRef: checkpointRefForThreadMessageStart(
-          input.threadId,
-          MessageId.makeUnsafe(input.messageId),
-        ),
-        skipIfExists: true,
+        waitMs: PRE_TURN_CHECKPOINT_WAIT_MS,
+        retryAfter: new Date(nextRetryAt).toISOString(),
       });
     }).pipe(
       Effect.catchCause((cause) =>
