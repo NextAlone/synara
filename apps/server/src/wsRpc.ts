@@ -66,6 +66,7 @@ import {
   vcsHandoffMetadataCommand,
 } from "./gitHandoffOperations";
 import { Keybindings } from "./keybindings";
+import { makeLegacyGitBackendBoundary } from "./legacyGitBackendBoundary";
 import { createLocalPreviewGrant } from "./localImageFiles";
 import { listLocalServers, stopLocalServer } from "./localServerMonitor";
 import {
@@ -632,6 +633,19 @@ const makeWsRpcHandlersLayer = () =>
             gitStatusBroadcaster.refreshStatus(cwd).pipe(Effect.catchCause(() => Effect.void)),
           ),
         );
+      const assertLegacyGitBackendAllowed = makeLegacyGitBackendBoundary({
+        snapshotQuery: projectionReadModelQuery,
+        canonicalizePath: (input) =>
+          realpathNearestExisting(input).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          ),
+      });
+      const guardLegacyGitEffect = <A, E, R>(
+        method: string,
+        cwd: string,
+        effect: Effect.Effect<A, E, R>,
+      ) => assertLegacyGitBackendAllowed({ method, cwd }).pipe(Effect.andThen(effect));
 
       const listManagedWorkspaces = listProjectedManagedWorkspaces({
         worktreesDir: config.worktreesDir,
@@ -1128,51 +1142,108 @@ const makeWsRpcHandlersLayer = () =>
           ),
 
         [WS_METHODS.gitGithubRepository]: (input) =>
-          rpcEffect(resolveGitHubRepository(git, input.cwd), "Failed to resolve GitHub repository"),
+          rpcEffect(
+            guardLegacyGitEffect(
+              WS_METHODS.gitGithubRepository,
+              input.cwd,
+              resolveGitHubRepository(git, input.cwd),
+            ),
+            "Failed to resolve GitHub repository",
+          ),
         [WS_METHODS.gitStatus]: (input) =>
-          rpcEffect(gitStatusBroadcaster.getStatus(input), "Failed to read git status"),
+          rpcEffect(
+            guardLegacyGitEffect(
+              WS_METHODS.gitStatus,
+              input.cwd,
+              gitStatusBroadcaster.getStatus(input),
+            ),
+            "Failed to read git status",
+          ),
         [WS_METHODS.gitReadWorkingTreeDiff]: (input) =>
-          rpcEffect(gitManager.readWorkingTreeDiff(input), "Failed to read working tree diff"),
+          rpcEffect(
+            guardLegacyGitEffect(
+              WS_METHODS.gitReadWorkingTreeDiff,
+              input.cwd,
+              gitManager.readWorkingTreeDiff(input),
+            ),
+            "Failed to read working tree diff",
+          ),
         [WS_METHODS.gitSummarizeDiff]: (input) =>
-          rpcEffect(gitManager.summarizeDiff(input), "Failed to summarize diff"),
+          rpcEffect(
+            guardLegacyGitEffect(
+              WS_METHODS.gitSummarizeDiff,
+              input.cwd,
+              gitManager.summarizeDiff(input),
+            ),
+            "Failed to summarize diff",
+          ),
         [WS_METHODS.gitPull]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(
+            guardLegacyGitEffect(
+              WS_METHODS.gitPull,
               input.cwd,
-              git.withMutation(input.cwd, git.pullCurrentBranch(input.cwd)),
+              refreshGitStatusAfter(
+                input.cwd,
+                git.withMutation(input.cwd, git.pullCurrentBranch(input.cwd)),
+              ),
             ),
             "Failed to pull branch",
           ),
         [WS_METHODS.gitRunStackedAction]: (input) =>
-          bufferLiveUiStream(
-            Stream.callback<GitActionProgressEvent, WsRpcError>((queue) =>
-              refreshGitStatusAfter(
-                input.cwd,
-                gitManager.runStackedAction(input, {
-                  actionId: input.actionId,
-                  progressReporter: {
-                    publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
-                  },
-                }),
-              ).pipe(
-                Effect.matchCauseEffect({
-                  onFailure: (cause) => Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
-                  onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
-                }),
+          Stream.fromEffect(
+            assertLegacyGitBackendAllowed({
+              method: WS_METHODS.gitRunStackedAction,
+              cwd: input.cwd,
+            }),
+          ).pipe(
+            Stream.flatMap(() =>
+              bufferLiveUiStream(
+                Stream.callback<GitActionProgressEvent, WsRpcError>((queue) =>
+                  refreshGitStatusAfter(
+                    input.cwd,
+                    gitManager.runStackedAction(input, {
+                      actionId: input.actionId,
+                      progressReporter: {
+                        publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
+                      },
+                    }),
+                  ).pipe(
+                    Effect.matchCauseEffect({
+                      onFailure: (cause) =>
+                        Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
+                      onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
+                    }),
+                  ),
+                ),
+                { label: "git.stacked-action" },
               ),
             ),
-            { label: "git.stacked-action" },
           ),
         [WS_METHODS.gitResolvePullRequest]: (input) =>
-          rpcEffect(gitManager.resolvePullRequest(input), "Failed to resolve pull request"),
+          rpcEffect(
+            guardLegacyGitEffect(
+              WS_METHODS.gitResolvePullRequest,
+              input.cwd,
+              gitManager.resolvePullRequest(input),
+            ),
+            "Failed to resolve pull request",
+          ),
         [WS_METHODS.gitPullRequestSnapshot]: (input) =>
           rpcEffect(
-            gitManager.pullRequestSnapshot(input),
+            guardLegacyGitEffect(
+              WS_METHODS.gitPullRequestSnapshot,
+              input.cwd,
+              gitManager.pullRequestSnapshot(input),
+            ),
             "Failed to load pull request checks and comments",
           ),
         [WS_METHODS.gitPreparePullRequestThread]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(input.cwd, gitManager.preparePullRequestThread(input)),
+            guardLegacyGitEffect(
+              WS_METHODS.gitPreparePullRequestThread,
+              input.cwd,
+              refreshGitStatusAfter(input.cwd, gitManager.preparePullRequestThread(input)),
+            ),
             "Failed to prepare pull request thread",
           ),
         [WS_METHODS.pullRequestsList]: (input) =>
@@ -1193,120 +1264,195 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.pullRequestsSetPinned]: (input) =>
           rpcEffect(pullRequests.setPinned(input), "Failed to update pull request pin"),
         [WS_METHODS.gitListBranches]: (input) =>
-          rpcEffect(git.listBranches(input), "Failed to list branches"),
+          rpcEffect(
+            guardLegacyGitEffect(
+              WS_METHODS.gitListBranches,
+              input.cwd,
+              git.listBranches(input),
+            ),
+            "Failed to list branches",
+          ),
         [WS_METHODS.gitCreateWorktree]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(
+            guardLegacyGitEffect(
+              WS_METHODS.gitCreateWorktree,
               input.cwd,
-              git.withMutation(input.cwd, git.createWorktree(input)),
+              refreshGitStatusAfter(
+                input.cwd,
+                git.withMutation(input.cwd, git.createWorktree(input)),
+              ),
             ),
             "Failed to create worktree",
           ),
         [WS_METHODS.gitCreateDetachedWorktree]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(
+            guardLegacyGitEffect(
+              WS_METHODS.gitCreateDetachedWorktree,
               input.cwd,
-              git.withMutation(input.cwd, git.createDetachedWorktree(input)),
+              refreshGitStatusAfter(
+                input.cwd,
+                git.withMutation(input.cwd, git.createDetachedWorktree(input)),
+              ),
             ),
             "Failed to create detached worktree",
           ),
         [WS_METHODS.gitRemoveWorktree]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(
+            guardLegacyGitEffect(
+              WS_METHODS.gitRemoveWorktree,
               input.cwd,
-              git.withMutation(input.cwd, git.removeWorktree(input)),
+              refreshGitStatusAfter(
+                input.cwd,
+                git.withMutation(input.cwd, git.removeWorktree(input)),
+              ),
             ),
             "Failed to remove worktree",
           ),
         [WS_METHODS.gitCreateBranch]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.createBranch(input))),
+            guardLegacyGitEffect(
+              WS_METHODS.gitCreateBranch,
+              input.cwd,
+              refreshGitStatusAfter(
+                input.cwd,
+                git.withMutation(input.cwd, git.createBranch(input)),
+              ),
+            ),
             "Failed to create branch",
           ),
         [WS_METHODS.gitCheckout]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(
+            guardLegacyGitEffect(
+              WS_METHODS.gitCheckout,
               input.cwd,
-              git.withMutation(input.cwd, Effect.scoped(git.checkoutBranch(input))),
+              refreshGitStatusAfter(
+                input.cwd,
+                git.withMutation(input.cwd, Effect.scoped(git.checkoutBranch(input))),
+              ),
             ),
             "Failed to checkout branch",
           ),
         [WS_METHODS.gitStashAndCheckout]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(
+            guardLegacyGitEffect(
+              WS_METHODS.gitStashAndCheckout,
               input.cwd,
-              git.withMutation(input.cwd, Effect.scoped(git.stashAndCheckout(input))),
+              refreshGitStatusAfter(
+                input.cwd,
+                git.withMutation(input.cwd, Effect.scoped(git.stashAndCheckout(input))),
+              ),
             ),
             "Failed to stash and checkout",
           ),
         [WS_METHODS.gitStashDrop]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.stashDrop(input))),
+            guardLegacyGitEffect(
+              WS_METHODS.gitStashDrop,
+              input.cwd,
+              refreshGitStatusAfter(
+                input.cwd,
+                git.withMutation(input.cwd, git.stashDrop(input)),
+              ),
+            ),
             "Failed to drop stash",
           ),
         [WS_METHODS.gitStashInfo]: (input) =>
-          rpcEffect(git.stashInfo(input), "Failed to read stash"),
+          rpcEffect(
+            guardLegacyGitEffect(
+              WS_METHODS.gitStashInfo,
+              input.cwd,
+              git.stashInfo(input),
+            ),
+            "Failed to read stash",
+          ),
         [WS_METHODS.gitRemoveIndexLock]: (input) =>
           rpcEffect(
-            git.withMutation(input.cwd, git.removeIndexLock(input)),
+            guardLegacyGitEffect(
+              WS_METHODS.gitRemoveIndexLock,
+              input.cwd,
+              git.withMutation(input.cwd, git.removeIndexLock(input)),
+            ),
             "Failed to remove Git index lock",
           ),
         [WS_METHODS.gitInit]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.initRepo(input))),
+            guardLegacyGitEffect(
+              WS_METHODS.gitInit,
+              input.cwd,
+              refreshGitStatusAfter(
+                input.cwd,
+                git.withMutation(input.cwd, git.initRepo(input)),
+              ),
+            ),
             "Failed to initialize repository",
           ),
         [WS_METHODS.gitStageFiles]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(
+            guardLegacyGitEffect(
+              WS_METHODS.gitStageFiles,
               input.cwd,
-              git.withMutation(input.cwd, git.stageFiles(input.cwd, input.paths)),
-            ).pipe(Effect.as({ ok: true })),
+              refreshGitStatusAfter(
+                input.cwd,
+                git.withMutation(input.cwd, git.stageFiles(input.cwd, input.paths)),
+              ).pipe(Effect.as({ ok: true })),
+            ),
             "Failed to stage files",
           ),
         [WS_METHODS.gitUnstageFiles]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(
+            guardLegacyGitEffect(
+              WS_METHODS.gitUnstageFiles,
               input.cwd,
-              git.withMutation(input.cwd, git.unstageFiles(input.cwd, input.paths)),
-            ).pipe(Effect.as({ ok: true })),
+              refreshGitStatusAfter(
+                input.cwd,
+                git.withMutation(input.cwd, git.unstageFiles(input.cwd, input.paths)),
+              ).pipe(Effect.as({ ok: true })),
+            ),
             "Failed to unstage files",
           ),
         [WS_METHODS.gitHandoffThread]: (input) =>
           rpcEffect(
-            Effect.gen(function* () {
-              const { commandId, threadId, ...gitInput } = input;
-              const operation = yield* beginGitHandoff(input);
-              if (operation.phase === "pending" || operation.phase === "uncertain") {
-                return yield* new WsRpcError({
-                  message:
-                    operation.phase === "pending"
-                      ? "This Git handoff is already running."
-                      : "This Git handoff was interrupted before its filesystem result became durable; inspect the repository before retrying.",
-                });
-              }
-              if (operation.phase === "completed") return operation.result;
+            guardLegacyGitEffect(
+              WS_METHODS.gitHandoffThread,
+              input.cwd,
+              Effect.gen(function* () {
+                const { commandId, threadId, ...gitInput } = input;
+                const operation = yield* beginGitHandoff(input);
+                if (operation.phase === "pending" || operation.phase === "uncertain") {
+                  return yield* new WsRpcError({
+                    message:
+                      operation.phase === "pending"
+                        ? "This Git handoff is already running."
+                        : "This Git handoff was interrupted before its filesystem result became durable; inspect the repository before retrying.",
+                  });
+                }
+                if (operation.phase === "completed") return operation.result;
 
-              const result =
-                operation.phase === "git_applied"
-                  ? operation.result
-                  : yield* refreshGitStatusAfter(
-                      input.cwd,
-                      gitManager.handoffThread(gitInput).pipe(
-                        Effect.catch((error) =>
-                          discardPendingGitHandoff(commandId).pipe(
-                            Effect.catch(() => Effect.void),
-                            Effect.andThen(Effect.fail(error)),
+                const result =
+                  operation.phase === "git_applied"
+                    ? operation.result
+                    : yield* refreshGitStatusAfter(
+                        input.cwd,
+                        gitManager.handoffThread(gitInput).pipe(
+                          Effect.catch((error) =>
+                            discardPendingGitHandoff(commandId).pipe(
+                              Effect.catch(() => Effect.void),
+                              Effect.andThen(Effect.fail(error)),
+                            ),
                           ),
                         ),
-                      ),
-                    ).pipe(Effect.tap((gitResult) => recordGitHandoffResult(commandId, gitResult)));
-              yield* dispatchOrchestrationCommand(
-                gitHandoffMetadataCommand({ commandId, threadId }, result),
-              );
-              yield* completeGitHandoff(commandId);
-              return result;
-            }),
+                      ).pipe(
+                        Effect.tap((gitResult) =>
+                          recordGitHandoffResult(commandId, gitResult),
+                        ),
+                      );
+                yield* dispatchOrchestrationCommand(
+                  gitHandoffMetadataCommand({ commandId, threadId }, result),
+                );
+                yield* completeGitHandoff(commandId);
+                return result;
+              }),
+            ),
             "Failed to hand off thread",
           ),
 
