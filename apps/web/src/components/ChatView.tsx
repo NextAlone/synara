@@ -3642,8 +3642,8 @@ export default function ChatView({
   // Studio never offers "Initialize Git": its reference folder is ordinary cwd context,
   // so Git actions appear only when that selected folder is already a repository.
   const showGitActions = isStudioContainer
-    ? vcsReferenceTarget.backend === "git" && Boolean(resolvedThreadWorkingDirectory) && isGitRepo
-    : vcsReferenceTarget.backend === "git" &&
+    ? vcsReferenceTarget.backend !== null && Boolean(resolvedThreadWorkingDirectory) && isGitRepo
+    : vcsReferenceTarget.backend !== null &&
       (!isContainerLandingProject || Boolean(resolvedThreadWorktreePath));
   const repoDiffTotals = useRepoDiffTotals({
     target: vcsReferenceTarget,

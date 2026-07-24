@@ -17,7 +17,12 @@ import { Effect, Layer, Option } from "effect";
 
 import { ServerConfig } from "../../config.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
+import { GitHubCli, type GitHubCliShape } from "../../git/Services/GitHubCli.ts";
 import { GitManager, type GitManagerShape } from "../../git/Services/GitManager.ts";
+import {
+  TextGeneration,
+  type TextGenerationShape,
+} from "../../git/Services/TextGeneration.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -27,6 +32,7 @@ import {
   type ProjectionSnapshotQueryShape,
 } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectVcsError } from "../Errors.ts";
+import { makeJjActions } from "../jjActions.ts";
 import { JjCore, type JjCoreShape } from "../Services/JjCore.ts";
 import {
   ProjectVcs,
@@ -37,6 +43,8 @@ import {
 export interface ProjectVcsDependencies {
   readonly git: GitCoreShape;
   readonly gitManager: GitManagerShape;
+  readonly gitHubCli: GitHubCliShape;
+  readonly textGeneration: TextGenerationShape;
   readonly jj: JjCoreShape;
   readonly orchestrationEngine: OrchestrationEngineShape;
   readonly projection: ProjectionSnapshotQueryShape;
@@ -115,6 +123,11 @@ function chooseDefaultReference(names: ReadonlyArray<string>): string | null {
 }
 
 export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): ProjectVcsShape {
+  const jjActions = makeJjActions({
+    jj: dependencies.jj,
+    gitHubCli: dependencies.gitHubCli,
+    textGeneration: dependencies.textGeneration,
+  });
   const readProject = (operation: string, projectId: Parameters<ProjectVcsShape["setBackend"]>[0]["projectId"]) =>
     dependencies.projection.getProjectShellById(projectId).pipe(
       Effect.flatMap(
@@ -394,9 +407,40 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                 }),
               ),
             )
-          : dependencies.jj.status(target.cwd).pipe(
-              Effect.map(
-                (result): VcsStatusResult => ({
+          : Effect.gen(function* () {
+              const result = yield* dependencies.jj.status(target.cwd);
+              const pullRequest =
+                result.currentBookmark && result.repository.gitStorePath
+                  ? yield* dependencies.gitHubCli
+                      .listOpenPullRequests({
+                        cwd: result.repository.gitStorePath,
+                        headSelector: result.currentBookmark,
+                        limit: 10,
+                      })
+                      .pipe(
+                        Effect.map((matches) => {
+                          const match = matches[0];
+                          return match
+                            ? {
+                                number: match.number,
+                                title: match.title,
+                                url: match.url,
+                                baseBranch: match.baseRefName,
+                                headBranch: match.headRefName,
+                                state: match.state ?? ("open" as const),
+                                isDraft: match.isDraft ?? false,
+                                mergeability:
+                                  match.mergeability ?? ("unknown" as const),
+                                additions: match.additions ?? null,
+                                deletions: match.deletions ?? null,
+                                changedFiles: match.changedFiles ?? null,
+                              }
+                            : null;
+                        }),
+                        Effect.catch(() => Effect.succeed(null)),
+                      )
+                  : null;
+              return {
                   backend: "jj",
                   epoch: target.epoch,
                   ref: result.currentBookmark,
@@ -422,11 +466,10 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                         behindCount: result.behindCount,
                       }
                     : null,
-                  pullRequest: null,
+                  pullRequest,
                   capabilities: capabilitiesFor("jj"),
-                }),
-              ),
-            ),
+                } satisfies VcsStatusResult;
+            }),
       ),
     );
 
@@ -1127,6 +1170,58 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
       ),
     );
 
+  const pull: ProjectVcsShape["pull"] = (input) =>
+    resolveTarget(input).pipe(
+      Effect.flatMap((target) =>
+        target.backend === "git"
+          ? dependencies.git
+              .withMutation(
+                target.cwd,
+                dependencies.git.pullCurrentBranch(target.cwd),
+              )
+              .pipe(
+                Effect.map((result) => ({
+                  backend: "git" as const,
+                  epoch: target.epoch,
+                  status: result.status,
+                  ref: result.branch,
+                  upstreamRef: result.upstreamBranch,
+                })),
+              )
+          : jjActions.pull({ cwd: target.cwd, epoch: target.epoch }),
+      ),
+    );
+
+  const runStackedAction: ProjectVcsShape["runStackedAction"] = (input, options) =>
+    resolveTarget(input).pipe(
+      Effect.flatMap((target) => {
+        if (target.backend === "jj") {
+          return jjActions.runStackedAction(
+            { cwd: target.cwd, epoch: target.epoch },
+            input,
+            options,
+          );
+        }
+        const {
+          projectId: _projectId,
+          threadId: _threadId,
+          expectedEpoch: _expectedEpoch,
+          ...actionInput
+        } = input;
+        return dependencies.gitManager.runStackedAction(
+          { ...actionInput, cwd: target.cwd },
+          options?.publishProgress
+            ? {
+                progressReporter: {
+                  publish: options.publishProgress,
+                },
+                actionId: input.actionId,
+              }
+            : undefined,
+        );
+      }),
+    );
+
   return {
     setBackend,
     resolveTarget,
@@ -1139,12 +1234,16 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
     createWorkspace,
     removeWorkspace,
     handoffThread,
+    pull,
+    runStackedAction,
   };
 }
 
 export const makeProjectVcs = Effect.gen(function* () {
   const git = yield* GitCore;
   const gitManager = yield* GitManager;
+  const gitHubCli = yield* GitHubCli;
+  const textGeneration = yield* TextGeneration;
   const jj = yield* JjCore;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projection = yield* ProjectionSnapshotQuery;
@@ -1152,6 +1251,8 @@ export const makeProjectVcs = Effect.gen(function* () {
   return makeProjectVcsWith({
     git,
     gitManager,
+    gitHubCli,
+    textGeneration,
     jj,
     orchestrationEngine,
     projection,

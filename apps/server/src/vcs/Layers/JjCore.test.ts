@@ -87,7 +87,9 @@ describe("JjCore", () => {
     };
     const core = await Effect.runPromise(makeJjCore({ executeOverride }));
 
-    const diff = await Effect.runPromise(core.readRevisionDiff("/repo"));
+    const diff = await Effect.runPromise(
+      core.readRevisionDiff("/repo", "@", ["new.txt"]),
+    );
 
     expect(diff.patch).toContain("diff --git");
     expect(diff.files).toEqual([
@@ -101,6 +103,68 @@ describe("JjCore", () => {
     ]);
     expect(calls[0]?.args).not.toContain("--ignore-working-copy");
     expect(calls[1]?.args).toContain("--ignore-working-copy");
+    expect(calls[0]?.args.slice(-2)).toEqual(["--", "new.txt"]);
+    expect(calls[1]?.args.slice(-2)).toEqual(["--", "new.txt"]);
+  });
+
+  it("compares a tracked local bookmark with its remote bookmark", async () => {
+    const repositoryRoot = nodePath.resolve(import.meta.dirname, "../../../../..");
+    const calls: ExecuteJjInput[] = [];
+    const executeOverride: JjCoreShape["execute"] = (input) => {
+      calls.push(input);
+      switch (input.operation) {
+        case "JjCore.status.files":
+          return Effect.succeed(result());
+        case "JjCore.readRevisionIdentity":
+          return Effect.succeed(
+            result(
+              '{"changeId":"change-1","commitId":"commit-1","description":""}\n',
+            ),
+          );
+        case "JjCore.detectRepository.root":
+        case "JjCore.detectRepository.gitRoot":
+          return Effect.succeed(result(repositoryRoot));
+        case "JjCore.listBookmarks":
+          return Effect.succeed(
+            result(
+              [
+                '{"name":"feature","remote":null,"tracked":false,"synced":false,"conflicted":false,"targetChangeId":"change-1"}',
+                '{"name":"feature","remote":"origin","tracked":true,"synced":false,"conflicted":false,"targetChangeId":"remote-change"}',
+              ].join("\n"),
+            ),
+          );
+        case "JjCore.resolveNearestBookmark":
+          return Effect.succeed(result('{"name":"feature"}\n'));
+        case "JjCore.status.ahead":
+          return Effect.succeed(result("ahead-1\nahead-2\n"));
+        case "JjCore.status.behind":
+          return Effect.succeed(result("behind-1\n"));
+        default:
+          return Effect.die(new Error(`Unexpected operation ${input.operation}`));
+      }
+    };
+    const core = await Effect.runPromise(makeJjCore({ executeOverride }));
+
+    const status = await Effect.runPromise(core.status(repositoryRoot));
+
+    expect(status).toMatchObject({
+      currentBookmark: "feature",
+      upstreamBookmark: "feature@origin",
+      aheadCount: 2,
+      behindCount: 1,
+    });
+    const aheadArgs = calls.find(
+      (call) => call.operation === "JjCore.status.ahead",
+    )?.args;
+    const behindArgs = calls.find(
+      (call) => call.operation === "JjCore.status.behind",
+    )?.args;
+    expect(aheadArgs?.join(" ")).toContain(
+      "remote_bookmarks(exact:\"feature\", exact:\"origin\")..bookmarks(exact:\"feature\")",
+    );
+    expect(behindArgs?.join(" ")).toContain(
+      "bookmarks(exact:\"feature\")..remote_bookmarks(exact:\"feature\", exact:\"origin\")",
+    );
   });
 
   it("reports a non-repository without attempting dependent probes", async () => {
@@ -151,5 +215,81 @@ describe("JjCore", () => {
       "wip: Synara on feature",
       "feature",
     ]);
+  });
+
+  it("uses native JJ commands for commit, bookmark, fetch, pull, and push", async () => {
+    const repositoryRoot = nodePath.resolve(import.meta.dirname, "../../../../..");
+    const calls: ExecuteJjInput[] = [];
+    const executeOverride: JjCoreShape["execute"] = (input) => {
+      calls.push(input);
+      if (
+        input.operation === "JjCore.detectRepository.root" ||
+        input.operation === "JjCore.detectRepository.gitRoot"
+      ) {
+        return Effect.succeed(result(repositoryRoot));
+      }
+      if (input.operation === "JjCore.readRevisionIdentity") {
+        return Effect.succeed(
+          result(
+            '{"changeId":"change-committed","commitId":"commit-committed","description":"feat: native jj"}\n',
+          ),
+        );
+      }
+      return Effect.succeed(result());
+    };
+    const core = await Effect.runPromise(makeJjCore({ executeOverride }));
+
+    const committed = await Effect.runPromise(
+      core.commitWorkingCopy(repositoryRoot, "feat: native jj", ["src/a.ts"]),
+    );
+    await Effect.runPromise(
+      core.setBookmark(repositoryRoot, "feature", committed.commitId),
+    );
+    await Effect.runPromise(core.fetchGit(repositoryRoot, "upstream"));
+    await Effect.runPromise(
+      core.advanceBookmark(repositoryRoot, "feature", "upstream"),
+    );
+    await Effect.runPromise(core.pushBookmark(repositoryRoot, "feature"));
+
+    expect(committed.commitId).toBe("commit-committed");
+    expect(
+      calls.find((call) => call.operation === "JjCore.commitWorkingCopy")?.args,
+    ).toEqual([
+      "commit",
+      "--message",
+      "feat: native jj",
+      "--",
+      "src/a.ts",
+    ]);
+    expect(
+      calls.find((call) => call.operation === "JjCore.setBookmark")?.args,
+    ).toEqual([
+      "bookmark",
+      "set",
+      "feature",
+      "--revision",
+      "commit-committed",
+    ]);
+    expect(calls.find((call) => call.operation === "JjCore.fetchGit")?.args).toEqual([
+      "git",
+      "fetch",
+      "--remote",
+      "upstream",
+    ]);
+    expect(
+      calls.find((call) => call.operation === "JjCore.advanceBookmark.move")?.args,
+    ).toEqual([
+      "bookmark",
+      "set",
+      "feature",
+      "--revision",
+      "feature@upstream",
+    ]);
+    expect(
+      calls.find((call) => call.operation === "JjCore.advanceBookmark.rebase")?.args,
+    ).toEqual(["rebase", "-s", "@", "-d", "feature"]);
+    expect(
+      calls.find((call) => call.operation === "JjCore.pushBookmark")?.args,
+    ).toEqual(["git", "push", "--bookmark", "exact:feature"]);
   });
 });

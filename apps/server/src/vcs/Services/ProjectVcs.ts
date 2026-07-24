@@ -1,4 +1,6 @@
 import type {
+  GitActionProgressEvent,
+  GitRunStackedActionResult,
   ProjectId,
   ProjectVcsBinding,
   ThreadId,
@@ -17,6 +19,9 @@ import type {
   VcsReadDiffResult,
   VcsRemoveWorkspaceInput,
   VcsRemoveWorkspaceResult,
+  VcsPullInput,
+  VcsPullResult,
+  VcsRunStackedActionInput,
   VcsSetBackendInput,
   VcsSetBackendResult,
   VcsStatusInput,
@@ -28,6 +33,7 @@ import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
 import type { GitManagerServiceError } from "../../git/Errors.ts";
+import type { GitHubCliError, TextGenerationError } from "../../git/Errors.ts";
 import type { OrchestrationDispatchError } from "../../orchestration/Errors.ts";
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import type { JjCommandError, ProjectVcsError } from "../Errors.ts";
@@ -36,6 +42,8 @@ export type ProjectVcsServiceError =
   | ProjectVcsError
   | JjCommandError
   | GitManagerServiceError
+  | GitHubCliError
+  | TextGenerationError
   | ProjectionRepositoryError
   | OrchestrationDispatchError;
 
@@ -83,6 +91,17 @@ export interface ProjectVcsShape {
   readonly handoffThread: (
     input: VcsHandoffThreadInput,
   ) => Effect.Effect<VcsHandoffThreadResult, ProjectVcsServiceError>;
+  readonly pull: (
+    input: VcsPullInput,
+  ) => Effect.Effect<VcsPullResult, ProjectVcsServiceError>;
+  readonly runStackedAction: (
+    input: VcsRunStackedActionInput,
+    options?: {
+      readonly publishProgress?: (
+        event: GitActionProgressEvent,
+      ) => Effect.Effect<void>;
+    },
+  ) => Effect.Effect<GitRunStackedActionResult, ProjectVcsServiceError>;
 }
 
 export class ProjectVcs extends ServiceMap.Service<ProjectVcs, ProjectVcsShape>()(

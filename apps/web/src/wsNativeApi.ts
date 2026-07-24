@@ -526,6 +526,12 @@ export function createWsNativeApi(): NativeApi {
       createWorkspace: (input) => transport.request(WS_METHODS.vcsCreateWorkspace, input),
       removeWorkspace: (input) => transport.request(WS_METHODS.vcsRemoveWorkspace, input),
       handoffThread: (input) => transport.request(WS_METHODS.vcsHandoffThread, input),
+      pull: (input) => transport.request(WS_METHODS.vcsPull, input),
+      runStackedAction: (input) =>
+        transport.request(WS_METHODS.vcsRunStackedAction, input, {
+          timeoutMs: null,
+        }),
+      onActionProgress: gitActionProgressListeners.subscribe,
     },
     git: {
       githubRepository: (input) => transport.request(WS_METHODS.gitGithubRepository, input),

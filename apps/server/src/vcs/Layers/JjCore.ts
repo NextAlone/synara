@@ -308,6 +308,7 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
       cwd: string,
       revisionArgs: ReadonlyArray<string>,
       ignoreWorkingCopy: boolean,
+      filePaths: ReadonlyArray<string> = [],
     ): Effect.Effect<JjDiffResult, JjCommandError> => {
       const fileInput = {
         operation: `${operation}.files`,
@@ -318,6 +319,7 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
           ...revisionArgs,
           "-T",
           JJ_DIFF_ENTRY_TEMPLATE,
+          ...(filePaths.length > 0 ? ["--", ...filePaths] : []),
         ],
       };
       const patchInput = {
@@ -328,6 +330,7 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
           "diff",
           ...revisionArgs,
           "--git",
+          ...(filePaths.length > 0 ? ["--", ...filePaths] : []),
         ],
         maxOutputBytes: 16 * 1024 * 1024,
       };
@@ -387,12 +390,14 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
                     "JjCore.status.ahead",
                     `remote_bookmarks(exact:${JSON.stringify(currentBookmark)}, exact:${JSON.stringify(
                       upstreamRemote.name,
-                    )})..@`,
+                    )})..bookmarks(exact:${JSON.stringify(currentBookmark)})`,
                   ),
                   countRevisions(
                     cwd,
                     "JjCore.status.behind",
-                    `@..remote_bookmarks(exact:${JSON.stringify(
+                    `bookmarks(exact:${JSON.stringify(
+                      currentBookmark,
+                    )})..remote_bookmarks(exact:${JSON.stringify(
                       currentBookmark,
                     )}, exact:${JSON.stringify(upstreamRemote.name)})`,
                   ),
@@ -414,8 +419,18 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
         };
       });
 
-    const readRevisionDiff: JjCoreShape["readRevisionDiff"] = (cwd, revision = "@") =>
-      readDiff("JjCore.readRevisionDiff", cwd, ["-r", revision], false);
+    const readRevisionDiff: JjCoreShape["readRevisionDiff"] = (
+      cwd,
+      revision = "@",
+      filePaths = [],
+    ) =>
+      readDiff(
+        "JjCore.readRevisionDiff",
+        cwd,
+        ["-r", revision],
+        false,
+        filePaths,
+      );
 
     const readRangeDiff: JjCoreShape["readRangeDiff"] = (cwd, fromRevision, toRevision) =>
       readDiff(
@@ -576,6 +591,18 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
         ]).pipe(Effect.asVoid),
       );
 
+    const setBookmark: JjCoreShape["setBookmark"] = (cwd, name, revision) =>
+      withMutation(
+        cwd,
+        run("JjCore.setBookmark", cwd, [
+          "bookmark",
+          "set",
+          name,
+          "--revision",
+          revision,
+        ]).pipe(Effect.asVoid),
+      );
+
     const startNewChange: JjCoreShape["startNewChange"] = (cwd, revision, message) =>
       withMutation(
         cwd,
@@ -598,13 +625,68 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
         ),
       );
 
-    const commitWorkingCopy: JjCoreShape["commitWorkingCopy"] = (cwd, message) =>
+    const commitWorkingCopy: JjCoreShape["commitWorkingCopy"] = (
+      cwd,
+      message,
+      filePaths = [],
+    ) =>
       withMutation(
         cwd,
         Effect.gen(function* () {
-          yield* run("JjCore.commitWorkingCopy", cwd, ["commit", "--message", message]);
+          yield* run("JjCore.commitWorkingCopy", cwd, [
+            "commit",
+            "--message",
+            message,
+            ...(filePaths.length > 0 ? ["--", ...filePaths] : []),
+          ]);
           return yield* readRevisionIdentity(cwd, "@-");
         }),
+      );
+
+    const fetchGit: JjCoreShape["fetchGit"] = (cwd, remoteName) =>
+      withMutation(
+        cwd,
+        run("JjCore.fetchGit", cwd, [
+          "git",
+          "fetch",
+          ...(remoteName ? ["--remote", remoteName] : []),
+        ]).pipe(Effect.asVoid),
+      );
+
+    const advanceBookmark: JjCoreShape["advanceBookmark"] = (
+      cwd,
+      bookmark,
+      remoteName,
+    ) =>
+      withMutation(
+        cwd,
+        Effect.gen(function* () {
+          yield* run("JjCore.advanceBookmark.move", cwd, [
+            "bookmark",
+            "set",
+            bookmark,
+            "--revision",
+            `${bookmark}@${remoteName}`,
+          ]);
+          yield* run("JjCore.advanceBookmark.rebase", cwd, [
+            "rebase",
+            "-s",
+            "@",
+            "-d",
+            bookmark,
+          ]);
+        }),
+      );
+
+    const pushBookmark: JjCoreShape["pushBookmark"] = (cwd, bookmark) =>
+      withMutation(
+        cwd,
+        run("JjCore.pushBookmark", cwd, [
+          "git",
+          "push",
+          "--bookmark",
+          `exact:${bookmark}`,
+        ]).pipe(Effect.asVoid),
       );
 
     return {
@@ -622,9 +704,13 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
       createWorkspace,
       forgetWorkspace,
       createBookmark,
+      setBookmark,
       startNewChange,
       describeRevision,
       commitWorkingCopy,
+      fetchGit,
+      advanceBookmark,
+      pushBookmark,
     } satisfies JjCoreShape;
   });
 

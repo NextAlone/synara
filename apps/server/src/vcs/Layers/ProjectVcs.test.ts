@@ -9,7 +9,9 @@ import { Effect, Option } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import type { GitCoreShape } from "../../git/Services/GitCore.ts";
+import type { GitHubCliShape } from "../../git/Services/GitHubCli.ts";
 import type { GitManagerShape } from "../../git/Services/GitManager.ts";
+import type { TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import type { OrchestrationEngineShape } from "../../orchestration/Services/OrchestrationEngine.ts";
 import type { ProjectionSnapshotQueryShape } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { JjCoreShape } from "../Services/JjCore.ts";
@@ -47,6 +49,8 @@ function dependencies(input: {
   shellThreads?: ReadonlyArray<Record<string, unknown>>;
   git?: Partial<GitCoreShape>;
   gitManager?: Partial<GitManagerShape>;
+  gitHubCli?: Partial<GitHubCliShape>;
+  textGeneration?: Partial<TextGenerationShape>;
   jj?: Partial<JjCoreShape>;
   removeDirectory?: (path: string) => Promise<void>;
 }) {
@@ -75,6 +79,8 @@ function dependencies(input: {
     value: {
       git: input.git ?? {},
       gitManager: input.gitManager ?? {},
+      gitHubCli: input.gitHubCli ?? {},
+      textGeneration: input.textGeneration ?? {},
       jj: input.jj ?? {},
       orchestrationEngine,
       projection,
@@ -212,6 +218,9 @@ describe("ProjectVcs", () => {
         worktreePath: "/workspaces/feature/app",
       },
       gitManager: { status: gitStatus },
+      gitHubCli: {
+        listOpenPullRequests: () => Effect.succeed([]),
+      },
       jj: { status: jjStatus },
     });
     const service = makeProjectVcsWith(deps.value);
@@ -746,5 +755,107 @@ describe("ProjectVcs", () => {
       changesTransferred: true,
       conflictsDetected: false,
     });
+  });
+
+  it("routes pull through the configured JJ backend", async () => {
+    const baseStatus = {
+      repository: {
+        workspaceRoot: "/repo",
+        repositoryStorePath: "/store",
+        gitStorePath: "/repo/.git",
+      },
+      revision: {
+        changeId: "change-1",
+        commitId: "commit-1",
+        description: "",
+      },
+      currentBookmark: "feature",
+      upstreamBookmark: "feature@origin",
+      aheadCount: 0,
+      behindCount: 0,
+      bookmarks: [],
+      files: [],
+      hasChanges: false,
+      hasConflicts: false,
+    } as const;
+    const status = vi
+      .fn()
+      .mockReturnValueOnce(Effect.succeed(baseStatus))
+      .mockReturnValueOnce(
+        Effect.succeed({ ...baseStatus, behindCount: 2 }),
+      );
+    const fetchGit = vi.fn(() => Effect.void);
+    const advanceBookmark = vi.fn(() => Effect.void);
+    const gitPull = vi.fn();
+    const deps = dependencies({
+      project: project({ epoch: 10, binding: jjBinding }),
+      git: { pullCurrentBranch: gitPull },
+      jj: { status, fetchGit, advanceBookmark },
+    });
+    const service = makeProjectVcsWith(deps.value);
+
+    const result = await Effect.runPromise(
+      service.pull({
+        projectId: PROJECT_ID,
+        expectedEpoch: 10,
+      }),
+    );
+
+    expect(fetchGit).toHaveBeenCalledWith("/repo/app", "origin");
+    expect(advanceBookmark).toHaveBeenCalledWith(
+      "/repo/app",
+      "feature",
+      "origin",
+    );
+    expect(gitPull).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      backend: "jj",
+      status: "pulled",
+      ref: "feature",
+    });
+  });
+
+  it("derives the project cwd before delegating a Git stacked action", async () => {
+    const runStackedAction = vi.fn(() =>
+      Effect.succeed({
+        action: "push" as const,
+        branch: { status: "skipped_not_requested" as const },
+        commit: { status: "skipped_not_requested" as const },
+        push: {
+          status: "pushed" as const,
+          branch: "feature",
+          upstreamBranch: "origin/feature",
+          setUpstream: false,
+        },
+        pr: { status: "skipped_not_requested" as const },
+      }),
+    );
+    const deps = dependencies({
+      project: project({
+        epoch: 11,
+        binding: { ...jjBinding, backend: "git" },
+      }),
+      gitManager: { runStackedAction },
+    });
+    const service = makeProjectVcsWith(deps.value);
+
+    const result = await Effect.runPromise(
+      service.runStackedAction({
+        projectId: PROJECT_ID,
+        expectedEpoch: 11,
+        actionId: "project-git-action",
+        action: "push",
+      }),
+    );
+
+    expect(runStackedAction).toHaveBeenCalledWith(
+      {
+        actionId: "project-git-action",
+        action: "push",
+        cwd: "/repo/app",
+      },
+      undefined,
+    );
+    expect(result.push.status).toBe("pushed");
   });
 });

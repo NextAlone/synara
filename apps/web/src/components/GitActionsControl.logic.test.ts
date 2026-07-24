@@ -1,8 +1,14 @@
-import type { GitStatusResult } from "@synara/contracts";
+import type {
+  GitStatusResult,
+  VcsListReferencesResult,
+  VcsStatusResult,
+} from "@synara/contracts";
 import { assert, describe, it } from "vitest";
 import {
   buildGitActionProgressStages,
   buildMenuItems,
+  adaptVcsReferencesForGitActions,
+  adaptVcsStatusForGitActions,
   requiresFeatureBranchForDefaultBranchAction,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
@@ -15,6 +21,97 @@ import {
   shouldOfferCreateBranchPrompt,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
+
+describe("VCS action adapters", () => {
+  it("maps JJ working-copy and bookmark status onto the existing action model", () => {
+    const input: VcsStatusResult = {
+      backend: "jj",
+      epoch: 2,
+      ref: "feature/test",
+      revision: {
+        changeId: "change-1",
+        commitId: "commit-1",
+        description: "feat: jj",
+      },
+      hasChanges: true,
+      hasConflicts: false,
+      files: [
+        {
+          path: "src/a.ts",
+          sourcePath: null,
+          status: "modified",
+          conflicted: false,
+          insertions: 4,
+          deletions: 1,
+        },
+      ],
+      insertions: 4,
+      deletions: 1,
+      remote: {
+        ref: "feature/test@origin",
+        aheadCount: 2,
+        behindCount: 0,
+      },
+      pullRequest: null,
+      capabilities: {
+        staging: false,
+        stash: false,
+        checkout: true,
+        workspaces: true,
+      },
+    };
+
+    assert.deepEqual(adaptVcsStatusForGitActions(input), {
+      branch: "feature/test",
+      hasWorkingTreeChanges: true,
+      workingTree: {
+        files: [{ path: "src/a.ts", insertions: 4, deletions: 1 }],
+        insertions: 4,
+        deletions: 1,
+      },
+      hasUpstream: true,
+      upstreamBranch: "feature/test",
+      aheadCount: 2,
+      behindCount: 0,
+      pr: null,
+    });
+  });
+
+  it("maps branches and bookmarks into one reference picker model", () => {
+    const input: VcsListReferencesResult = {
+      backend: "jj",
+      epoch: 2,
+      hasOriginRemote: true,
+      references: [
+        {
+          name: "feature/test",
+          kind: "bookmark",
+          isRemote: false,
+          remoteName: null,
+          current: true,
+          isDefault: false,
+          workspacePath: "/repo",
+          conflicted: false,
+          tracked: true,
+          synced: false,
+        },
+      ],
+    };
+
+    assert.deepEqual(adaptVcsReferencesForGitActions(input), {
+      isRepo: true,
+      hasOriginRemote: true,
+      branches: [
+        {
+          name: "feature/test",
+          current: true,
+          isDefault: false,
+          worktreePath: "/repo",
+        },
+      ],
+    });
+  });
+});
 
 function statusPr(
   overrides: Partial<NonNullable<GitStatusResult["pr"]>> = {},

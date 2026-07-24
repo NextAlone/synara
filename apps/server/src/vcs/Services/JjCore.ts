@@ -92,6 +92,7 @@ export interface JjCoreShape {
   readonly readRevisionDiff: (
     cwd: string,
     revision?: string,
+    filePaths?: ReadonlyArray<string>,
   ) => Effect.Effect<JjDiffResult, JjCommandError>;
   readonly readRangeDiff: (
     cwd: string,
@@ -115,6 +116,11 @@ export interface JjCoreShape {
     name: string,
     revision: string,
   ) => Effect.Effect<void, JjCommandError>;
+  readonly setBookmark: (
+    cwd: string,
+    name: string,
+    revision: string,
+  ) => Effect.Effect<void, JjCommandError>;
   readonly startNewChange: (
     cwd: string,
     revision: string,
@@ -128,7 +134,21 @@ export interface JjCoreShape {
   readonly commitWorkingCopy: (
     cwd: string,
     message: string,
+    filePaths?: ReadonlyArray<string>,
   ) => Effect.Effect<JjRevisionIdentity, JjCommandError>;
+  readonly fetchGit: (
+    cwd: string,
+    remoteName?: string,
+  ) => Effect.Effect<void, JjCommandError>;
+  readonly advanceBookmark: (
+    cwd: string,
+    bookmark: string,
+    remoteName: string,
+  ) => Effect.Effect<void, JjCommandError>;
+  readonly pushBookmark: (
+    cwd: string,
+    bookmark: string,
+  ) => Effect.Effect<void, JjCommandError>;
 }
 
 export class JjCore extends ServiceMap.Service<JjCore, JjCoreShape>()(

@@ -92,6 +92,8 @@ import type {
   VcsListReferencesResult,
   VcsListWorkspacesInput,
   VcsListWorkspacesResult,
+  VcsPullInput,
+  VcsPullResult,
   VcsReadDiffInput,
   VcsReadDiffResult,
   VcsRemoveWorkspaceInput,
@@ -103,6 +105,7 @@ import type {
   VcsSwitchReferenceInput,
   VcsSwitchReferenceResult,
 } from "./vcs";
+import type { VcsRunStackedActionInput } from "./vcsActions";
 import type {
   PullRequestActionInput,
   PullRequestActionResult,
@@ -613,6 +616,11 @@ export interface NativeApi {
     createWorkspace: (input: VcsCreateWorkspaceInput) => Promise<VcsCreateWorkspaceResult>;
     removeWorkspace: (input: VcsRemoveWorkspaceInput) => Promise<VcsRemoveWorkspaceResult>;
     handoffThread: (input: VcsHandoffThreadInput) => Promise<VcsHandoffThreadResult>;
+    pull: (input: VcsPullInput) => Promise<VcsPullResult>;
+    runStackedAction: (
+      input: VcsRunStackedActionInput,
+    ) => Promise<GitRunStackedActionResult>;
+    onActionProgress: (callback: (event: GitActionProgressEvent) => void) => () => void;
   };
   git: {
     // Existing branch/worktree API

@@ -458,8 +458,16 @@ export class WsTransport {
 
       const client = await awaitWithAbort(this.getClient(), abortScope.signal);
 
-      if (method === WS_METHODS.gitRunStackedAction) {
-        return (await this.runGitActionStream(client, params, abortScope.signal)) as T;
+      if (
+        method === WS_METHODS.gitRunStackedAction ||
+        method === WS_METHODS.vcsRunStackedAction
+      ) {
+        return (await this.runActionStream(
+          client,
+          method,
+          params,
+          abortScope.signal,
+        )) as T;
       }
 
       if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
@@ -1147,14 +1155,21 @@ export class WsTransport {
     return settled;
   }
 
-  private async runGitActionStream(
+  private async runActionStream(
     client: RpcClientInstance,
+    method:
+      | typeof WS_METHODS.gitRunStackedAction
+      | typeof WS_METHODS.vcsRunStackedAction,
     params: unknown,
     signal?: AbortSignal,
   ): Promise<GitRunStackedActionResult> {
     let result: GitRunStackedActionResult | null = null;
+    const events =
+      method === WS_METHODS.gitRunStackedAction
+        ? client[WS_METHODS.gitRunStackedAction](params as never)
+        : client[WS_METHODS.vcsRunStackedAction](params as never);
     await this.getClientRuntime(client).runPromise(
-      Stream.runForEach(client[WS_METHODS.gitRunStackedAction](params as never), (event) =>
+      Stream.runForEach(events, (event) =>
         Effect.sync(() => {
           this.emit(WS_CHANNELS.gitActionProgress, event as GitActionProgressEvent);
           if ((event as GitActionProgressEvent).kind === "action_finished") {
@@ -1164,7 +1179,7 @@ export class WsTransport {
       ),
       signal ? { signal } : undefined,
     );
-    if (!result) throw new Error("Git action stream completed without a final result.");
+    if (!result) throw new Error("VCS action stream completed without a final result.");
     return result;
   }
 }

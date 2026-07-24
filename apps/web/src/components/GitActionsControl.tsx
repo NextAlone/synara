@@ -25,6 +25,8 @@ import {
 import { Input } from "~/components/ui/input";
 import { GitHubIcon } from "./Icons";
 import {
+  adaptVcsReferencesForGitActions,
+  adaptVcsStatusForGitActions,
   buildGitActionProgressStages,
   buildMenuItems,
   type GitActionMenuItem,
@@ -85,19 +87,20 @@ import { ScrollArea } from "~/components/ui/scroll-area";
 import { Textarea } from "~/components/ui/textarea";
 import { toastManager } from "~/components/ui/toast";
 import { openInPreferredEditor } from "~/editorPreferences";
+import { gitInitMutationOptions } from "~/lib/gitReactQuery";
 import {
-  gitBranchesQueryOptions,
-  gitInitMutationOptions,
-  gitMutationKeys,
-  gitPullMutationOptions,
-  gitRunStackedActionMutationOptions,
-  gitStatusQueryOptions,
-  invalidateGitQueries,
-} from "~/lib/gitReactQuery";
+  invalidateVcsQueries,
+  makeVcsQueryTarget,
+  vcsMutationKeys,
+  vcsPullMutationOptions,
+  vcsReferencesQueryOptions,
+  vcsRunStackedActionMutationOptions,
+  vcsStatusQueryOptions,
+} from "~/lib/vcsReactQuery";
 import { cn, newCommandId, randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { readNativeApi } from "~/nativeApi";
-import { createThreadSelector } from "~/storeSelectors";
+import { createProjectSelector, createThreadSelector } from "~/storeSelectors";
 import { useStore } from "~/store";
 
 interface GitActionsControlProps {
@@ -184,7 +187,7 @@ function getMenuActionDisabledReason({
   hasOriginRemote: boolean;
 }): string | null {
   if (!item.disabled) return null;
-  if (isBusy) return "Git action in progress.";
+  if (isBusy) return "Source-control action in progress.";
   if (!gitStatus) return "Git status is unavailable.";
 
   const hasBranch = gitStatus.branch !== null;
@@ -344,6 +347,23 @@ export default function GitActionsControl({
   const activeThread = useStore(
     useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
   );
+  const activeProject = useStore(
+    useMemo(
+      () => createProjectSelector(activeThread?.projectId),
+      [activeThread?.projectId],
+    ),
+  );
+  const vcsTarget = useMemo(
+    () =>
+      makeVcsQueryTarget(
+        activeProject,
+        activeThread?.worktreePath ? activeThreadId : null,
+      ),
+    [activeProject, activeThread?.worktreePath, activeThreadId],
+  );
+  const isJjBackend = vcsTarget.backend === "jj";
+  const referenceLabel = isJjBackend ? "Bookmark" : "Branch";
+  const backendActionLabel = isJjBackend ? "JJ action" : "Git action";
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const threadToastData = useMemo(
     () => (activeThreadId ? { threadId: activeThreadId } : undefined),
@@ -374,18 +394,30 @@ export default function GitActionsControl({
     });
   }, [threadToastData]);
 
-  const { data: branchList = null, isSuccess: branchListReady } = useQuery(
-    gitBranchesQueryOptions(gitCwd),
+  const referencesQuery = useQuery(
+    vcsReferencesQueryOptions(vcsTarget),
   );
+  const branchList = useMemo(
+    () => adaptVcsReferencesForGitActions(referencesQuery.data ?? null),
+    [referencesQuery.data],
+  );
+  const branchListReady = referencesQuery.isSuccess;
   // Default to true while loading so we don't flash init controls.
   const isRepo = branchList?.isRepo ?? true;
   const hasOriginRemote = branchList?.hasOriginRemote ?? false;
   const currentBranch = branchList?.branches.find((branch) => branch.current)?.name ?? null;
   // Only poll status after branch discovery confirms a repo — avoids non-repo
   // cwds feeding a permanent "Refreshing git status..." invalidation loop.
-  const { data: gitStatus = null, error: gitStatusError } = useQuery(
-    gitStatusQueryOptions(gitCwd, branchListReady && branchList?.isRepo === true),
+  const statusQuery = useQuery(
+    vcsStatusQueryOptions(vcsTarget, {
+      enabled: branchListReady && branchList?.isRepo === true,
+    }),
   );
+  const gitStatus = useMemo(
+    () => adaptVcsStatusForGitActions(statusQuery.data ?? null),
+    [statusQuery.data],
+  );
+  const gitStatusError = statusQuery.error ?? referencesQuery.error;
   const liveThreadBranchUpdate = useMemo(
     () =>
       resolveLiveThreadBranchUpdate({
@@ -398,7 +430,7 @@ export default function GitActionsControl({
 
   useEffect(() => {
     if (!isGitStatusOutOfSync) return;
-    void invalidateGitQueries(queryClient);
+    void invalidateVcsQueries(queryClient);
   }, [isGitStatusOutOfSync, queryClient]);
 
   const gitStatusForActions = isGitStatusOutOfSync ? null : gitStatus;
@@ -411,8 +443,8 @@ export default function GitActionsControl({
   const initMutation = useMutation(gitInitMutationOptions({ cwd: gitCwd, queryClient }));
 
   const runImmediateGitActionMutation = useMutation(
-    gitRunStackedActionMutationOptions({
-      cwd: gitCwd,
+    vcsRunStackedActionMutationOptions({
+      target: vcsTarget,
       queryClient,
       codexHomePath: settings.codexHomePath || null,
       model: settings.textGenerationModel ?? null,
@@ -420,7 +452,9 @@ export default function GitActionsControl({
       ...(providerOptions ? { providerOptions } : {}),
     }),
   );
-  const pullMutation = useMutation(gitPullMutationOptions({ cwd: gitCwd, queryClient }));
+  const pullMutation = useMutation(
+    vcsPullMutationOptions({ target: vcsTarget, queryClient }),
+  );
   const persistThreadPr = useCallback(
     async (pr: {
       number: number;
@@ -453,8 +487,11 @@ export default function GitActionsControl({
   );
 
   const isRunStackedActionRunning =
-    useIsMutating({ mutationKey: gitMutationKeys.runStackedAction(gitCwd) }) > 0;
-  const isPullRunning = useIsMutating({ mutationKey: gitMutationKeys.pull(gitCwd) }) > 0;
+    useIsMutating({
+      mutationKey: vcsMutationKeys.runStackedAction(vcsTarget),
+    }) > 0;
+  const isPullRunning =
+    useIsMutating({ mutationKey: vcsMutationKeys.pull(vcsTarget) }) > 0;
   const isGitActionRunning = isRunStackedActionRunning || isPullRunning;
   const isDefaultBranch = useMemo(() => {
     const branchName = gitStatusForActions?.branch;
@@ -602,7 +639,7 @@ export default function GitActionsControl({
       updateActiveProgressToast();
     };
 
-    return api.git.onActionProgress(applyProgressEvent);
+    return api.vcs.onActionProgress(applyProgressEvent);
   }, [gitCwd, updateActiveProgressToast]);
 
   useEffect(() => {
@@ -655,8 +692,8 @@ export default function GitActionsControl({
         title: result.status === "pulled" ? "Remote synced" : "Already up to date",
         description:
           result.status === "pulled"
-            ? `Updated ${result.branch} from ${result.upstreamBranch ?? "upstream"}`
-            : `${result.branch} is already synchronized.`,
+            ? `Updated ${result.ref} from ${result.upstreamRef ?? "upstream"}`
+            : `${result.ref} is already synchronized.`,
         data: threadToastData,
       }),
       error: (err) => ({
@@ -741,8 +778,8 @@ export default function GitActionsControl({
         progressToastId ??
         toastManager.add({
           type: "loading",
-          title: progressStages[0] ?? "Running git action...",
-          description: "Waiting for Git...",
+          title: progressStages[0] ?? `Running ${backendActionLabel.toLowerCase()}...`,
+          description: `Waiting for ${isJjBackend ? "JJ" : "Git"}...`,
           timeout: 0,
           data: threadToastData,
         });
@@ -750,19 +787,20 @@ export default function GitActionsControl({
       activeGitActionProgressRef.current = {
         toastId: resolvedProgressToastId,
         actionId,
-        title: progressStages[0] ?? "Running git action...",
+        title: progressStages[0] ?? `Running ${backendActionLabel.toLowerCase()}...`,
         phaseStartedAtMs: null,
         hookStartedAtMs: null,
         hookName: null,
         lastOutputLine: null,
-        currentPhaseLabel: progressStages[0] ?? "Running git action...",
+        currentPhaseLabel:
+          progressStages[0] ?? `Running ${backendActionLabel.toLowerCase()}...`,
       };
 
       if (progressToastId) {
         toastManager.update(progressToastId, {
           type: "loading",
-          title: progressStages[0] ?? "Running git action...",
-          description: "Waiting for Git...",
+          title: progressStages[0] ?? `Running ${backendActionLabel.toLowerCase()}...`,
+          description: `Waiting for ${isJjBackend ? "JJ" : "Git"}...`,
           timeout: 0,
           data: threadToastData,
         });
@@ -904,8 +942,10 @@ export default function GitActionsControl({
     },
     [
       defaultBranchName,
+      backendActionLabel,
       gitStatusForActions,
       hasOriginRemote,
+      isJjBackend,
       isDefaultBranch,
       persistThreadPr,
       runImmediateGitActionMutation,
@@ -1018,7 +1058,9 @@ export default function GitActionsControl({
   const createAndCheckoutBranch = useCallback(
     async (branchName: string) => {
       const api = readNativeApi();
-      if (!api || !gitCwd) return;
+      if (!api || !gitCwd || !vcsTarget.projectId || !vcsTarget.backend) {
+        return;
+      }
 
       const trimmedName = branchName.trim();
       if (!trimmedName) return;
@@ -1055,14 +1097,26 @@ export default function GitActionsControl({
 
       const toastId = toastManager.add({
         type: "loading",
-        title: "Creating branch...",
+        title: `Creating ${referenceLabel.toLowerCase()}...`,
         timeout: 0,
         data: threadToastData,
       });
 
       try {
-        await api.git.createBranch({ cwd: gitCwd, branch: trimmedName, publish: hasOriginRemote });
-        await api.git.checkout({ cwd: gitCwd, branch: trimmedName });
+        const target = {
+          projectId: vcsTarget.projectId,
+          ...(vcsTarget.threadId ? { threadId: vcsTarget.threadId } : {}),
+          expectedEpoch: vcsTarget.epoch,
+        };
+        await api.vcs.createReference({
+          ...target,
+          name: trimmedName,
+          publish: vcsTarget.backend === "git" && hasOriginRemote,
+        });
+        await api.vcs.switchReference({
+          ...target,
+          ref: trimmedName,
+        });
         if (activeThreadId) {
           void api.orchestration
             .dispatchCommand({
@@ -1087,12 +1141,12 @@ export default function GitActionsControl({
             createBranchFlowCompleted: true,
           });
         }
-        await invalidateGitQueries(queryClient);
+        await invalidateVcsQueries(queryClient);
 
         toastManager.update(toastId, {
           type: "success",
           title: `Switched to ${trimmedName}`,
-          description: "Branch created and checked out.",
+          description: `${referenceLabel} created and selected.`,
           data: threadToastData,
         });
       } catch (error) {
@@ -1111,8 +1165,10 @@ export default function GitActionsControl({
       hasOriginRemote,
       normalizedCurrentBranchName,
       queryClient,
+      referenceLabel,
       setThreadWorkspaceAction,
       threadToastData,
+      vcsTarget,
     ],
   );
 
@@ -1238,12 +1294,12 @@ export default function GitActionsControl({
 
     items.push({
       id: "create_branch",
-      label: "Create Branch",
+      label: `Create ${referenceLabel}`,
       disabled: createBranchDisabled,
       disabledReason: createBranchDisabled
         ? isGitActionRunning
-          ? "Git action in progress."
-          : "Git status is unavailable."
+          ? "Source-control action in progress."
+          : "Source-control status is unavailable."
         : null,
       icon: "branch",
       onSelect: openCreateBranchDialog,
@@ -1257,6 +1313,7 @@ export default function GitActionsControl({
     isGitActionRunning,
     openCreateBranchDialog,
     openDialogForMenuItem,
+    referenceLabel,
     runSyncWithRemote,
   ]);
 
@@ -1316,7 +1373,7 @@ export default function GitActionsControl({
   const gitMenuContent = (
     <>
       <MenuGroup>
-        <MenuGroupLabel>Git actions</MenuGroupLabel>
+        <MenuGroupLabel>{isJjBackend ? "JJ actions" : "Git actions"}</MenuGroupLabel>
         {gitPickerMenuItems.map((item) => {
           const menuRow = <GitPickerMenuRow item={item} />;
           if (item.disabled && item.disabledReason) {
@@ -1348,7 +1405,9 @@ export default function GitActionsControl({
         gitStatusError) && <MenuSeparator className="mx-3 mt-2" />}
       {gitStatusForActions?.branch === null && (
         <p className="px-3 py-1.5 text-xs text-warning">
-          Detached HEAD: create and checkout a branch to enable push and PR actions.
+          {isJjBackend
+            ? "No bookmark selected: create a bookmark to enable push and PR actions."
+            : "Detached HEAD: create and checkout a branch to enable push and PR actions."}
         </p>
       )}
       {gitStatusForActions &&
@@ -1359,7 +1418,9 @@ export default function GitActionsControl({
           <p className="px-3 py-1.5 text-xs text-warning">Behind upstream. Pull/rebase first.</p>
         )}
       {isGitStatusOutOfSync && (
-        <p className="px-3 py-1.5 text-xs text-muted-foreground">Refreshing git status...</p>
+        <p className="px-3 py-1.5 text-xs text-muted-foreground">
+          Refreshing source-control status...
+        </p>
       )}
       {gitStatusError && (
         <p className="px-3 py-1.5 text-xs text-destructive">{gitStatusError.message}</p>
@@ -1389,7 +1450,7 @@ export default function GitActionsControl({
           <DialogPanel className="space-y-4">
             <div className="space-y-3 rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-elevated-secondary)] p-3 text-xs">
               <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1">
-                <span className="text-muted-foreground">Branch</span>
+                <span className="text-muted-foreground">{referenceLabel}</span>
                 <span className="flex items-center justify-between gap-2">
                   <span className="font-medium">
                     {gitStatusForActions?.branch ?? "(detached HEAD)"}
@@ -1529,7 +1590,7 @@ export default function GitActionsControl({
               disabled={noneSelected}
               onClick={runDialogActionOnNewBranch}
             >
-              Commit on new branch
+              Commit on new {referenceLabel.toLowerCase()}
             </Button>
             <Button size="sm" disabled={noneSelected} onClick={runDialogAction}>
               Commit
@@ -1598,10 +1659,10 @@ export default function GitActionsControl({
       >
         <DialogPopup className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Create Branch</DialogTitle>
+            <DialogTitle>Create {referenceLabel}</DialogTitle>
             <DialogDescription>
-              Create and switch to a branch from the current HEAD. Future commits, pushes, and PRs
-              will use it.
+              Create and select a {referenceLabel.toLowerCase()} from the current revision.
+              Future commits, pushes, and PRs will use it.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-3">
@@ -1618,7 +1679,7 @@ export default function GitActionsControl({
             >
               <div className="space-y-1.5">
                 <label className="block font-medium text-sm" htmlFor="create-branch-name">
-                  Branch name
+                  {referenceLabel} name
                 </label>
                 <Input
                   autoFocus
@@ -1629,7 +1690,9 @@ export default function GitActionsControl({
                 />
               </div>
               {createBranchNameConflicts ? (
-                <p className="text-destructive text-sm">A branch with this name already exists.</p>
+                <p className="text-destructive text-sm">
+                  A {referenceLabel.toLowerCase()} with this name already exists.
+                </p>
               ) : null}
               <DialogFooter variant="bare">
                 <Button
@@ -1648,7 +1711,7 @@ export default function GitActionsControl({
                   size="sm"
                   disabled={createBranchName.trim().length === 0 || createBranchNameConflicts}
                 >
-                  Create Branch
+                  Create {referenceLabel}
                 </Button>
               </DialogFooter>
             </form>
@@ -1671,7 +1734,7 @@ export default function GitActionsControl({
         ) : (
           <Menu
             onOpenChange={(open) => {
-              if (open) void invalidateGitQueries(queryClient);
+              if (open) void invalidateVcsQueries(queryClient);
             }}
           >
             <MenuTrigger
@@ -1724,7 +1787,7 @@ export default function GitActionsControl({
           {initMutation.isPending ? "Initializing..." : "Initialize Git"}
         </Button>
       ) : (
-        <ChatHeaderSplitGroup label="Git actions">
+        <ChatHeaderSplitGroup label={isJjBackend ? "JJ actions" : "Git actions"}>
           {quickActionDisabledReason ? (
             <Popover>
               <PopoverTrigger
@@ -1781,13 +1844,13 @@ export default function GitActionsControl({
           <ChatHeaderSplitDivider />
           <Menu
             onOpenChange={(open) => {
-              if (open) void invalidateGitQueries(queryClient);
+              if (open) void invalidateVcsQueries(queryClient);
             }}
           >
             <MenuTrigger
               render={
                 <Button
-                  aria-label="Git action options"
+                  aria-label={`${isJjBackend ? "JJ" : "Git"} action options`}
                   size="icon-xs"
                   variant="chrome-outline"
                   className={cn(

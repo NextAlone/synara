@@ -84,6 +84,8 @@ import {
   VcsListReferencesResult,
   VcsListWorkspacesInput,
   VcsListWorkspacesResult,
+  VcsPullInput,
+  VcsPullResult,
   VcsReadDiffInput,
   VcsReadDiffResult,
   VcsRemoveWorkspaceInput,
@@ -95,6 +97,7 @@ import {
   VcsSwitchReferenceInput,
   VcsSwitchReferenceResult,
 } from "./vcs";
+import { VcsRunStackedActionInput } from "./vcsActions";
 import {
   PullRequestActionInput,
   PullRequestCommentInput,
@@ -500,6 +503,22 @@ export const WsVcsHandoffThreadRpc = Rpc.make(WS_METHODS.vcsHandoffThread, {
   success: VcsHandoffThreadResult,
   error: WsRpcError,
 });
+
+export const WsVcsPullRpc = Rpc.make(WS_METHODS.vcsPull, {
+  payload: VcsPullInput,
+  success: VcsPullResult,
+  error: WsRpcError,
+});
+
+export const WsVcsRunStackedActionRpc = Rpc.make(
+  WS_METHODS.vcsRunStackedAction,
+  {
+    payload: VcsRunStackedActionInput,
+    success: GitActionProgressEvent,
+    error: WsRpcError,
+    stream: true,
+  },
+);
 
 export const WsGitStatusRpc = Rpc.make(WS_METHODS.gitStatus, {
   payload: GitStatusInput,
@@ -1085,6 +1104,8 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsVcsCreateWorkspaceRpc,
   WsVcsRemoveWorkspaceRpc,
   WsVcsHandoffThreadRpc,
+  WsVcsPullRpc,
+  WsVcsRunStackedActionRpc,
   WsGitGithubRepositoryRpc,
   WsGitStatusRpc,
   WsGitReadWorkingTreeDiffRpc,

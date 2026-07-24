@@ -298,3 +298,15 @@ export const VcsHandoffThreadResult = Schema.Struct({
   message: Schema.NullOr(Schema.String),
 });
 export type VcsHandoffThreadResult = typeof VcsHandoffThreadResult.Type;
+
+export const VcsPullInput = VcsProjectTarget;
+export type VcsPullInput = typeof VcsPullInput.Type;
+
+export const VcsPullResult = Schema.Struct({
+  backend: VcsBackend,
+  epoch: NonNegativeInt,
+  status: Schema.Literals(["pulled", "skipped_up_to_date"]),
+  ref: TrimmedNonEmptyString,
+  upstreamRef: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type VcsPullResult = typeof VcsPullResult.Type;

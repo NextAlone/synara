@@ -1140,6 +1140,29 @@ const makeWsRpcHandlersLayer = () =>
             }),
             "Failed to hand off thread workspace",
           ),
+        [WS_METHODS.vcsPull]: (input) =>
+          rpcEffect(projectVcs.pull(input), "Failed to pull VCS reference"),
+        [WS_METHODS.vcsRunStackedAction]: (input) =>
+          bufferLiveUiStream(
+            Stream.callback<GitActionProgressEvent, WsRpcError>((queue) =>
+              projectVcs
+                .runStackedAction(input, {
+                  publishProgress: (event) =>
+                    Queue.offer(queue, event).pipe(Effect.asVoid),
+                })
+                .pipe(
+                  Effect.matchCauseEffect({
+                    onFailure: (cause) =>
+                      Queue.fail(
+                        queue,
+                        toWsRpcError(cause, "VCS action failed"),
+                      ),
+                    onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
+                  }),
+                ),
+            ),
+            { label: "vcs.stacked-action" },
+          ),
 
         [WS_METHODS.gitGithubRepository]: (input) =>
           rpcEffect(

@@ -8,18 +8,16 @@ import {
 } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
 import { ModelSelection, ProviderStartOptions } from "./orchestration";
+import {
+  VcsStackedAction,
+  VcsStackedActionFields,
+} from "./vcsActions";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 
 // Domain Types
 
-export const GitStackedAction = Schema.Literals([
-  "commit",
-  "push",
-  "create_pr",
-  "commit_push",
-  "commit_push_pr",
-]);
+export const GitStackedAction = VcsStackedAction;
 export type GitStackedAction = typeof GitStackedAction.Type;
 export const GitActionProgressPhase = Schema.Literals(["branch", "commit", "push", "pr"]);
 export type GitActionProgressPhase = typeof GitActionProgressPhase.Type;
@@ -163,20 +161,8 @@ export const GitSummarizeDiffInput = Schema.Struct({
 export type GitSummarizeDiffInput = typeof GitSummarizeDiffInput.Type;
 
 export const GitRunStackedActionInput = Schema.Struct({
-  actionId: TrimmedNonEmptyStringSchema,
   cwd: TrimmedNonEmptyStringSchema,
-  action: GitStackedAction,
-  commitMessage: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(10_000))),
-  featureBranch: Schema.optional(Schema.Boolean),
-  filePaths: Schema.optional(
-    Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
-  ),
-  codexHomePath: Schema.optional(TrimmedNonEmptyStringSchema),
-  providerOptions: Schema.optional(ProviderStartOptions),
-  textGenerationModel: Schema.optional(TrimmedNonEmptyStringSchema).pipe(
-    Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_TEXT_GENERATION_MODEL)),
-  ),
-  textGenerationModelSelection: Schema.optional(ModelSelection),
+  ...VcsStackedActionFields,
 });
 export type GitRunStackedActionInput = typeof GitRunStackedActionInput.Type;
 

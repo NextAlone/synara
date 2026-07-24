@@ -1,6 +1,8 @@
 import type {
   ProjectId,
   ProjectVcsState,
+  ModelSelection,
+  ProviderStartOptions,
   ThreadId,
   VcsBackend,
   VcsCreateReferenceInput,
@@ -8,6 +10,7 @@ import type {
   VcsHandoffThreadInput,
   VcsReadDiffInput,
   VcsRemoveWorkspaceInput,
+  VcsStackedAction,
   VcsSwitchReferenceInput,
 } from "@synara/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
@@ -97,6 +100,29 @@ export const vcsQueryKeys = {
       "vcs",
       "workspaces",
       target.projectId,
+      target.epoch,
+      target.backend,
+    ] as const,
+};
+
+export const vcsMutationKeys = {
+  runStackedAction: (target: VcsQueryTarget) =>
+    [
+      "vcs",
+      "mutation",
+      "run-stacked-action",
+      target.projectId,
+      target.threadId,
+      target.epoch,
+      target.backend,
+    ] as const,
+  pull: (target: VcsQueryTarget) =>
+    [
+      "vcs",
+      "mutation",
+      "pull",
+      target.projectId,
+      target.threadId,
       target.epoch,
       target.backend,
     ] as const,
@@ -225,6 +251,52 @@ export function vcsHandoffThreadMutationOptions(input: { queryClient: QueryClien
     mutationKey: ["vcs", "mutation", "handoff-thread"] as const,
     mutationFn: (request: VcsHandoffThreadInput) =>
       ensureNativeApi().vcs.handoffThread(request),
+    onSettled: mutationInvalidation(input.queryClient),
+  });
+}
+
+export function vcsRunStackedActionMutationOptions(input: {
+  target: VcsQueryTarget;
+  queryClient: QueryClient;
+  model?: string | null;
+  modelSelection?: ModelSelection | null;
+  codexHomePath?: string | null;
+  providerOptions?: ProviderStartOptions | null;
+}) {
+  return mutationOptions({
+    mutationKey: vcsMutationKeys.runStackedAction(input.target),
+    mutationFn: (request: {
+      actionId: string;
+      action: VcsStackedAction;
+      commitMessage?: string;
+      featureBranch?: boolean;
+      filePaths?: string[];
+    }) =>
+      ensureNativeApi().vcs.runStackedAction({
+        ...requestTarget(input.target),
+        ...request,
+        ...(input.codexHomePath
+          ? { codexHomePath: input.codexHomePath }
+          : {}),
+        ...(input.model ? { textGenerationModel: input.model } : {}),
+        ...(input.modelSelection
+          ? { textGenerationModelSelection: input.modelSelection }
+          : {}),
+        ...(input.providerOptions
+          ? { providerOptions: input.providerOptions }
+          : {}),
+      }),
+    onSettled: mutationInvalidation(input.queryClient),
+  });
+}
+
+export function vcsPullMutationOptions(input: {
+  target: VcsQueryTarget;
+  queryClient: QueryClient;
+}) {
+  return mutationOptions({
+    mutationKey: vcsMutationKeys.pull(input.target),
+    mutationFn: () => ensureNativeApi().vcs.pull(requestTarget(input.target)),
     onSettled: mutationInvalidation(input.queryClient),
   });
 }

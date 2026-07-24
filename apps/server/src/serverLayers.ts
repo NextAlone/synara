@@ -140,6 +140,7 @@ export function makeServerRuntimeServicesLayer(
   const projectVcsLayer = ProjectVcsLayerLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(GitLayerLive),
+    Layer.provideMerge(TextGenerationLayerLive),
     Layer.provideMerge(VcsLayerLive),
   );
   const automationServiceLayer = AutomationServiceLive.pipe(

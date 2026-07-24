@@ -1,7 +1,10 @@
 import type {
+  GitListBranchesResult,
   GitRunStackedActionResult,
   GitStackedAction,
   GitStatusResult,
+  VcsListReferencesResult,
+  VcsStatusResult,
 } from "@synara/contracts";
 import { isTemporaryWorktreeBranch, resolveUniqueSynaraBranchName } from "@synara/shared/git";
 
@@ -28,6 +31,58 @@ export interface GitQuickAction {
 
 const FALLBACK_DEFAULT_BRANCH_NAMES = new Set(["main", "master"]);
 const CREATE_PR_UNAVAILABLE_HINT = "No branch changes to include in a PR.";
+
+function localJjBookmarkName(remoteRef: string): string {
+  const separator = remoteRef.lastIndexOf("@");
+  return separator > 0 ? remoteRef.slice(0, separator) : remoteRef;
+}
+
+export function adaptVcsStatusForGitActions(
+  status: VcsStatusResult | null,
+): GitStatusResult | null {
+  if (!status) return null;
+  return {
+    branch: status.ref,
+    hasWorkingTreeChanges: status.hasChanges,
+    workingTree: {
+      files: status.files.map((file) => ({
+        path: file.path,
+        insertions: file.insertions,
+        deletions: file.deletions,
+      })),
+      insertions: status.insertions,
+      deletions: status.deletions,
+    },
+    hasUpstream: status.remote !== null,
+    upstreamBranch:
+      status.remote === null
+        ? null
+        : status.backend === "jj"
+          ? localJjBookmarkName(status.remote.ref)
+          : status.remote.ref,
+    aheadCount: status.remote?.aheadCount ?? 0,
+    behindCount: status.remote?.behindCount ?? 0,
+    pr: status.pullRequest,
+  };
+}
+
+export function adaptVcsReferencesForGitActions(
+  result: VcsListReferencesResult | null,
+): GitListBranchesResult | null {
+  if (!result) return null;
+  return {
+    isRepo: true,
+    hasOriginRemote: result.hasOriginRemote,
+    branches: result.references.map((reference) => ({
+      name: reference.name,
+      ...(reference.isRemote ? { isRemote: true } : {}),
+      ...(reference.remoteName ? { remoteName: reference.remoteName } : {}),
+      current: reference.current,
+      isDefault: reference.isDefault,
+      worktreePath: reference.workspacePath,
+    })),
+  };
+}
 
 export interface DefaultBranchActionDialogCopy {
   title: string;
