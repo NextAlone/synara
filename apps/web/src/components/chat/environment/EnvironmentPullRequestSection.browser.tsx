@@ -5,21 +5,32 @@
 import "../../../index.css";
 
 import {
+  ProjectId,
   ThreadId,
-  type GitPullRequestSnapshotResult,
-  type GitResolvedPullRequest,
-  type GitStatusResult,
+  type VcsPullRequestSnapshotResult,
+  type VcsPullRequestStatus,
+  type VcsStatusResult,
 } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
-import { gitPullRequestSnapshotQueryOptions, gitQueryKeys } from "~/lib/gitReactQuery";
+import {
+  type VcsQueryTarget,
+  vcsPullRequestSnapshotQueryOptions,
+  vcsQueryKeys,
+} from "~/lib/vcsReactQuery";
 import { EnvironmentPullRequestSection } from "./EnvironmentPullRequestSection";
 
-const cwd = "/repo";
+const projectId = ProjectId.makeUnsafe("project-pr-fix-actions");
 const threadId = ThreadId.makeUnsafe("thread-pr-fix-actions");
+const vcsTarget = {
+  projectId,
+  threadId: null,
+  epoch: 1,
+  backend: "git",
+} satisfies VcsQueryTarget;
 const pullRequest = {
   number: 321,
   title: "Keep PR context visible",
@@ -32,22 +43,37 @@ const pullRequest = {
   additions: 4,
   deletions: 2,
   changedFiles: 1,
-} satisfies GitResolvedPullRequest;
+} satisfies VcsPullRequestStatus;
 
 // Seeds both cached queries so the component renders without calling the native API.
 function createQueryClient() {
   const queryClient = new QueryClient();
-  const gitStatus = {
-    branch: pullRequest.headBranch,
-    hasWorkingTreeChanges: false,
-    workingTree: { files: [], insertions: 0, deletions: 0 },
-    hasUpstream: true,
-    upstreamBranch: `origin/${pullRequest.headBranch}`,
-    aheadCount: 0,
-    behindCount: 0,
-    pr: pullRequest,
-  } satisfies GitStatusResult;
+  const vcsStatus = {
+    backend: "git",
+    epoch: 1,
+    ref: pullRequest.headBranch,
+    revision: null,
+    hasChanges: false,
+    hasConflicts: false,
+    files: [],
+    insertions: 0,
+    deletions: 0,
+    remote: {
+      ref: `origin/${pullRequest.headBranch}`,
+      aheadCount: 0,
+      behindCount: 0,
+    },
+    pullRequest,
+    capabilities: {
+      staging: true,
+      stash: true,
+      checkout: true,
+      workspaces: true,
+    },
+  } satisfies VcsStatusResult;
   const snapshot = {
+    backend: "git",
+    epoch: 1,
     pullRequest,
     checks: [],
     comments: [
@@ -70,12 +96,12 @@ function createQueryClient() {
     ],
     commentsTruncated: false,
     commentsError: null,
-  } satisfies GitPullRequestSnapshotResult;
+  } satisfies VcsPullRequestSnapshotResult;
 
-  queryClient.setQueryData(gitQueryKeys.status(cwd), gitStatus);
+  queryClient.setQueryData(vcsQueryKeys.status(vcsTarget), vcsStatus);
   queryClient.setQueryData(
-    gitPullRequestSnapshotQueryOptions({
-      cwd,
+    vcsPullRequestSnapshotQueryOptions({
+      target: vcsTarget,
       reference: pullRequest.url,
       enabled: true,
     }).queryKey,
@@ -96,7 +122,7 @@ describe("EnvironmentPullRequestSection", () => {
     await render(
       <QueryClientProvider client={queryClient}>
         <EnvironmentPullRequestSection
-          gitCwd={cwd}
+          vcsTarget={vcsTarget}
           enabled
           activeThreadId={threadId}
           projectId={null}

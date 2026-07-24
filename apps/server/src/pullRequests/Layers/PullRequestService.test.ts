@@ -93,6 +93,8 @@ function makeDependencies(input: {
     github: input.github,
     pins: input.pins ?? makePins(),
     getSnapshot: () => Effect.succeed(makeSnapshot(input.projects)),
+    resolveGitHubCwd: (project: OrchestrationProject) =>
+      Effect.succeed(project.workspaceRoot),
     resolveRepositories: (project: OrchestrationProject) => {
       const repository = input.repositories.get(project.id);
       return Effect.succeed({

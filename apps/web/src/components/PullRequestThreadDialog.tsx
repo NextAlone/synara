@@ -1,12 +1,14 @@
-import type { GitResolvePullRequestResult } from "@synara/contracts";
+import type { VcsResolvePullRequestResult } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useEffect, useRef, useState } from "react";
 
 import {
-  gitPreparePullRequestThreadMutationOptions,
-  gitResolvePullRequestQueryOptions,
-} from "~/lib/gitReactQuery";
+  type VcsQueryTarget,
+  vcsPreparePullRequestThreadMutationOptions,
+  vcsQueryKeys,
+  vcsResolvePullRequestQueryOptions,
+} from "~/lib/vcsReactQuery";
 import { cn } from "~/lib/utils";
 import { parsePullRequestReference } from "~/pullRequestReference";
 import { Button } from "./ui/button";
@@ -24,19 +26,19 @@ import { Spinner } from "./ui/spinner";
 
 interface PullRequestThreadDialogProps {
   open: boolean;
-  cwd: string | null;
+  target: VcsQueryTarget;
   initialReference: string | null;
   onOpenChange: (open: boolean) => void;
   onPrepared: (input: {
     branch: string;
     worktreePath: string | null;
-    pullRequest: NonNullable<GitResolvePullRequestResult["pullRequest"]>;
+    pullRequest: VcsResolvePullRequestResult["pullRequest"];
   }) => Promise<void> | void;
 }
 
 export function PullRequestThreadDialog({
   open,
-  cwd,
+  target,
   initialReference,
   onOpenChange,
   onPrepared,
@@ -55,7 +57,7 @@ export function PullRequestThreadDialog({
     >
       <DialogPopup className="max-w-xl">
         <PullRequestThreadDialogContent
-          cwd={cwd}
+          target={target}
           initialReference={initialReference}
           onOpenChange={onOpenChange}
           onPrepared={onPrepared}
@@ -67,7 +69,7 @@ export function PullRequestThreadDialog({
 }
 
 function PullRequestThreadDialogContent({
-  cwd,
+  target,
   initialReference,
   onOpenChange,
   onPrepared,
@@ -94,27 +96,24 @@ function PullRequestThreadDialogContent({
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [open]);
+  }, []);
 
   const parsedReference = parsePullRequestReference(reference);
   const parsedDebouncedReference = parsePullRequestReference(debouncedReference);
   const resolvePullRequestQuery = useQuery(
-    gitResolvePullRequestQueryOptions({
-      cwd,
+    vcsResolvePullRequestQueryOptions({
+      target,
       reference: parsedDebouncedReference,
     }),
   );
   const cachedPullRequest =
-    cwd && parsedReference
-      ? (queryClient.getQueryData<GitResolvePullRequestResult>([
-          "git",
-          "pull-request",
-          cwd,
-          parsedReference,
-        ])?.pullRequest ?? null)
+    target.projectId && target.backend && parsedReference
+      ? (queryClient.getQueryData<VcsResolvePullRequestResult>(
+          vcsQueryKeys.pullRequest(target, parsedReference),
+        )?.pullRequest ?? null)
       : null;
   const preparePullRequestThreadMutation = useMutation(
-    gitPreparePullRequestThreadMutationOptions({ cwd, queryClient }),
+    vcsPreparePullRequestThreadMutationOptions({ target, queryClient }),
   );
 
   const liveResolvedPullRequest =
@@ -151,7 +150,12 @@ function PullRequestThreadDialogContent({
       setReferenceDirty(true);
       return;
     }
-    if (!parsedReference || !resolvedPullRequest || !cwd) {
+    if (
+      !parsedReference ||
+      !resolvedPullRequest ||
+      !target.projectId ||
+      !target.backend
+    ) {
       return;
     }
     setPreparingMode(mode);
@@ -166,7 +170,7 @@ function PullRequestThreadDialogContent({
           onPrepared({
             branch: result.branch,
             worktreePath: result.worktreePath,
-            pullRequest: resolvedPullRequest,
+            pullRequest: result.pullRequest,
           }),
         ).then(() => {
           onOpenChange(false);
@@ -204,7 +208,7 @@ function PullRequestThreadDialogContent({
         <DialogTitle>Checkout Pull Request</DialogTitle>
         <DialogDescription>
           Resolve a GitHub pull request, then create the draft thread in the main repo or in a
-          dedicated worktree.
+          dedicated {target.backend === "jj" ? "JJ workspace" : "worktree"}.
         </DialogDescription>
       </DialogHeader>
       <DialogPanel className="space-y-4">
@@ -274,7 +278,8 @@ function PullRequestThreadDialogContent({
             void handleConfirm("local");
           }}
           disabled={
-            !cwd ||
+            !target.projectId ||
+            !target.backend ||
             !resolvedPullRequest ||
             isResolving ||
             preparePullRequestThreadMutation.isPending
@@ -289,13 +294,18 @@ function PullRequestThreadDialogContent({
             void handleConfirm("worktree");
           }}
           disabled={
-            !cwd ||
+            !target.projectId ||
+            !target.backend ||
             !resolvedPullRequest ||
             isResolving ||
             preparePullRequestThreadMutation.isPending
           }
         >
-          {preparingMode === "worktree" ? "Preparing worktree..." : "Worktree"}
+          {preparingMode === "worktree"
+            ? `Preparing ${target.backend === "jj" ? "workspace" : "worktree"}...`
+            : target.backend === "jj"
+              ? "Workspace"
+              : "Worktree"}
         </Button>
       </DialogFooter>
     </>

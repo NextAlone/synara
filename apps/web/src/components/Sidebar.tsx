@@ -122,8 +122,11 @@ import {
   createSidebarTreeThreadsSelector,
 } from "../storeSelectors";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
-import { gitResolvePullRequestQueryOptions } from "../lib/gitReactQuery";
-import { makeVcsQueryTarget, vcsStatusQueryOptions } from "../lib/vcsReactQuery";
+import {
+  makeVcsQueryTarget,
+  vcsResolvePullRequestQueryOptions,
+  vcsStatusQueryOptions,
+} from "../lib/vcsReactQuery";
 import {
   providerComposerCapabilitiesQueryOptions,
   supportsThreadImport,
@@ -3734,7 +3737,7 @@ export default function Sidebar() {
             envMode: thread.envMode,
             worktreePath: thread.worktreePath,
           }),
-          vcsTarget: makeVcsQueryTarget(project, thread.worktreePath ? thread.id : null),
+          vcsTarget: makeVcsQueryTarget(project, thread.id),
         };
       }),
     [projectById, visibleSidebarThreads],
@@ -3751,19 +3754,18 @@ export default function Sidebar() {
   const threadStoredPrTargets = useMemo(
     () =>
       threadVcsTargets.flatMap((target) =>
-        target.cwd !== null &&
-        target.vcsTarget.backend === "git" &&
+        target.vcsTarget.backend !== null &&
         target.lastKnownPr !== null &&
         target.lastKnownPr.url.trim().length > 0
-          ? [{ ...target, cwd: target.cwd, lastKnownPr: target.lastKnownPr }]
+          ? [{ ...target, lastKnownPr: target.lastKnownPr }]
           : [],
       ),
     [threadVcsTargets],
   );
   const threadStoredPrQueries = useQueries({
     queries: threadStoredPrTargets.map((target) => ({
-      ...gitResolvePullRequestQueryOptions({
-        cwd: target.cwd,
+      ...vcsResolvePullRequestQueryOptions({
+        target: target.vcsTarget,
         reference: target.lastKnownPr.url,
       }),
       staleTime: 30_000,

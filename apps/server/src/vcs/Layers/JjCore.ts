@@ -14,6 +14,7 @@ import {
   parseJjBookmarkNames,
   parseJjBookmarks,
   parseJjFileChanges,
+  parseJjGitRemotes,
   parseJjRevisionIdentity,
   parseJjWorkspaces,
 } from "../jjParsing.ts";
@@ -207,6 +208,14 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
         );
       });
 
+    const initRepository: JjCoreShape["initRepository"] = (cwd) =>
+      withMutation(
+        cwd,
+        run("JjCore.initRepository", cwd, ["git", "init"]).pipe(
+          Effect.asVoid,
+        ),
+      );
+
     const readRevisionIdentity: JjCoreShape["readRevisionIdentity"] = (cwd, revision = "@") => {
       const input = {
         operation: "JjCore.readRevisionIdentity",
@@ -258,6 +267,19 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
         const revision = yield* readRevisionIdentity(cwd);
         return yield* listBookmarksForChange(cwd, revision.changeId);
       });
+
+    const listGitRemotes: JjCoreShape["listGitRemotes"] = (cwd) => {
+      const input = {
+        operation: "JjCore.listGitRemotes",
+        cwd,
+        args: ["--ignore-working-copy", "git", "remote", "list"],
+      } as const;
+      return execute(input).pipe(
+        Effect.flatMap((result) =>
+          parseOutput(input, () => parseJjGitRemotes(result.stdout)),
+        ),
+      );
+    };
 
     const resolveNearestBookmark: JjCoreShape["resolveNearestBookmark"] = (cwd) => {
       const input = {
@@ -591,6 +613,57 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
         ]).pipe(Effect.asVoid),
       );
 
+    const createAvailableBookmark: JjCoreShape["createAvailableBookmark"] = (
+      cwd,
+      desiredName,
+      revision,
+    ) =>
+      withMutation(
+        cwd,
+        Effect.gen(function* () {
+          const localNames = new Set(
+            (yield* listBookmarks(cwd))
+              .filter((bookmark) => bookmark.isLocal)
+              .map((bookmark) => bookmark.name),
+          );
+          let name = desiredName;
+          for (let suffix = 2; localNames.has(name); suffix += 1) {
+            name = `${desiredName}-${suffix}`;
+          }
+          yield* run("JjCore.createAvailableBookmark", cwd, [
+            "bookmark",
+            "create",
+            "--revision",
+            revision,
+            name,
+          ]);
+          return name;
+        }),
+      );
+
+    const deleteBookmark: JjCoreShape["deleteBookmark"] = (cwd, name) =>
+      withMutation(
+        cwd,
+        run("JjCore.deleteBookmark", cwd, [
+          "bookmark",
+          "delete",
+          name,
+        ]).pipe(Effect.asVoid),
+      );
+
+    const trackBookmark: JjCoreShape["trackBookmark"] = (
+      cwd,
+      remoteBookmark,
+    ) =>
+      withMutation(
+        cwd,
+        run("JjCore.trackBookmark", cwd, [
+          "bookmark",
+          "track",
+          remoteBookmark,
+        ]).pipe(Effect.asVoid),
+      );
+
     const setBookmark: JjCoreShape["setBookmark"] = (cwd, name, revision) =>
       withMutation(
         cwd,
@@ -643,6 +716,12 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
         }),
       );
 
+    const importGit: JjCoreShape["importGit"] = (cwd) =>
+      withMutation(
+        cwd,
+        run("JjCore.importGit", cwd, ["git", "import"]).pipe(Effect.asVoid),
+      );
+
     const fetchGit: JjCoreShape["fetchGit"] = (cwd, remoteName) =>
       withMutation(
         cwd,
@@ -657,6 +736,7 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
       cwd,
       bookmark,
       remoteName,
+      remoteBookmark = bookmark,
     ) =>
       withMutation(
         cwd,
@@ -666,7 +746,7 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
             "set",
             bookmark,
             "--revision",
-            `${bookmark}@${remoteName}`,
+            `${remoteBookmark}@${remoteName}`,
           ]);
           yield* run("JjCore.advanceBookmark.rebase", cwd, [
             "rebase",
@@ -678,12 +758,52 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
         }),
       );
 
-    const pushBookmark: JjCoreShape["pushBookmark"] = (cwd, bookmark) =>
+    const compareBookmarkToRemote: JjCoreShape["compareBookmarkToRemote"] = (
+      cwd,
+      bookmark,
+      remoteName,
+      remoteBookmark = bookmark,
+    ) =>
+      Effect.all(
+        [
+          countRevisions(
+            cwd,
+            "JjCore.compareBookmarkToRemote.ahead",
+            `remote_bookmarks(exact:${JSON.stringify(
+              remoteBookmark,
+            )}, exact:${JSON.stringify(
+              remoteName,
+            )})..bookmarks(exact:${JSON.stringify(bookmark)})`,
+          ),
+          countRevisions(
+            cwd,
+            "JjCore.compareBookmarkToRemote.behind",
+            `bookmarks(exact:${JSON.stringify(
+              bookmark,
+            )})..remote_bookmarks(exact:${JSON.stringify(
+              remoteBookmark,
+            )}, exact:${JSON.stringify(remoteName)})`,
+          ),
+        ],
+        { concurrency: 2 },
+      ).pipe(
+        Effect.map(([aheadCount, behindCount]) => ({
+          aheadCount,
+          behindCount,
+        })),
+      );
+
+    const pushBookmark: JjCoreShape["pushBookmark"] = (
+      cwd,
+      bookmark,
+      remoteName,
+    ) =>
       withMutation(
         cwd,
         run("JjCore.pushBookmark", cwd, [
           "git",
           "push",
+          ...(remoteName ? ["--remote", remoteName] : []),
           "--bookmark",
           `exact:${bookmark}`,
         ]).pipe(Effect.asVoid),
@@ -693,8 +813,10 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
       execute,
       withMutation,
       detectRepository,
+      initRepository,
       readRevisionIdentity,
       listBookmarks,
+      listGitRemotes,
       resolveNearestBookmark,
       status,
       readRevisionDiff,
@@ -704,12 +826,17 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
       createWorkspace,
       forgetWorkspace,
       createBookmark,
+      createAvailableBookmark,
+      deleteBookmark,
+      trackBookmark,
       setBookmark,
       startNewChange,
       describeRevision,
       commitWorkingCopy,
+      importGit,
       fetchGit,
       advanceBookmark,
+      compareBookmarkToRemote,
       pushBookmark,
     } satisfies JjCoreShape;
   });

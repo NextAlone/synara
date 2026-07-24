@@ -29,6 +29,8 @@ export interface GitQuickAction {
   hint?: string;
 }
 
+export type SourceControlReferenceKind = "branch" | "bookmark";
+
 const FALLBACK_DEFAULT_BRANCH_NAMES = new Set(["main", "master"]);
 const CREATE_PR_UNAVAILABLE_HINT = "No branch changes to include in a PR.";
 
@@ -334,9 +336,17 @@ export function resolveQuickAction(
   hasOriginRemote = true,
   shouldOfferCreateBranch = false,
   _defaultBranchName?: string | null,
+  referenceKind: SourceControlReferenceKind = "branch",
+  backendName: "Git" | "JJ" = "Git",
 ): GitQuickAction {
+  const referenceLabel = referenceKind === "bookmark" ? "Bookmark" : "Branch";
   if (isBusy) {
-    return { label: "Commit", disabled: true, kind: "show_hint", hint: "Git action in progress." };
+    return {
+      label: "Commit",
+      disabled: true,
+      kind: "show_hint",
+      hint: `${backendName} action in progress.`,
+    };
   }
 
   if (!gitStatus) {
@@ -344,7 +354,7 @@ export function resolveQuickAction(
       label: "Commit",
       disabled: true,
       kind: "show_hint",
-      hint: "Git status is unavailable.",
+      hint: `${backendName} status is unavailable.`,
     };
   }
 
@@ -358,7 +368,7 @@ export function resolveQuickAction(
   if (!hasBranch) {
     if (shouldOfferCreateBranch) {
       return {
-        label: "Create Branch",
+        label: `Create ${referenceLabel}`,
         disabled: false,
         kind: "create_branch",
       };
@@ -367,13 +377,16 @@ export function resolveQuickAction(
       label: "Commit",
       disabled: true,
       kind: "show_hint",
-      hint: "Create and checkout a branch before pushing or opening a PR.",
+      hint:
+        referenceKind === "bookmark"
+          ? "Create and select a bookmark before pushing or opening a PR."
+          : "Create and checkout a branch before pushing or opening a PR.",
     };
   }
 
   if (!gitStatus.hasUpstream && shouldOfferCreateBranch) {
     return {
-      label: "Create Branch",
+      label: `Create ${referenceLabel}`,
       disabled: false,
       kind: "create_branch",
     };
@@ -382,10 +395,10 @@ export function resolveQuickAction(
   if (gitStatus.hasUpstream) {
     if (isDiverged) {
       return {
-        label: "Sync branch",
+        label: `Sync ${referenceKind}`,
         disabled: true,
         kind: "show_hint",
-        hint: "Branch has diverged from upstream. Rebase/merge first.",
+        hint: `${referenceLabel} has diverged from upstream. Rebase/merge first.`,
       };
     }
 
@@ -482,7 +495,7 @@ export function resolveQuickAction(
     label: "Commit",
     disabled: true,
     kind: "show_hint",
-    hint: "Branch is up to date. No action needed.",
+    hint: `${referenceLabel} is up to date. No action needed.`,
   };
 }
 
@@ -509,21 +522,41 @@ export function resolveCreatePrActionAvailability(input: {
 export function resolvePullActionAvailability(input: {
   gitStatus: GitStatusResult | null;
   isBusy: boolean;
+  referenceKind?: SourceControlReferenceKind;
+  backendName?: "Git" | "JJ";
 }): { canRun: boolean; hint: string | null } {
   const { gitStatus, isBusy } = input;
-  if (isBusy) return { canRun: false, hint: "Git action in progress." };
-  if (!gitStatus) return { canRun: false, hint: "Git status is unavailable." };
+  const referenceKind = input.referenceKind ?? "branch";
+  const referenceLabel = referenceKind === "bookmark" ? "Bookmark" : "Branch";
+  const backendName = input.backendName ?? "Git";
+  if (isBusy) return { canRun: false, hint: `${backendName} action in progress.` };
+  if (!gitStatus) return { canRun: false, hint: `${backendName} status is unavailable.` };
   if (gitStatus.branch === null) {
-    return { canRun: false, hint: "Detached HEAD: checkout a branch before pulling." };
+    return {
+      canRun: false,
+      hint:
+        referenceKind === "bookmark"
+          ? "No bookmark selected: select a bookmark before pulling."
+          : "Detached HEAD: checkout a branch before pulling.",
+    };
   }
   if (!gitStatus.hasUpstream) {
-    return { canRun: false, hint: "Current branch has no upstream to pull from." };
+    return {
+      canRun: false,
+      hint: `Current ${referenceKind} has no upstream to pull from.`,
+    };
   }
   if (gitStatus.aheadCount > 0 && gitStatus.behindCount > 0) {
-    return { canRun: false, hint: "Branch has diverged from upstream. Rebase/merge first." };
+    return {
+      canRun: false,
+      hint: `${referenceLabel} has diverged from upstream. Rebase/merge first.`,
+    };
   }
   if (gitStatus.behindCount <= 0) {
-    return { canRun: false, hint: "Branch is already up to date." };
+    return {
+      canRun: false,
+      hint: `${referenceLabel} is already up to date.`,
+    };
   }
   return { canRun: true, hint: null };
 }
@@ -557,20 +590,23 @@ export function resolveDefaultBranchActionDialogCopy(input: {
   action: DefaultBranchConfirmableAction;
   branchName: string;
   includesCommit: boolean;
+  referenceKind?: SourceControlReferenceKind;
 }): DefaultBranchActionDialogCopy {
   const branchLabel = input.branchName;
-  const suffix = ` on "${branchLabel}". You can continue on this branch or create a feature branch and run the same action there.`;
+  const referenceKind = input.referenceKind ?? "branch";
+  const featureReference = `feature ${referenceKind}`;
+  const suffix = ` on "${branchLabel}". You can continue on this ${referenceKind} or create a ${featureReference} and run the same action there.`;
 
   if (input.action === "push" || input.action === "commit_push") {
     if (input.includesCommit) {
       return {
-        title: "Commit & push to default branch?",
+        title: `Commit & push to default ${referenceKind}?`,
         description: `This action will commit and push changes${suffix}`,
         continueLabel: `Commit & push to ${branchLabel}`,
       };
     }
     return {
-      title: "Push to default branch?",
+      title: `Push to default ${referenceKind}?`,
       description: `This action will push local commits${suffix}`,
       continueLabel: `Push to ${branchLabel}`,
     };
@@ -578,15 +614,15 @@ export function resolveDefaultBranchActionDialogCopy(input: {
 
   if (input.includesCommit) {
     return {
-      title: "Create feature branch, commit & PR?",
-      description: `Pull requests can't be opened from "${branchLabel}" into itself. This action will create a feature branch, commit your changes there, push it, and create the PR.`,
-      continueLabel: "Create feature branch & continue",
+      title: `Create ${featureReference}, commit & PR?`,
+      description: `Pull requests can't be opened from "${branchLabel}" into itself. This action will create a ${featureReference}, commit your changes there, push it, and create the PR.`,
+      continueLabel: `Create ${featureReference} & continue`,
     };
   }
   return {
-    title: "Create feature branch & PR?",
-    description: `Pull requests can't be opened from "${branchLabel}" into itself. This action will create a feature branch from your current commits, push it, and create the PR.`,
-    continueLabel: "Create feature branch & continue",
+    title: `Create ${featureReference} & PR?`,
+    description: `Pull requests can't be opened from "${branchLabel}" into itself. This action will create a ${featureReference} from your current commits, push it, and create the PR.`,
+    continueLabel: `Create ${featureReference} & continue`,
   };
 }
 

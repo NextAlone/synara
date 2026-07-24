@@ -58,6 +58,7 @@ import {
 } from "../../checkpointing/Utils.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
+import { JjCore } from "../../vcs/Services/JjCore.ts";
 import {
   ProviderAdapterRequestError,
   ProviderAdapterValidationError,
@@ -363,6 +364,7 @@ const make = Effect.gen(function* () {
   const checkpointStore = yield* CheckpointStore;
   const studioOutputReactor = yield* StudioOutputReactor;
   const git = yield* GitCore;
+  const jj = yield* JjCore;
   const textGeneration = yield* TextGeneration;
   const serverSettings = yield* ServerSettingsService;
   const managedAttachments = yield* ManagedAttachmentRepository;
@@ -1650,46 +1652,76 @@ const make = Effect.gen(function* () {
     return startedTurn;
   });
 
-  const renameTemporaryWorktreeBranch = Effect.fnUntraced(function* (input: {
+  const nameWorktreeReference = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
+    readonly backend: "git" | "jj";
     readonly cwd: string;
-    readonly oldBranch: string;
+    readonly oldBranch: string | null;
     readonly targetBranch: string;
   }) {
     if (input.targetBranch === input.oldBranch) {
       return;
     }
 
-    const renamed = yield* git.withMutation(
-      input.cwd,
-      Effect.gen(function* () {
-        const result = yield* git.renameBranch({
-          cwd: input.cwd,
-          oldBranch: input.oldBranch,
-          newBranch: input.targetBranch,
-        });
-        yield* git.publishBranch({ cwd: input.cwd, branch: result.branch }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("provider command reactor failed to publish renamed branch", {
-              threadId: input.threadId,
-              cwd: input.cwd,
-              branch: result.branch,
-              cause: Cause.pretty(cause),
+    const branch =
+      input.backend === "jj"
+        ? yield* jj
+            .createAvailableBookmark(input.cwd, input.targetBranch, "@-")
+            .pipe(
+              Effect.tap((bookmark) =>
+                jj.pushBookmark(input.cwd, bookmark).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning(
+                      "provider command reactor failed to publish JJ bookmark",
+                      {
+                        threadId: input.threadId,
+                        cwd: input.cwd,
+                        bookmark,
+                        cause: Cause.pretty(cause),
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            )
+        : yield* git.withMutation(
+            input.cwd,
+            Effect.gen(function* () {
+              if (!input.oldBranch) {
+                return yield* Effect.die(
+                  new Error("Git worktree branch is unavailable."),
+                );
+              }
+              const result = yield* git.renameBranch({
+                cwd: input.cwd,
+                oldBranch: input.oldBranch,
+                newBranch: input.targetBranch,
+              });
+              yield* git.publishBranch({ cwd: input.cwd, branch: result.branch }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning(
+                    "provider command reactor failed to publish renamed branch",
+                    {
+                      threadId: input.threadId,
+                      cwd: input.cwd,
+                      branch: result.branch,
+                      cause: Cause.pretty(cause),
+                    },
+                  ),
+                ),
+              );
+              return result.branch;
             }),
-          ),
-        );
-        return result;
-      }),
-    );
+          );
     yield* orchestrationEngine.dispatch({
       type: "thread.meta.update",
       commandId: serverCommandId("worktree-branch-rename"),
       threadId: input.threadId,
-      branch: renamed.branch,
+      branch,
       worktreePath: input.cwd,
       associatedWorktreePath: input.cwd,
-      associatedWorktreeBranch: renamed.branch,
-      associatedWorktreeRef: renamed.branch,
+      associatedWorktreeBranch: branch,
+      associatedWorktreeRef: branch,
     });
   });
 
@@ -1715,15 +1747,22 @@ const make = Effect.gen(function* () {
     readonly modelSelection?: ModelSelection;
     readonly providerOptions?: ProviderStartOptions;
   }) {
-    if (!input.branch || !input.worktreePath) {
-      return;
-    }
-    if (!isTemporaryWorktreeBranch(input.branch)) {
+    if (!input.worktreePath) {
       return;
     }
 
     const thread = yield* resolveFirstTurnThread(input.threadId, input.messageId);
     if (!thread) return;
+    const project = yield* resolveThreadWorkspaceProject(thread);
+    const backend = project?.vcs.binding?.backend;
+    if (!backend) return;
+    if (
+      (backend === "git" &&
+        (!input.branch || !isTemporaryWorktreeBranch(input.branch))) ||
+      (backend === "jj" && input.branch !== null)
+    ) {
+      return;
+    }
 
     const oldBranch = input.branch;
     const cwd = input.worktreePath;
@@ -1737,8 +1776,9 @@ const make = Effect.gen(function* () {
       const targetBranch = buildGeneratedWorktreeBranchName(
         input.messageText.trim() || attachmentTitleSeed(attachments[0]) || "",
       );
-      yield* renameTemporaryWorktreeBranch({
+      yield* nameWorktreeReference({
         threadId: input.threadId,
+        backend,
         cwd,
         oldBranch,
         targetBranch,
@@ -1772,8 +1812,9 @@ const make = Effect.gen(function* () {
         if (!generated) return Effect.void;
 
         const targetBranch = buildGeneratedWorktreeBranchName(generated.branch);
-        return renameTemporaryWorktreeBranch({
+        return nameWorktreeReference({
           threadId: input.threadId,
+          backend,
           cwd,
           oldBranch,
           targetBranch,

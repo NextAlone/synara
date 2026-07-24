@@ -11,6 +11,8 @@ import type {
   VcsCreateWorkspaceResult,
   VcsHandoffThreadInput,
   VcsHandoffThreadResult,
+  VcsGitHubRepositoryInput,
+  VcsGitHubRepositoryResult,
   VcsListReferencesInput,
   VcsListReferencesResult,
   VcsListWorkspacesInput,
@@ -21,6 +23,13 @@ import type {
   VcsRemoveWorkspaceResult,
   VcsPullInput,
   VcsPullResult,
+  VcsPullRequestSnapshotInput,
+  VcsPullRequestSnapshotResult,
+  VcsPullRequestStatus,
+  VcsPreparePullRequestThreadInput,
+  VcsPreparePullRequestThreadResult,
+  VcsResolvePullRequestInput,
+  VcsResolvePullRequestResult,
   VcsRunStackedActionInput,
   VcsSetBackendInput,
   VcsSetBackendResult,
@@ -53,8 +62,16 @@ export interface ResolvedProjectVcsTarget {
   readonly backend: VcsBackend;
   readonly epoch: number;
   readonly binding: ProjectVcsBinding;
+  /** Thread-persisted branch/bookmark preference, used to disambiguate JJ bookmarks. */
+  readonly preferredReference: string | null;
   /** Server-derived project cwd in the selected local/workspace checkout. */
   readonly cwd: string;
+}
+
+export interface MaterializedPullRequestHead {
+  readonly pullRequest: VcsPullRequestStatus;
+  readonly branch: string;
+  readonly revision: string;
 }
 
 export interface ProjectVcsShape {
@@ -94,6 +111,29 @@ export interface ProjectVcsShape {
   readonly pull: (
     input: VcsPullInput,
   ) => Effect.Effect<VcsPullResult, ProjectVcsServiceError>;
+  readonly githubRepository: (
+    input: VcsGitHubRepositoryInput,
+  ) => Effect.Effect<VcsGitHubRepositoryResult, ProjectVcsServiceError>;
+  /**
+   * Resolve the cwd used only by Git/GitHub remote fallbacks. For JJ this is
+   * the repository's Git backing store, never the JJ working copy.
+   */
+  readonly remoteGitCwd: (
+    input: VcsGitHubRepositoryInput,
+  ) => Effect.Effect<string, ProjectVcsServiceError>;
+  readonly resolvePullRequest: (
+    input: VcsResolvePullRequestInput,
+  ) => Effect.Effect<VcsResolvePullRequestResult, ProjectVcsServiceError>;
+  /** Materialize a remote PR head without switching or creating a workspace. */
+  readonly materializePullRequestHead: (
+    input: VcsResolvePullRequestInput,
+  ) => Effect.Effect<MaterializedPullRequestHead, ProjectVcsServiceError>;
+  readonly pullRequestSnapshot: (
+    input: VcsPullRequestSnapshotInput,
+  ) => Effect.Effect<VcsPullRequestSnapshotResult, ProjectVcsServiceError>;
+  readonly preparePullRequestThread: (
+    input: VcsPreparePullRequestThreadInput,
+  ) => Effect.Effect<VcsPreparePullRequestThreadResult, ProjectVcsServiceError>;
   readonly runStackedAction: (
     input: VcsRunStackedActionInput,
     options?: {

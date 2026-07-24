@@ -4,16 +4,20 @@ import * as nodePath from "node:path";
 
 import {
   CommandId,
+  type OrchestrationThreadPullRequest,
   type OrchestrationProjectShell,
+  type OrchestrationThreadShell,
+  type ProjectId,
   type ProjectVcsBinding,
   type VcsBackend,
   type VcsFileChange,
   type VcsHandoffThreadResult,
   type VcsListReferencesResult,
   type VcsListWorkspacesResult,
+  type VcsPullRequestStatus,
   type VcsStatusResult,
 } from "@synara/contracts";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option, Semaphore } from "effect";
 
 import { ServerConfig } from "../../config.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
@@ -31,9 +35,18 @@ import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
 } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { resolveGitHubRepository } from "../../pullRequests/repositoryResolution.ts";
 import { ProjectVcsError } from "../Errors.ts";
 import { makeJjActions } from "../jjActions.ts";
-import { JjCore, type JjCoreShape } from "../Services/JjCore.ts";
+import {
+  resolveJjBookmarkRemote,
+  resolveJjGitHubHeadContext,
+} from "../jjRemote.ts";
+import {
+  JjCore,
+  type JjCoreShape,
+  type JjWorkingCopyStatus,
+} from "../Services/JjCore.ts";
 import {
   ProjectVcs,
   type ProjectVcsShape,
@@ -117,14 +130,59 @@ function workspaceRootForProjectPath(
     : null;
 }
 
+function storedPullRequestStatus(
+  pullRequest: OrchestrationThreadPullRequest,
+): VcsPullRequestStatus {
+  return {
+    number: pullRequest.number,
+    title: pullRequest.title,
+    url: pullRequest.url,
+    baseBranch: pullRequest.baseBranch,
+    headBranch: pullRequest.headBranch,
+    state: pullRequest.state,
+    isDraft: pullRequest.isDraft ?? false,
+    mergeability: pullRequest.mergeability ?? "unknown",
+    additions: pullRequest.additions ?? null,
+    deletions: pullRequest.deletions ?? null,
+    changedFiles: pullRequest.changedFiles ?? null,
+  };
+}
+
 function chooseDefaultReference(names: ReadonlyArray<string>): string | null {
   const nameSet = new Set(names);
   return DEFAULT_REFERENCE_NAMES.find((name) => nameSet.has(name)) ?? names[0] ?? null;
 }
 
 export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): ProjectVcsShape {
+  const mutationLocks = new Map<
+    ProjectId,
+    { readonly semaphore: Semaphore.Semaphore; users: number }
+  >();
+  const withProjectMutation = <A, E, R>(
+    projectId: ProjectId,
+    effect: Effect.Effect<A, E, R>,
+  ) =>
+    Effect.gen(function* () {
+      let entry = mutationLocks.get(projectId);
+      if (!entry) {
+        entry = { semaphore: Semaphore.makeUnsafe(1), users: 0 };
+        mutationLocks.set(projectId, entry);
+      }
+      entry.users += 1;
+      return yield* entry.semaphore.withPermit(effect).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            entry!.users -= 1;
+            if (entry!.users === 0 && mutationLocks.get(projectId) === entry) {
+              mutationLocks.delete(projectId);
+            }
+          }),
+        ),
+      );
+    });
   const jjActions = makeJjActions({
     jj: dependencies.jj,
+    git: dependencies.git,
     gitHubCli: dependencies.gitHubCli,
     textGeneration: dependencies.textGeneration,
   });
@@ -145,6 +203,19 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
       ),
     );
 
+  const selectedJjBookmark = (
+    target: ResolvedProjectVcsTarget,
+    status: JjWorkingCopyStatus,
+  ): string | null => {
+    const preferred = target.preferredReference;
+    return preferred &&
+      status.bookmarks.some(
+        (bookmark) => bookmark.name === preferred && bookmark.isLocal,
+      )
+      ? preferred
+      : status.currentBookmark;
+  };
+
   const canonicalize = (operation: string, path: string) =>
     Effect.tryPromise({
       try: () => dependencies.canonicalizePath(path),
@@ -155,6 +226,67 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
           "The project workspace path does not exist or cannot be resolved.",
         ),
     });
+
+  const hasAncestorEntry = (startPath: string, entryName: string) =>
+    Effect.promise(async () => {
+      let current = nodePath.resolve(startPath);
+      while (true) {
+        if (await dependencies.pathExists(nodePath.join(current, entryName))) {
+          return true;
+        }
+        const parent = nodePath.dirname(current);
+        if (parent === current) {
+          return false;
+        }
+        current = parent;
+      }
+    });
+
+  const readKnownThreadPullRequest = (
+    target: ResolvedProjectVcsTarget,
+    gitCwd: string,
+    currentBookmark: string | null,
+    remoteBookmark: string | null,
+  ): Effect.Effect<
+    VcsPullRequestStatus | null,
+    import("../../persistence/Errors.ts").ProjectionRepositoryError
+  > =>
+    target.threadId
+      ? dependencies.projection.getThreadShellById(target.threadId).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.succeed(null),
+              onSome: (thread) => {
+                const stored = thread.lastKnownPr;
+                if (!stored) {
+                  return Effect.succeed(null);
+                }
+                const matchesCurrentBookmark =
+                  currentBookmark !== null &&
+                  (currentBookmark === stored.headBranch ||
+                    remoteBookmark === stored.headBranch ||
+                    currentBookmark.startsWith(
+                      `synara/pr-${stored.number}/`,
+                    ));
+                if (!matchesCurrentBookmark) {
+                  return Effect.succeed(null);
+                }
+                return dependencies.gitManager
+                  .resolvePullRequest({
+                    cwd: gitCwd,
+                    reference: stored.url,
+                  })
+                  .pipe(
+                    Effect.map((result) => result.pullRequest),
+                    Effect.catch(() =>
+                      Effect.succeed(storedPullRequestStatus(stored)),
+                    ),
+                  );
+              },
+            }),
+          ),
+        )
+      : Effect.succeed(null);
 
   const detectBinding = (
     operation: string,
@@ -217,60 +349,148 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
     Effect.gen(function* () {
       const operation = "ProjectVcs.setBackend";
       const project = yield* readProject(operation, input.projectId);
-      if ((project.kind ?? "project") !== "project") {
-        return yield* projectError(
-          operation,
-          "project-kind-unsupported",
-          "Only ordinary projects can configure a VCS backend.",
-        );
-      }
-      if (project.vcs.epoch !== input.expectedEpoch) {
-        return yield* projectError(
-          operation,
-          "epoch-mismatch",
-          `The VCS backend changed from epoch ${input.expectedEpoch} to ${project.vcs.epoch}; refresh and retry.`,
-        );
-      }
-
-      const binding = yield* detectBinding(operation, input.backend, project.workspaceRoot);
-      if (project.vcs.binding && bindingEquals(project.vcs.binding, binding)) {
-        return { vcs: project.vcs };
-      }
-
-      const changesBackend =
-        project.vcs.binding !== null && project.vcs.binding.backend !== input.backend;
-      const initializesJj = project.vcs.binding === null && input.backend === "jj";
-      if (changesBackend || initializesJj) {
-        const snapshot = yield* dependencies.projection.getShellSnapshot();
-        const blockingThreadIds = snapshot.threads
-          .filter(
-            (thread) =>
-              thread.projectId === input.projectId && thread.worktreePath !== null,
-          )
-          .map((thread) => thread.id);
-        if (blockingThreadIds.length > 0) {
+      const update = Effect.gen(function* () {
+        if ((project.kind ?? "project") !== "project") {
           return yield* projectError(
             operation,
-            "backend-switch-blocked",
-            `Move or remove ${blockingThreadIds.length} existing worktree thread(s) before changing this project to ${input.backend}.`,
+            "project-kind-unsupported",
+            "Only ordinary projects can configure a VCS backend.",
           );
         }
-      }
+        if (project.vcs.epoch !== input.expectedEpoch) {
+          return yield* projectError(
+            operation,
+            "epoch-mismatch",
+            `The VCS backend changed from epoch ${input.expectedEpoch} to ${project.vcs.epoch}; refresh and retry.`,
+          );
+        }
 
-      yield* dependencies.orchestrationEngine.dispatch({
-        type: "project.vcs-binding.set",
-        commandId: dependencies.makeCommandId(),
-        projectId: input.projectId,
-        expectedEpoch: input.expectedEpoch,
-        binding,
-        updatedAt: dependencies.now(),
-      });
-      return {
-        vcs: {
-          epoch: input.expectedEpoch + 1,
+        const changesBackend =
+          project.vcs.binding !== null &&
+          project.vcs.binding.backend !== input.backend;
+        const initializesJj =
+          project.vcs.binding === null && input.backend === "jj";
+        const assertNoWorktreeThreads = Effect.gen(function* () {
+          const snapshot = yield* dependencies.projection.getShellSnapshot();
+          const blockingThreadIds = snapshot.threads
+            .filter(
+              (thread) =>
+                thread.projectId === input.projectId &&
+                thread.worktreePath !== null,
+            )
+            .map((thread) => thread.id);
+          if (blockingThreadIds.length > 0) {
+            return yield* projectError(
+              operation,
+              "backend-switch-blocked",
+              `Move or remove ${blockingThreadIds.length} existing worktree thread(s) before changing this project's VCS binding.`,
+            );
+          }
+        });
+        if (changesBackend || initializesJj) {
+          yield* assertNoWorktreeThreads;
+        }
+
+        const binding = yield* detectBinding(
+          operation,
+          input.backend,
+          project.workspaceRoot,
+        ).pipe(
+          Effect.catchTag("ProjectVcsError", (error) => {
+            if (
+              error.reason !== "repository-not-found" ||
+              project.vcs.binding !== null
+            ) {
+              return Effect.fail(error);
+            }
+            const initialize =
+              input.backend === "jj"
+                ? Effect.gen(function* () {
+                    const existingGit = yield* dependencies.git.execute({
+                      operation: "ProjectVcs.findGitRepositoryForJjInit",
+                      cwd: project.workspaceRoot,
+                      args: ["rev-parse", "--show-toplevel"],
+                      allowNonZeroExit: true,
+                    });
+                    const initRoot =
+                      existingGit.code === 0 &&
+                      existingGit.stdout.trim().length > 0
+                        ? yield* canonicalize(
+                            operation,
+                            existingGit.stdout.trim(),
+                          )
+                        : project.workspaceRoot;
+                    yield* dependencies.jj.initRepository(initRoot);
+                  })
+                : Effect.gen(function* () {
+                    const canonicalProjectRoot = yield* canonicalize(
+                      operation,
+                      project.workspaceRoot,
+                    );
+                    if (
+                      yield* hasAncestorEntry(canonicalProjectRoot, ".jj")
+                    ) {
+                      return yield* projectError(
+                        operation,
+                        "operation-unsupported",
+                        "This project is already inside a JJ workspace without a Git working tree. Choose JJ instead of initializing a second repository.",
+                      );
+                    }
+                    yield* dependencies.git.withMutation(
+                      project.workspaceRoot,
+                      dependencies.git.initRepo({
+                        cwd: project.workspaceRoot,
+                      }),
+                    );
+                  });
+            return initialize.pipe(
+              Effect.flatMap(() =>
+                detectBinding(
+                  operation,
+                  input.backend,
+                  project.workspaceRoot,
+                ),
+              ),
+            );
+          }),
+        );
+        if (
+          project.vcs.binding &&
+          bindingEquals(project.vcs.binding, binding)
+        ) {
+          return { vcs: project.vcs };
+        }
+        if (
+          project.vcs.binding !== null &&
+          !changesBackend &&
+          !bindingEquals(project.vcs.binding, binding)
+        ) {
+          yield* assertNoWorktreeThreads;
+        }
+
+        yield* dependencies.orchestrationEngine.dispatch({
+          type: "project.vcs-binding.set",
+          commandId: dependencies.makeCommandId(),
+          projectId: input.projectId,
+          expectedEpoch: input.expectedEpoch,
           binding,
-        },
-      };
+          updatedAt: dependencies.now(),
+        });
+        return {
+          vcs: {
+            epoch: input.expectedEpoch + 1,
+            binding,
+          },
+        };
+      });
+
+      return yield* (
+        project.vcs.binding?.backend === "git"
+          ? dependencies.git.withMutation(project.workspaceRoot, update)
+          : project.vcs.binding?.backend === "jj"
+            ? dependencies.jj.withMutation(project.workspaceRoot, update)
+            : update
+      );
     });
 
   const validateBindingRoot = (
@@ -323,6 +543,7 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
           backend: binding.backend,
           epoch: project.vcs.epoch,
           binding,
+          preferredReference: null,
           cwd: projectCwd,
         } satisfies ResolvedProjectVcsTarget;
       }
@@ -362,10 +583,11 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
         backend: binding.backend,
         epoch: project.vcs.epoch,
         binding,
+        preferredReference: thread.branch,
         cwd:
           thread.envMode === "worktree" && thread.worktreePath
             ? thread.worktreePath
-            : projectCwd,
+            : (thread.workingDirectory ?? projectCwd),
       } satisfies ResolvedProjectVcsTarget;
     });
 
@@ -409,41 +631,79 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
             )
           : Effect.gen(function* () {
               const result = yield* dependencies.jj.status(target.cwd);
-              const pullRequest =
-                result.currentBookmark && result.repository.gitStorePath
-                  ? yield* dependencies.gitHubCli
-                      .listOpenPullRequests({
-                        cwd: result.repository.gitStorePath,
-                        headSelector: result.currentBookmark,
-                        limit: 10,
-                      })
-                      .pipe(
-                        Effect.map((matches) => {
-                          const match = matches[0];
-                          return match
-                            ? {
-                                number: match.number,
-                                title: match.title,
-                                url: match.url,
-                                baseBranch: match.baseRefName,
-                                headBranch: match.headRefName,
-                                state: match.state ?? ("open" as const),
-                                isDraft: match.isDraft ?? false,
-                                mergeability:
-                                  match.mergeability ?? ("unknown" as const),
-                                additions: match.additions ?? null,
-                                deletions: match.deletions ?? null,
-                                changedFiles: match.changedFiles ?? null,
-                              }
-                            : null;
-                        }),
-                        Effect.catch(() => Effect.succeed(null)),
-                      )
+              const currentBookmark = selectedJjBookmark(target, result);
+              const bookmarkRemote = currentBookmark
+                ? yield* resolveJjBookmarkRemote({
+                    git: dependencies.git,
+                    status: result,
+                    bookmark: currentBookmark,
+                  })
+                : null;
+              const remoteComparison = bookmarkRemote
+                ? currentBookmark === result.currentBookmark &&
+                  bookmarkRemote.remoteRevision === result.upstreamBookmark
+                  ? {
+                      aheadCount: result.aheadCount,
+                      behindCount: result.behindCount,
+                    }
+                  : yield* dependencies.jj.compareBookmarkToRemote(
+                      target.cwd,
+                      bookmarkRemote.localBookmark,
+                      bookmarkRemote.remoteName,
+                      bookmarkRemote.remoteBookmark,
+                    )
+                : null;
+              const bookmarkPullRequest =
+                currentBookmark && result.repository.gitStorePath
+                  ? yield* Effect.gen(function* () {
+                      const head = yield* resolveJjGitHubHeadContext({
+                        git: dependencies.git,
+                        gitCwd: result.repository.gitStorePath!,
+                        bookmark: currentBookmark!,
+                        remote: bookmarkRemote,
+                      });
+                      for (const headSelector of head.selectors) {
+                        const matches =
+                          yield* dependencies.gitHubCli.listOpenPullRequests({
+                            cwd: result.repository.gitStorePath!,
+                            headSelector,
+                            limit: 10,
+                          });
+                        const match = matches[0];
+                        if (match) {
+                          return {
+                            number: match.number,
+                            title: match.title,
+                            url: match.url,
+                            baseBranch: match.baseRefName,
+                            headBranch: match.headRefName,
+                            state: match.state ?? ("open" as const),
+                            isDraft: match.isDraft ?? false,
+                            mergeability:
+                              match.mergeability ?? ("unknown" as const),
+                            additions: match.additions ?? null,
+                            deletions: match.deletions ?? null,
+                            changedFiles: match.changedFiles ?? null,
+                          };
+                        }
+                      }
+                      return null;
+                    }).pipe(Effect.catch(() => Effect.succeed(null)))
                   : null;
+              const pullRequest =
+                bookmarkPullRequest ??
+                (result.repository.gitStorePath
+                  ? yield* readKnownThreadPullRequest(
+                      target,
+                      result.repository.gitStorePath,
+                      currentBookmark,
+                      bookmarkRemote?.remoteBookmark ?? null,
+                    )
+                  : null);
               return {
                   backend: "jj",
                   epoch: target.epoch,
-                  ref: result.currentBookmark,
+                  ref: currentBookmark,
                   revision: result.revision,
                   hasChanges: result.hasChanges,
                   hasConflicts: result.hasConflicts,
@@ -459,11 +719,11 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                   ),
                   insertions: 0,
                   deletions: 0,
-                  remote: result.upstreamBookmark
+                  remote: bookmarkRemote && remoteComparison
                     ? {
-                        ref: result.upstreamBookmark,
-                        aheadCount: result.aheadCount,
-                        behindCount: result.behindCount,
+                        ref: bookmarkRemote.remoteRevision,
+                        aheadCount: remoteComparison.aheadCount,
+                        behindCount: remoteComparison.behindCount,
                       }
                     : null,
                   pullRequest,
@@ -497,14 +757,41 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
           );
         }
         if (input.scope === "branch") {
-          return dependencies.jj.status(target.cwd).pipe(
-            Effect.flatMap((jjStatus) =>
-              dependencies.jj.readRangeDiff(
-                target.cwd,
-                jjStatus.upstreamBookmark ?? jjStatus.currentBookmark ?? "@-",
-                "@",
-              ),
-            ),
+          return Effect.gen(function* () {
+            const jjStatus = yield* dependencies.jj.status(target.cwd);
+            const currentBookmark = selectedJjBookmark(target, jjStatus);
+            const upstream = currentBookmark
+              ? yield* resolveJjBookmarkRemote({
+                  git: dependencies.git,
+                  status: jjStatus,
+                  bookmark: currentBookmark,
+                })
+              : null;
+            const defaultBase = DEFAULT_REFERENCE_NAMES.flatMap((name) => {
+              const bookmark = jjStatus.bookmarks.find(
+                (candidate) => candidate.name === name,
+              );
+              if (!bookmark) return [];
+              const remote = bookmark.remotes
+                .filter((candidate) => candidate.targetChangeId !== null)
+                .toSorted(
+                  (left, right) =>
+                    Number(right.name === "origin") -
+                      Number(left.name === "origin") ||
+                    Number(right.tracked) - Number(left.tracked) ||
+                    left.name.localeCompare(right.name),
+                )[0];
+              if (remote) return [`${name}@${remote.name}`];
+              return bookmark.isLocal && name !== currentBookmark
+                ? [name]
+                : [];
+            })[0];
+            return yield* dependencies.jj.readRangeDiff(
+              target.cwd,
+              upstream?.remoteRevision ?? defaultBase ?? "@-",
+              "@",
+            );
+          }).pipe(
             Effect.map((result) => ({
               backend: "jj" as const,
               epoch: target.epoch,
@@ -522,26 +809,139 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
       }),
     );
 
-  const listJjWorkspacePaths = (
+  type JjWorkspaceProjection = {
+    readonly name: string;
+    readonly path: string | null;
+    readonly stale: boolean;
+    readonly current: boolean;
+    readonly ref: string | null;
+  };
+
+  const threadWorkspaceMappings = (
+    workspaces: ReadonlyArray<JjWorkspaceProjection>,
+    target: ResolvedProjectVcsTarget,
+    threads: ReadonlyArray<OrchestrationThreadShell>,
+  ) => {
+    const registeredPaths = new Set(
+      workspaces.flatMap((workspace) =>
+        workspace.path ? [nodePath.resolve(workspace.path)] : [],
+      ),
+    );
+    const mappingsByPath = new Map<
+      string,
+      { readonly ref: string; readonly path: string; readonly priority: number }
+    >();
+    const mappings = threads
+      .flatMap((thread) => {
+        if (
+          thread.projectId !== target.projectId ||
+          !thread.branch ||
+          !thread.worktreePath
+        ) {
+          return [];
+        }
+        const resolvedPath = nodePath.resolve(thread.worktreePath);
+        if (!registeredPaths.has(resolvedPath)) return [];
+        return [
+          {
+            ref: thread.branch,
+            path: thread.worktreePath,
+            resolvedPath,
+            priority:
+              thread.id === target.threadId
+                ? 2
+                : resolvedPath === nodePath.resolve(target.cwd)
+                  ? 1
+                  : 0,
+          },
+        ];
+      })
+      .toSorted((left, right) => left.priority - right.priority);
+    for (const mapping of mappings) {
+      mappingsByPath.set(mapping.resolvedPath, mapping);
+    }
+    return mappingsByPath;
+  };
+
+  const listJjWorkspaceProjections = (
     target: ResolvedProjectVcsTarget,
   ): Effect.Effect<
-    Map<string, string>,
+    ReadonlyArray<JjWorkspaceProjection>,
     import("../Errors.ts").JjCommandError
   > =>
     dependencies.jj.listWorkspaces(target.binding.repoRoot).pipe(
-      Effect.map((workspaces) => {
-        const paths = new Map<string, string>();
-        for (const workspace of workspaces) {
-          if (workspace.registration.kind === "present") {
-            paths.set(
-              workspace.name,
-              workspaceProjectPath(workspace.registration.root, target.binding),
+      Effect.flatMap((workspaces) =>
+        Effect.forEach(
+          workspaces,
+          (workspace) => {
+            if (workspace.registration.kind === "stale") {
+              return Effect.succeed({
+                name: workspace.name,
+                path: null,
+                stale: true,
+                current: false,
+                ref: null,
+              });
+            }
+            const path = workspaceProjectPath(
+              workspace.registration.root,
+              target.binding,
             );
-          }
-        }
-        return paths;
-      }),
+            return dependencies.jj.resolveNearestBookmark(path).pipe(
+              Effect.map((ref) => ({
+                name: workspace.name,
+                path,
+                stale: false,
+                current:
+                  nodePath.resolve(path) === nodePath.resolve(target.cwd),
+                ref,
+              })),
+              Effect.catch(() =>
+                Effect.succeed({
+                  name: workspace.name,
+                  path,
+                  stale: false,
+                  current:
+                    nodePath.resolve(path) === nodePath.resolve(target.cwd),
+                  ref: null,
+                }),
+              ),
+            );
+          },
+          { concurrency: 4 },
+        ),
+      ),
     );
+
+  const workspacePathByReference = (
+    workspaces: ReadonlyArray<JjWorkspaceProjection>,
+    target: ResolvedProjectVcsTarget,
+    threads: ReadonlyArray<OrchestrationThreadShell>,
+  ) => {
+    const paths = new Map<string, string>();
+    for (const workspace of workspaces) {
+      if (!workspace.ref || !workspace.path) continue;
+      if (!paths.has(workspace.ref) || workspace.current) {
+        paths.set(workspace.ref, workspace.path);
+      }
+    }
+    for (const [resolvedPath, mapping] of threadWorkspaceMappings(
+      workspaces,
+      target,
+      threads,
+    )) {
+      for (const [ref, path] of paths) {
+        if (
+          ref !== mapping.ref &&
+          nodePath.resolve(path) === resolvedPath
+        ) {
+          paths.delete(ref);
+        }
+      }
+      paths.set(mapping.ref, mapping.path);
+    }
+    return paths;
+  };
 
   const listReferences: ProjectVcsShape["listReferences"] = (input) =>
     resolveTarget(input).pipe(
@@ -571,16 +971,30 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
         }
 
         return Effect.all(
-          [dependencies.jj.status(target.cwd), listJjWorkspacePaths(target)],
+          [
+            dependencies.jj.status(target.cwd),
+            listJjWorkspaceProjections(target),
+            dependencies.jj.listGitRemotes(target.cwd),
+            dependencies.projection.getShellSnapshot(),
+          ],
           { concurrency: 2 },
         ).pipe(
-          Effect.map(([jjStatus, workspacePaths]): VcsListReferencesResult => {
+          Effect.map(([jjStatus, workspaces, remotes, snapshot]): VcsListReferencesResult => {
+            const workspacePaths = workspacePathByReference(
+              workspaces,
+              target,
+              snapshot.threads,
+            );
+            const currentBookmark = selectedJjBookmark(target, jjStatus);
             const localNames = jjStatus.bookmarks
               .filter((bookmark) => bookmark.isLocal)
               .map((bookmark) => bookmark.name)
               .toSorted((left, right) => left.localeCompare(right));
             const defaultName = chooseDefaultReference(localNames);
             const references = jjStatus.bookmarks.flatMap((bookmark) => {
+              const trackedRemotes = bookmark.remotes.filter(
+                (remote) => remote.tracked,
+              );
               const localReference = bookmark.isLocal
                 ? [
                     {
@@ -588,38 +1002,38 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                       kind: "bookmark" as const,
                       isRemote: false,
                       remoteName: null,
-                      current: bookmark.name === jjStatus.currentBookmark,
+                      current: bookmark.name === currentBookmark,
                       isDefault: bookmark.name === defaultName,
                       workspacePath: workspacePaths.get(bookmark.name) ?? null,
                       conflicted: bookmark.conflicted,
-                      tracked: bookmark.remotes.some((remote) => remote.tracked),
+                      tracked: trackedRemotes.length > 0,
                       synced:
-                        bookmark.remotes.length > 0 &&
-                        bookmark.remotes.every((remote) => remote.synced),
+                        trackedRemotes.length > 0 &&
+                        trackedRemotes.every((remote) => remote.synced),
                     },
                   ]
                 : [];
-              const remoteReferences = bookmark.remotes.map((remote) => ({
-                name: `${bookmark.name}@${remote.name}`,
-                kind: "bookmark" as const,
-                isRemote: true,
-                remoteName: remote.name,
-                current: false,
-                isDefault: false,
-                workspacePath: null,
-                conflicted: bookmark.conflicted,
-                tracked: remote.tracked,
-                synced: remote.synced,
-              }));
+              const remoteReferences = bookmark.remotes
+                .filter((remote) => remote.targetChangeId !== null)
+                .map((remote) => ({
+                  name: `${bookmark.name}@${remote.name}`,
+                  kind: "bookmark" as const,
+                  isRemote: true,
+                  remoteName: remote.name,
+                  current: false,
+                  isDefault: false,
+                  workspacePath: null,
+                  conflicted: bookmark.conflicted,
+                  tracked: remote.tracked,
+                  synced: remote.synced,
+                }));
               return [...localReference, ...remoteReferences];
             });
             return {
               backend: "jj",
               epoch: target.epoch,
               references,
-              hasOriginRemote: jjStatus.bookmarks.some((bookmark) =>
-                bookmark.remotes.some((remote) => remote.name === "origin"),
-              ),
+              hasOriginRemote: remotes.some((remote) => remote.name === "origin"),
             };
           }),
         );
@@ -656,25 +1070,12 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
             }),
           );
         }
-        return dependencies.jj.listWorkspaces(target.binding.repoRoot).pipe(
+        return listJjWorkspaceProjections(target).pipe(
           Effect.map(
             (workspaces): VcsListWorkspacesResult => ({
               backend: "jj",
               epoch: target.epoch,
-              workspaces: workspaces.map((workspace) => {
-                const path =
-                  workspace.registration.kind === "present"
-                    ? workspaceProjectPath(workspace.registration.root, target.binding)
-                    : null;
-                return {
-                  name: workspace.name,
-                  path,
-                  stale: workspace.registration.kind === "stale",
-                  current:
-                    path !== null && nodePath.resolve(path) === nodePath.resolve(target.cwd),
-                  ref: null,
-                };
-              }),
+              workspaces,
             }),
           ),
         );
@@ -699,22 +1100,40 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
               }),
             );
         }
-        if (input.publish === true) {
-          return Effect.fail(
-            projectError(
-              "ProjectVcs.createReference",
-              "operation-unsupported",
-              "Publishing a JJ bookmark is a remote operation and is not enabled yet.",
-            ),
+        return Effect.gen(function* () {
+          const status = yield* dependencies.jj.status(target.cwd);
+          const hasWorkingCopyState =
+            status.hasChanges || status.hasConflicts;
+          // A Git branch starts at HEAD, not at uncommitted working-tree
+          // contents. Anchor a published JJ bookmark at @- first, then move
+          // only the local bookmark to the mutable working-copy change.
+          const initialRevision =
+            input.publish === true || !hasWorkingCopyState ? "@-" : "@";
+          yield* dependencies.jj.createBookmark(
+            target.cwd,
+            input.name,
+            initialRevision,
           );
-        }
-        return dependencies.jj.createBookmark(target.cwd, input.name, "@").pipe(
-          Effect.as({
+          if (input.publish === true) {
+            yield* dependencies.jj.pushBookmark(
+              target.cwd,
+              input.name,
+              "origin",
+            );
+            if (hasWorkingCopyState) {
+              yield* dependencies.jj.setBookmark(
+                target.cwd,
+                input.name,
+                "@",
+              );
+            }
+          }
+          return {
             backend: "jj" as const,
             epoch: target.epoch,
             ref: input.name,
-          }),
-        );
+          };
+        });
       }),
     );
 
@@ -738,20 +1157,68 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
             })),
           );
         }
-        return dependencies.jj
-          .startNewChange(target.cwd, input.ref, `wip: Synara on ${input.ref}`)
-          .pipe(
-            Effect.flatMap((revision) =>
-              dependencies.jj.resolveNearestBookmark(target.cwd).pipe(
-                Effect.map((ref) => ({
-                  backend: "jj" as const,
-                  epoch: target.epoch,
-                  ref,
-                  revision,
-                })),
-              ),
-            ),
+        return Effect.gen(function* () {
+          const status = yield* dependencies.jj.status(target.cwd);
+          const remote = status.bookmarks
+            .flatMap((bookmark) =>
+              bookmark.remotes.map((candidate) => ({
+                bookmark,
+                remote: candidate,
+                reference: `${bookmark.name}@${candidate.name}`,
+              })),
+            )
+            .find(
+              (candidate) =>
+                candidate.reference === input.ref &&
+                candidate.remote.targetChangeId !== null,
+            );
+          let revisionRef = input.ref;
+          let selectedRef = input.ref;
+          let selectedTargetChangeId = status.bookmarks.find(
+            (bookmark) => bookmark.name === input.ref,
+          )?.targetChangeId ?? null;
+          if (remote && !remote.bookmark.isLocal) {
+            yield* dependencies.jj.trackBookmark(target.cwd, input.ref);
+            revisionRef = remote.bookmark.name;
+            selectedRef = remote.bookmark.name;
+            selectedTargetChangeId = remote.remote.targetChangeId;
+          }
+          const currentTargetChangeId = status.currentBookmark
+            ? status.bookmarks.find(
+                (bookmark) => bookmark.name === status.currentBookmark,
+              )?.targetChangeId ?? null
+            : null;
+          if (
+            selectedTargetChangeId !== null &&
+            (selectedTargetChangeId === status.revision.changeId ||
+              selectedTargetChangeId === currentTargetChangeId)
+          ) {
+            return {
+              backend: "jj" as const,
+              epoch: target.epoch,
+              ref: selectedRef,
+              revision: status.revision,
+            };
+          }
+          if (status.hasChanges || status.hasConflicts) {
+            return yield* projectError(
+              "ProjectVcs.switchReference",
+              "operation-unsupported",
+              "Commit or resolve the current JJ working-copy changes before switching bookmarks.",
+            );
+          }
+          const revision = yield* dependencies.jj.startNewChange(
+            target.cwd,
+            revisionRef,
+            `wip: Synara on ${selectedRef}`,
           );
+          return {
+            backend: "jj" as const,
+            epoch: target.epoch,
+            ref: selectedRef,
+            revision,
+          };
+        });
       }),
     );
 
@@ -810,6 +1277,13 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
               "The requested workspace path already exists.",
             );
           }
+          const cleanupWorkspacePath =
+            generated === null
+              ? requestedWorkspaceRoot
+              : nodePath.dirname(requestedWorkspaceRoot);
+          const cleanupPreparedWorkspace = Effect.promise(() =>
+            dependencies.removeDirectory(cleanupWorkspacePath),
+          ).pipe(Effect.ignore);
 
           if (target.backend === "git") {
             const created = yield* dependencies.git.withMutation(
@@ -834,13 +1308,39 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
             };
           }
 
+          // `@` and relative revsets are workspace-local. Resolve them from
+          // the caller's actual workspace after one filesystem snapshot, then
+          // pass an immutable commit id to `jj workspace add` at the repo root.
+          const sourceStatus = yield* dependencies.jj
+            .status(target.cwd)
+            .pipe(Effect.onError(() => cleanupPreparedWorkspace));
+          const sourceRevision =
+            input.sourceRef === "@" ||
+            input.sourceRef === sourceStatus.revision.commitId
+              ? sourceStatus.revision
+              : yield* dependencies.jj.readRevisionIdentity(
+                  target.cwd,
+                  input.sourceRef,
+                ).pipe(Effect.onError(() => cleanupPreparedWorkspace));
+          if (
+            input.copyChangesFromCurrent &&
+            sourceRevision.commitId !== sourceStatus.revision.commitId
+          ) {
+            yield* cleanupPreparedWorkspace;
+            return yield* projectError(
+              operation,
+              "operation-unsupported",
+              "JJ can copy current workspace changes only when the source revision resolves to the current change.",
+            );
+          }
+
           const workspaceName = generated?.name ?? `synara-${dependencies.randomToken()}`;
           const create = dependencies.jj
             .createWorkspace({
               repositoryPath: target.binding.repoRoot,
               workspacePath: requestedWorkspaceRoot,
               workspaceName,
-              revision: input.copyChangesFromCurrent ? "@" : input.sourceRef,
+              revision: sourceRevision.commitId,
               message: `wip: Synara workspace ${workspaceName}`,
             })
             .pipe(
@@ -858,7 +1358,7 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                     ),
                     Effect.andThen(
                       Effect.promise(() =>
-                        dependencies.removeDirectory(requestedWorkspaceRoot),
+                        dependencies.removeDirectory(cleanupWorkspacePath),
                       ),
                     ),
                     Effect.ignore,
@@ -936,15 +1436,19 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
               "The requested path is not a removable JJ workspace for this project.",
             );
           }
-          if (input.force !== true) {
-            const workspaceStatus = yield* dependencies.jj.status(requestedProjectPath);
-            if (workspaceStatus.hasChanges || workspaceStatus.hasConflicts) {
-              return yield* projectError(
-                operation,
-                "workspace-dirty",
-                "The JJ workspace has changes or conflicts; resolve them or request a forced removal.",
-              );
-            }
+          // Always snapshot the JJ working copy before forgetting it. Forced
+          // retention cleanup may remove a dirty workspace, but its revision
+          // must remain recoverable from the shared JJ repository.
+          const workspaceStatus = yield* dependencies.jj.status(requestedProjectPath);
+          if (
+            input.force !== true &&
+            (workspaceStatus.hasChanges || workspaceStatus.hasConflicts)
+          ) {
+            return yield* projectError(
+              operation,
+              "workspace-dirty",
+              "The JJ workspace has changes or conflicts; resolve them or request a forced removal.",
+            );
           }
           yield* dependencies.jj.forgetWorkspace(
             target.binding.repoRoot,
@@ -1045,6 +1549,27 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
 
                 const sourceStatus = yield* dependencies.jj.status(primaryProjectCwd);
                 const sourceRevision = sourceStatus.revision;
+                const sourceBookmark = selectedJjBookmark(target, sourceStatus);
+                const requestedBookmark =
+                  input.preferredNewWorkspaceName?.trim() || null;
+                const createdBookmark =
+                  requestedBookmark && requestedBookmark !== sourceBookmark
+                    ? yield* dependencies.jj
+                        .createBookmark(
+                          primaryProjectCwd,
+                          requestedBookmark,
+                          sourceRevision.commitId,
+                        )
+                        .pipe(Effect.as(requestedBookmark))
+                    : null;
+                const workspaceBookmark =
+                  createdBookmark ?? requestedBookmark ?? sourceBookmark;
+                const cleanupCreatedBookmark =
+                  createdBookmark === null
+                    ? Effect.void
+                    : dependencies.jj
+                        .deleteBookmark(primaryProjectCwd, createdBookmark)
+                        .pipe(Effect.ignore);
                 const associatedPath = thread.associatedWorktreePath ?? null;
                 const reusableAssociatedPath =
                   associatedPath !== null &&
@@ -1057,7 +1582,9 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                   sourceRef: sourceRevision.commitId,
                   path: reusableAssociatedPath,
                   copyChangesFromCurrent: true,
-                });
+                }).pipe(
+                  Effect.onError(() => cleanupCreatedBookmark),
+                );
                 const continueLocal = dependencies.jj.startNewChange(
                   primaryProjectCwd,
                   sourceRevision.commitId,
@@ -1065,21 +1592,28 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                 );
                 yield* continueLocal.pipe(
                   Effect.onError(() =>
-                    removeWorkspace({
-                      projectId: input.projectId,
-                      expectedEpoch: input.expectedEpoch,
-                      path: created.workspace.path,
-                      force: true,
-                    }).pipe(Effect.ignore),
+                    Effect.all(
+                      [
+                        removeWorkspace({
+                          projectId: input.projectId,
+                          expectedEpoch: input.expectedEpoch,
+                          path: created.workspace.path,
+                          force: true,
+                        }).pipe(Effect.ignore),
+                        cleanupCreatedBookmark,
+                      ],
+                      { discard: true },
+                    ),
                   ),
                 );
-                const [workspaceStatus, workspaceRef] = yield* Effect.all(
-                  [
-                    dependencies.jj.status(created.workspace.path),
-                    dependencies.jj.resolveNearestBookmark(created.workspace.path),
-                  ],
-                  { concurrency: 2 },
+                const workspaceStatus = yield* dependencies.jj.status(
+                  created.workspace.path,
                 );
+                const workspaceRef =
+                  workspaceBookmark ??
+                  (yield* dependencies.jj.resolveNearestBookmark(
+                    created.workspace.path,
+                  ));
                 return {
                   backend: "jj",
                   epoch: target.epoch,
@@ -1188,8 +1722,320 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                   upstreamRef: result.upstreamBranch,
                 })),
               )
-          : jjActions.pull({ cwd: target.cwd, epoch: target.epoch }),
+          : jjActions.pull({
+              cwd: target.cwd,
+              epoch: target.epoch,
+              preferredBookmark: target.preferredReference,
+            }),
       ),
+    );
+
+  const remoteGitCwdFor = (
+    operation: string,
+    target: ResolvedProjectVcsTarget,
+  ) =>
+    target.backend === "git"
+      ? Effect.succeed(target.cwd)
+      : dependencies.jj.detectRepository(target.cwd).pipe(
+          Effect.flatMap((repository) =>
+            repository?.gitStorePath
+              ? Effect.succeed(repository.gitStorePath)
+              : Effect.fail(
+                  projectError(
+                    operation,
+                    "operation-unsupported",
+                    "This JJ repository has no Git backing store for GitHub operations.",
+                  ),
+                ),
+          ),
+        );
+
+  const remoteGitCwd: ProjectVcsShape["remoteGitCwd"] = (input) =>
+    resolveTarget(input).pipe(
+      Effect.flatMap((target) =>
+        remoteGitCwdFor("ProjectVcs.remoteGitCwd", target),
+      ),
+    );
+
+  const materializePullRequestHeadForTarget = (
+    operation: string,
+    target: ResolvedProjectVcsTarget,
+    reference: string,
+  ) =>
+    Effect.gen(function* () {
+      const gitCwd = yield* remoteGitCwdFor(operation, target);
+      const materialized =
+        yield* dependencies.gitManager.materializePullRequestHead({
+          cwd: gitCwd,
+          reference,
+        });
+      if (target.backend === "git") {
+        const revision = yield* dependencies.git.execute({
+          operation,
+          cwd: target.cwd,
+          args: [
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            `${materialized.branch}^{commit}`,
+          ],
+        });
+        return {
+          ...materialized,
+          revision: revision.stdout.trim(),
+        };
+      }
+
+      yield* dependencies.jj.importGit(target.cwd);
+      const importedBookmarks = yield* dependencies.jj.listBookmarks(target.cwd);
+      const importedBookmark = importedBookmarks.find(
+        (bookmark) =>
+          bookmark.isLocal && bookmark.name === materialized.branch,
+      );
+      if (!importedBookmark) {
+        return yield* projectError(
+          operation,
+          "operation-unsupported",
+          `JJ did not import the pull request head bookmark '${materialized.branch}'.`,
+        );
+      }
+      const revision = yield* dependencies.jj.readRevisionIdentity(
+        target.cwd,
+        materialized.branch,
+      );
+      let branch = materialized.branch;
+      if (materialized.branch !== materialized.pullRequest.headBranch) {
+        const configuredRemoteName =
+          yield* dependencies.git
+            .readConfigValue(
+              gitCwd,
+              `branch.${materialized.branch}.remote`,
+            )
+            .pipe(Effect.catch(() => Effect.succeed(null)));
+        const headBookmark = importedBookmarks.find(
+          (bookmark) =>
+            bookmark.name === materialized.pullRequest.headBranch,
+        );
+        const matchingRemote =
+          headBookmark?.remotes.find(
+            (remote) =>
+              remote.name === configuredRemoteName &&
+              remote.targetChangeId === revision.changeId,
+          ) ??
+          headBookmark?.remotes.find(
+            (remote) =>
+              remote.targetChangeId === revision.changeId,
+          );
+        const localHeadIsAvailable =
+          !headBookmark?.isLocal ||
+          headBookmark.targetChangeId === revision.changeId;
+        if (matchingRemote && localHeadIsAvailable) {
+          if (!headBookmark?.isLocal) {
+            yield* dependencies.jj.createBookmark(
+              target.cwd,
+              materialized.pullRequest.headBranch,
+              materialized.branch,
+            );
+          }
+          if (!matchingRemote.tracked) {
+            yield* dependencies.jj.trackBookmark(
+              target.cwd,
+              `${materialized.pullRequest.headBranch}@${matchingRemote.name}`,
+            );
+          }
+          yield* dependencies.jj.deleteBookmark(
+            target.cwd,
+            materialized.branch,
+          );
+          branch = materialized.pullRequest.headBranch;
+        }
+      }
+      return {
+        ...materialized,
+        branch,
+        revision: revision.commitId,
+      };
+    });
+
+  const materializePullRequestHead: ProjectVcsShape["materializePullRequestHead"] = (
+    input,
+  ) =>
+    resolveTarget(input).pipe(
+      Effect.flatMap((target) =>
+        materializePullRequestHeadForTarget(
+          "ProjectVcs.materializePullRequestHead",
+          target,
+          input.reference,
+        ),
+      ),
+    );
+
+  const resolvePullRequest: ProjectVcsShape["resolvePullRequest"] = (input) =>
+    resolveTarget(input).pipe(
+      Effect.flatMap((target) =>
+        remoteGitCwdFor("ProjectVcs.resolvePullRequest", target).pipe(
+          Effect.flatMap((cwd) =>
+            dependencies.gitManager.resolvePullRequest({
+              cwd,
+              reference: input.reference,
+            }),
+          ),
+          Effect.map((result) => ({
+            backend: target.backend,
+            epoch: target.epoch,
+            pullRequest: result.pullRequest,
+          })),
+        ),
+      ),
+    );
+
+  const githubRepository: ProjectVcsShape["githubRepository"] = (input) =>
+    resolveTarget(input).pipe(
+      Effect.flatMap((target) =>
+        remoteGitCwdFor("ProjectVcs.githubRepository", target).pipe(
+          Effect.flatMap((cwd) => resolveGitHubRepository(dependencies.git, cwd)),
+          Effect.map((result) => ({
+            backend: target.backend,
+            epoch: target.epoch,
+            ...result,
+          })),
+        ),
+      ),
+    );
+
+  const pullRequestSnapshot: ProjectVcsShape["pullRequestSnapshot"] = (input) =>
+    resolveTarget(input).pipe(
+      Effect.flatMap((target) =>
+        remoteGitCwdFor("ProjectVcs.pullRequestSnapshot", target).pipe(
+          Effect.flatMap((cwd) =>
+            dependencies.gitManager.pullRequestSnapshot({
+              cwd,
+              reference: input.reference,
+            }),
+          ),
+          Effect.map((result) => ({
+            backend: target.backend,
+            epoch: target.epoch,
+            ...result,
+          })),
+        ),
+      ),
+    );
+
+  const findReusableJjPullRequestWorkspace = (
+    target: ResolvedProjectVcsTarget,
+    bookmark: string,
+  ) =>
+    Effect.all(
+      [
+        listJjWorkspaceProjections(target),
+        dependencies.projection.getShellSnapshot(),
+      ],
+      { concurrency: 2 },
+    ).pipe(
+      Effect.flatMap(([workspaces, snapshot]) => {
+        const threadMappings = threadWorkspaceMappings(
+          workspaces,
+          target,
+          snapshot.threads,
+        );
+        return Effect.forEach(
+          workspaces,
+          (workspace) => {
+            if (!workspace.path || workspace.stale || workspace.current) {
+              return Effect.succeed(null);
+            }
+            const projected = threadMappings.get(
+              nodePath.resolve(workspace.path),
+            );
+            if ((projected?.ref ?? workspace.ref) !== bookmark) {
+              return Effect.succeed(null);
+            }
+            return Effect.promise(() =>
+              dependencies.pathExists(workspace.path!),
+            ).pipe(
+              Effect.map((exists) => (exists ? workspace.path : null)),
+            );
+          },
+          { concurrency: 4 },
+        );
+      }),
+      Effect.map((paths) => paths.find((path) => path !== null) ?? null),
+    );
+
+  const preparePullRequestThread: ProjectVcsShape["preparePullRequestThread"] = (
+    input,
+  ) =>
+    resolveTarget(input).pipe(
+      Effect.flatMap((target) => {
+        if (target.backend === "git") {
+          return dependencies.gitManager
+            .preparePullRequestThread({
+              cwd: target.cwd,
+              reference: input.reference,
+              mode: input.mode,
+            })
+            .pipe(
+              Effect.map((result) => ({
+                backend: "git" as const,
+                epoch: target.epoch,
+                ...result,
+              })),
+            );
+        }
+
+        return Effect.gen(function* () {
+          const materialized = yield* materializePullRequestHeadForTarget(
+            "ProjectVcs.preparePullRequestThread",
+            target,
+            input.reference,
+          );
+
+          if (input.mode === "local") {
+            yield* dependencies.jj.startNewChange(
+              target.cwd,
+              materialized.branch,
+              `wip: Synara pull request #${materialized.pullRequest.number}`,
+            );
+            return {
+              backend: "jj",
+              epoch: target.epoch,
+              pullRequest: materialized.pullRequest,
+              branch: materialized.branch,
+              worktreePath: null,
+            } as const;
+          }
+
+          const reusablePath = yield* findReusableJjPullRequestWorkspace(
+            target,
+            materialized.branch,
+          );
+          if (reusablePath) {
+            return {
+              backend: "jj",
+              epoch: target.epoch,
+              pullRequest: materialized.pullRequest,
+              branch: materialized.branch,
+              worktreePath: reusablePath,
+            } as const;
+          }
+
+          const created = yield* createWorkspace({
+            projectId: input.projectId,
+            expectedEpoch: input.expectedEpoch,
+            sourceRef: materialized.branch,
+            path: null,
+            copyChangesFromCurrent: false,
+          });
+          return {
+            backend: "jj",
+            epoch: target.epoch,
+            pullRequest: materialized.pullRequest,
+            branch: materialized.branch,
+            worktreePath: created.workspace.path,
+          } as const;
+        });
+      }),
     );
 
   const runStackedAction: ProjectVcsShape["runStackedAction"] = (input, options) =>
@@ -1197,7 +2043,11 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
       Effect.flatMap((target) => {
         if (target.backend === "jj") {
           return jjActions.runStackedAction(
-            { cwd: target.cwd, epoch: target.epoch },
+            {
+              cwd: target.cwd,
+              epoch: target.epoch,
+              preferredBookmark: target.preferredReference,
+            },
             input,
             options,
           );
@@ -1223,19 +2073,44 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
     );
 
   return {
-    setBackend,
+    setBackend: (input) =>
+      withProjectMutation(input.projectId, setBackend(input)),
     resolveTarget,
     status,
     readDiff,
     listReferences,
-    createReference,
-    switchReference,
+    createReference: (input) =>
+      withProjectMutation(input.projectId, createReference(input)),
+    switchReference: (input) =>
+      withProjectMutation(input.projectId, switchReference(input)),
     listWorkspaces,
-    createWorkspace,
-    removeWorkspace,
-    handoffThread,
-    pull,
-    runStackedAction,
+    createWorkspace: (input) =>
+      withProjectMutation(input.projectId, createWorkspace(input)),
+    removeWorkspace: (input) =>
+      withProjectMutation(input.projectId, removeWorkspace(input)),
+    handoffThread: (input) =>
+      withProjectMutation(input.projectId, handoffThread(input)),
+    pull: (input) =>
+      withProjectMutation(input.projectId, pull(input)),
+    githubRepository,
+    remoteGitCwd,
+    resolvePullRequest,
+    materializePullRequestHead: (input) =>
+      withProjectMutation(
+        input.projectId,
+        materializePullRequestHead(input),
+      ),
+    pullRequestSnapshot,
+    preparePullRequestThread: (input) =>
+      withProjectMutation(
+        input.projectId,
+        preparePullRequestThread(input),
+      ),
+    runStackedAction: (input, options) =>
+      withProjectMutation(
+        input.projectId,
+        runStackedAction(input, options),
+      ),
   };
 }
 

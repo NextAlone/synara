@@ -38,6 +38,7 @@ import { isElectron } from "~/env";
 import { basenameOfPath } from "~/file-icons";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
+import type { VcsQueryTarget } from "~/lib/vcsReactQuery";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 
@@ -85,6 +86,7 @@ export interface EnvironmentPanelProps {
    */
   variant: "docked" | "floating";
   gitCwd: string | null;
+  vcsTarget: VcsQueryTarget;
   openInTarget: string | null;
   githubRepository?: {
     readonly nameWithOwner: string;
@@ -208,6 +210,7 @@ export function EnvironmentPanel({
   open,
   variant,
   gitCwd,
+  vcsTarget,
   openInTarget,
   githubRepository = null,
   githubRepositories = [],
@@ -399,7 +402,7 @@ export function EnvironmentPanel({
 
       {settings.showEnvironmentPullRequest && showGitActions && onOpenGithubRepository ? (
         <EnvironmentPullRequestSection
-          gitCwd={gitCwd}
+          vcsTarget={vcsTarget}
           enabled={open}
           activeThreadId={activeThreadId}
           projectId={activeProjectId}

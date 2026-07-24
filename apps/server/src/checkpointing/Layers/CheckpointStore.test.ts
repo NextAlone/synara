@@ -12,6 +12,8 @@ import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
 import { GitCommandError } from "../../git/Errors.ts";
 import { CheckpointRef } from "@synara/contracts";
 import { JjCoreLive } from "../../vcs/Layers/JjCore.ts";
+import { JjCore, type JjCoreShape } from "../../vcs/Services/JjCore.ts";
+import { jjCheckpointBookmark } from "../../vcs/checkpointBookmarks.ts";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const started = Date.now();
@@ -280,5 +282,185 @@ describe("CheckpointStoreLive", () => {
     expect(result).toBe("GitCommandError");
     expect(commands.filter((command) => command.startsWith("apply "))).toHaveLength(2);
     expect(commands.at(-1)).toMatch(/^apply --whitespace=nowarn -- /);
+  });
+
+  it("captures a JJ checkpoint without advancing the working copy", async () => {
+    const checkpointRef = CheckpointRef.makeUnsafe(
+      "refs/synara-checkpoints/thread/jj-message",
+    );
+    const execute = vi.fn<JjCoreShape["execute"]>(() =>
+      Effect.succeed({ code: 0, stdout: "", stderr: "" }),
+    );
+    const readRevisionIdentity = vi.fn<JjCoreShape["readRevisionIdentity"]>(
+      (_cwd, revision) =>
+        Effect.succeed({
+          changeId: "checkpoint-change",
+          commitId: "checkpoint-commit",
+          description: revision ?? "",
+        }),
+    );
+    const jj = {
+      execute,
+      readRevisionIdentity,
+      withMutation: <A, E, R>(
+        _cwd: string,
+        effect: Effect.Effect<A, E, R>,
+      ) => effect,
+    } as unknown as JjCoreShape;
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(
+        Layer.succeed(GitCore, {
+          execute: () => Effect.die("unexpected Git call"),
+        } as unknown as GitCoreShape),
+      ),
+      Layer.provide(Layer.succeed(JjCore, jj)),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        yield* store.captureCheckpoint({
+          cwd: "/repo",
+          backend: "jj",
+          checkpointRef,
+        });
+      }),
+    );
+
+    const duplicate = execute.mock.calls
+      .map(([input]) => input)
+      .find((input) => input.operation === "CheckpointStore.captureCheckpoint.jjDuplicate");
+    expect(duplicate?.args[0]).toBe("--config");
+    expect(duplicate?.args[1]).toContain("templates.duplicate_description=");
+    expect(duplicate?.args.slice(2)).toEqual(["duplicate", "@"]);
+    expect(
+      execute.mock.calls.some(([input]) => input.args.includes("new")),
+    ).toBe(false);
+    expect(readRevisionIdentity).toHaveBeenCalledWith(
+      "/repo",
+      expect.stringContaining("description(substring:"),
+    );
+    expect(
+      execute.mock.calls
+        .map(([input]) => input)
+        .find((input) => input.operation === "CheckpointStore.captureCheckpoint.jjAnchor")
+        ?.args,
+    ).toEqual([
+      "bookmark",
+      "set",
+      "--allow-backwards",
+      "--revision",
+      "checkpoint-commit",
+      jjCheckpointBookmark(checkpointRef),
+    ]);
+  });
+
+  it("reverses a JJ checkpoint only when touched paths still match the turn end", async () => {
+    const fromRef = CheckpointRef.makeUnsafe(
+      "refs/synara-checkpoints/thread/jj-turn/start",
+    );
+    const toRef = CheckpointRef.makeUnsafe(
+      "refs/synara-checkpoints/thread/jj-turn/end",
+    );
+    const execute = vi.fn<JjCoreShape["execute"]>((input) => {
+      if (input.operation === "CheckpointStore.resolveJjCheckpointRevision") {
+        const bookmark = input.args.join(" ");
+        return Effect.succeed({
+          code: 0,
+          stdout: bookmark.includes(jjCheckpointBookmark(fromRef))
+            ? "from-commit\n"
+            : "to-commit\n",
+          stderr: "",
+        });
+      }
+      return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+    });
+    const readRangeDiff = vi.fn<JjCoreShape["readRangeDiff"]>(() =>
+      Effect.succeed({
+        patch: "",
+        files: [
+          {
+            status: "renamed",
+            path: "src/new.ts",
+            sourcePath: "src/old.ts",
+            targetPath: "src/new.ts",
+            conflicted: false,
+          },
+        ],
+      }),
+    );
+    const jj = {
+      execute,
+      readRangeDiff,
+      withMutation: <A, E, R>(
+        _cwd: string,
+        effect: Effect.Effect<A, E, R>,
+      ) => effect,
+    } as unknown as JjCoreShape;
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(
+        Layer.succeed(GitCore, {
+          execute: () => Effect.die("unexpected Git call"),
+        } as unknown as GitCoreShape),
+      ),
+      Layer.provide(Layer.succeed(JjCore, jj)),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        return yield* store.reverseCheckpointDiff({
+          cwd: "/repo",
+          backend: "jj",
+          fromCheckpointRef: fromRef,
+          toCheckpointRef: toRef,
+        });
+      }),
+    );
+
+    expect(result).toBe(true);
+    expect(readRangeDiff).toHaveBeenCalledWith(
+      "/repo",
+      "from-commit",
+      "to-commit",
+    );
+    expect(
+      execute.mock.calls
+        .map(([input]) => input)
+        .find(
+          (input) =>
+            input.operation === "CheckpointStore.reverseCheckpointDiff.jjVerifyCurrent",
+        )?.args,
+    ).toEqual([
+      "--ignore-working-copy",
+      "diff",
+      "--from",
+      "to-commit",
+      "--to",
+      "@",
+      "--summary",
+      "--",
+      "src/old.ts",
+      "src/new.ts",
+    ]);
+    expect(
+      execute.mock.calls
+        .map(([input]) => input)
+        .find((input) => input.operation === "CheckpointStore.reverseCheckpointDiff.jj")
+        ?.args,
+    ).toEqual([
+      "restore",
+      "--from",
+      "from-commit",
+      "--into",
+      "@",
+      "--",
+      "src/old.ts",
+      "src/new.ts",
+    ]);
   });
 });

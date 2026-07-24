@@ -12,6 +12,7 @@ function makeBoundary(input?: {
   readonly backend?: "git" | "jj" | null;
   readonly projectRelativePath?: string;
   readonly worktreePath?: string | null;
+  readonly gitStorePath?: string | null;
   readonly canonicalPaths?: Readonly<Record<string, string>>;
 }) {
   const backend = input?.backend === undefined ? "jj" : input.backend;
@@ -57,6 +58,8 @@ function makeBoundary(input?: {
     } as never,
     canonicalizePath: (path) =>
       Effect.succeed(input?.canonicalPaths?.[path] ?? nodePath.resolve(path)),
+    resolveJjGitStorePath: () =>
+      Effect.succeed(input?.gitStorePath ?? null),
   });
 }
 
@@ -105,6 +108,23 @@ describe("legacy Git backend boundary", () => {
         assertAllowed({
           method: WS_METHODS.gitStageFiles,
           cwd: "/managed/workspace/packages/app",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: "VCS_BACKEND_MISMATCH",
+    });
+  });
+
+  it("protects an external JJ Git store from legacy local Git RPCs", async () => {
+    const assertAllowed = makeBoundary({
+      gitStorePath: "/shared/jj/store/git",
+    });
+
+    await expect(
+      Effect.runPromise(
+        assertAllowed({
+          method: WS_METHODS.gitRunStackedAction,
+          cwd: "/shared/jj/store/git",
         }),
       ),
     ).rejects.toMatchObject({

@@ -255,6 +255,51 @@ describe("when: git status is unavailable", () => {
   });
 });
 
+describe("when: the selected backend is JJ", () => {
+  it("uses bookmark terminology for the create quick action", () => {
+    const quick = resolveQuickAction(
+      status({ branch: null, hasUpstream: false }),
+      false,
+      false,
+      true,
+      true,
+      null,
+      "bookmark",
+      "JJ",
+    );
+
+    assert.deepEqual(quick, {
+      label: "Create Bookmark",
+      disabled: false,
+      kind: "create_branch",
+    });
+  });
+
+  it("uses JJ and bookmark terminology in unavailable hints", () => {
+    assert.deepEqual(
+      resolveQuickAction(null, false, false, true, false, null, "bookmark", "JJ"),
+      {
+        label: "Commit",
+        disabled: true,
+        kind: "show_hint",
+        hint: "JJ status is unavailable.",
+      },
+    );
+    assert.deepEqual(
+      resolvePullActionAvailability({
+        gitStatus: status({ branch: null }),
+        isBusy: false,
+        referenceKind: "bookmark",
+        backendName: "JJ",
+      }),
+      {
+        canRun: false,
+        hint: "No bookmark selected: select a bookmark before pulling.",
+      },
+    );
+  });
+});
+
 describe("when: branch is clean, ahead, and has an open PR", () => {
   it("resolveQuickAction prefers push", () => {
     const quick = resolveQuickAction(
@@ -1264,6 +1309,21 @@ describe("resolveDefaultBranchActionDialogCopy", () => {
       title: "Create feature branch, commit & PR?",
       description: `Pull requests can't be opened from "main" into itself. This action will create a feature branch, commit your changes there, push it, and create the PR.`,
       continueLabel: "Create feature branch & continue",
+    });
+  });
+
+  it("uses bookmark terminology for JJ default-reference actions", () => {
+    const copy = resolveDefaultBranchActionDialogCopy({
+      action: "commit_push_pr",
+      branchName: "main",
+      includesCommit: true,
+      referenceKind: "bookmark",
+    });
+
+    assert.deepEqual(copy, {
+      title: "Create feature bookmark, commit & PR?",
+      description: `Pull requests can't be opened from "main" into itself. This action will create a feature bookmark, commit your changes there, push it, and create the PR.`,
+      continueLabel: "Create feature bookmark & continue",
     });
   });
 });

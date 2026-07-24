@@ -410,7 +410,7 @@ export function BranchToolbarBranchSelector({
 
   const vcsTarget = makeVcsQueryTarget(
     { id: projectId, vcs: projectVcs },
-    hasServerThread && activeWorktreePath ? activeThreadId : null,
+    hasServerThread ? activeThreadId : null,
   );
   const branchesQuery = useQuery(vcsReferencesQueryOptions(vcsTarget));
   const branchStatusQuery = useQuery(vcsStatusQueryOptions(vcsTarget));
@@ -438,6 +438,7 @@ export function BranchToolbarBranchSelector({
     activeWorktreePath,
     activeThreadBranch,
     currentGitBranch,
+    preferActiveThreadBranch: isJjBackend && !hasServerThread,
   });
   const branchNames = useMemo(() => branches.map((branch) => branch.name), [branches]);
   const branchByName = useMemo(
@@ -451,7 +452,7 @@ export function BranchToolbarBranchSelector({
   const isSelectingWorktreeBase =
     effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath;
   const checkoutPullRequestItemValue =
-    projectVcs.binding?.backend === "git" && prReference && onCheckoutPullRequestRequest
+    projectVcs.binding && prReference && onCheckoutPullRequestRequest
       ? `__checkout_pull_request__:${prReference}`
       : null;
   const canPrefillCreateBranch = !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
@@ -492,6 +493,7 @@ export function BranchToolbarBranchSelector({
         currentGitBranch,
         hasServerThread,
         isBranchActionPending,
+        preferActiveThreadBranch: isJjBackend && !hasServerThread,
       })
     ) {
       return;
@@ -504,6 +506,7 @@ export function BranchToolbarBranchSelector({
     currentGitBranch,
     effectiveEnvMode,
     hasServerThread,
+    isJjBackend,
     isBranchActionPending,
     onSetThreadWorkspace,
   ]);
@@ -603,7 +606,7 @@ export function BranchToolbarBranchSelector({
       : branch.name;
     const switchTarget = makeVcsQueryTarget(
       { id: projectId, vcs: projectVcs },
-      selectionTarget.nextWorktreePath && hasServerThread ? activeThreadId : null,
+      hasServerThread ? activeThreadId : null,
     );
 
     setIsBranchMenuOpen(false);
@@ -672,7 +675,7 @@ export function BranchToolbarBranchSelector({
           ...(vcsTarget.threadId ? { threadId: vcsTarget.threadId } : {}),
           expectedEpoch: vcsTarget.epoch,
           name,
-          publish: projectVcs.binding.backend === "git" && hasOriginRemote,
+          publish: hasOriginRemote,
         });
         try {
           await api.vcs.switchReference({

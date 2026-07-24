@@ -5,6 +5,7 @@ import type { JjCommandError } from "../Errors.ts";
 import type {
   JjBookmark,
   JjFileChange,
+  JjGitRemote,
   JjRevisionIdentity,
   JjWorkspace,
   JjWorkspaceRegistration,
@@ -57,6 +58,11 @@ export interface JjDiffResult {
   readonly files: ReadonlyArray<JjFileChange>;
 }
 
+export interface JjBookmarkRemoteComparison {
+  readonly aheadCount: number;
+  readonly behindCount: number;
+}
+
 export interface JjCreateWorkspaceInput {
   readonly repositoryPath: string;
   readonly workspacePath: string;
@@ -80,11 +86,13 @@ export interface JjCoreShape {
   readonly detectRepository: (
     cwd: string,
   ) => Effect.Effect<JjRepositoryInfo | null, JjCommandError>;
+  readonly initRepository: (cwd: string) => Effect.Effect<void, JjCommandError>;
   readonly readRevisionIdentity: (
     cwd: string,
     revision?: string,
   ) => Effect.Effect<JjRevisionIdentity, JjCommandError>;
   readonly listBookmarks: (cwd: string) => Effect.Effect<JjBookmark[], JjCommandError>;
+  readonly listGitRemotes: (cwd: string) => Effect.Effect<JjGitRemote[], JjCommandError>;
   readonly resolveNearestBookmark: (
     cwd: string,
   ) => Effect.Effect<string | null, JjCommandError>;
@@ -116,6 +124,19 @@ export interface JjCoreShape {
     name: string,
     revision: string,
   ) => Effect.Effect<void, JjCommandError>;
+  readonly createAvailableBookmark: (
+    cwd: string,
+    desiredName: string,
+    revision: string,
+  ) => Effect.Effect<string, JjCommandError>;
+  readonly deleteBookmark: (
+    cwd: string,
+    name: string,
+  ) => Effect.Effect<void, JjCommandError>;
+  readonly trackBookmark: (
+    cwd: string,
+    remoteBookmark: string,
+  ) => Effect.Effect<void, JjCommandError>;
   readonly setBookmark: (
     cwd: string,
     name: string,
@@ -136,6 +157,8 @@ export interface JjCoreShape {
     message: string,
     filePaths?: ReadonlyArray<string>,
   ) => Effect.Effect<JjRevisionIdentity, JjCommandError>;
+  /** Import refs changed through the explicit Git remote fallback. */
+  readonly importGit: (cwd: string) => Effect.Effect<void, JjCommandError>;
   readonly fetchGit: (
     cwd: string,
     remoteName?: string,
@@ -144,10 +167,18 @@ export interface JjCoreShape {
     cwd: string,
     bookmark: string,
     remoteName: string,
+    remoteBookmark?: string,
   ) => Effect.Effect<void, JjCommandError>;
+  readonly compareBookmarkToRemote: (
+    cwd: string,
+    bookmark: string,
+    remoteName: string,
+    remoteBookmark?: string,
+  ) => Effect.Effect<JjBookmarkRemoteComparison, JjCommandError>;
   readonly pushBookmark: (
     cwd: string,
     bookmark: string,
+    remoteName?: string,
   ) => Effect.Effect<void, JjCommandError>;
 }
 

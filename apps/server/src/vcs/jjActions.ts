@@ -11,10 +11,18 @@ import type {
 import { resolveAutoFeatureBranchName } from "@synara/shared/git";
 import { Effect } from "effect";
 
+import type { GitCoreShape } from "../git/Services/GitCore.ts";
 import type { GitHubCliShape, GitHubPullRequestSummary } from "../git/Services/GitHubCli.ts";
 import type { TextGenerationShape } from "../git/Services/TextGeneration.ts";
 import { buildGitTextGenerationCallInput } from "../git/textGenerationSelection.ts";
 import { ProjectVcsError } from "./Errors.ts";
+import type { JjBookmark } from "./jjParsing.ts";
+import {
+  type JjBookmarkRemoteResolution,
+  type JjGitHubHeadContext,
+  resolveJjBookmarkRemote,
+  resolveJjGitHubHeadContext,
+} from "./jjRemote.ts";
 import type { JjCoreShape, JjWorkingCopyStatus } from "./Services/JjCore.ts";
 
 type ProgressPayload<T> = T extends GitActionProgressEvent
@@ -24,6 +32,7 @@ type JjActionProgressPayload = ProgressPayload<GitActionProgressEvent>;
 
 export interface JjActionDependencies {
   readonly jj: JjCoreShape;
+  readonly git: GitCoreShape;
   readonly gitHubCli: GitHubCliShape;
   readonly textGeneration: TextGenerationShape;
 }
@@ -31,6 +40,7 @@ export interface JjActionDependencies {
 export interface JjActionTarget {
   readonly cwd: string;
   readonly epoch: number;
+  readonly preferredBookmark?: string | null;
 }
 
 function failPrecondition(operation: string, detail: string) {
@@ -43,22 +53,13 @@ function failPrecondition(operation: string, detail: string) {
   );
 }
 
-function remoteNameFromUpstream(upstream: string | null): string | null {
-  const separator = upstream?.lastIndexOf("@") ?? -1;
-  return separator > 0 ? upstream!.slice(separator + 1) : null;
-}
-
-function selectBookmarkRemote(
-  status: JjWorkingCopyStatus,
-  bookmarkName: string,
-) {
-  return status.bookmarks
-    .find((bookmark) => bookmark.name === bookmarkName)
-    ?.remotes.filter((remote) => remote.targetChangeId !== null)
+function selectBaseRemote(bookmark: JjBookmark | undefined) {
+  return bookmark?.remotes
+    .filter((remote) => remote.targetChangeId !== null)
     .toSorted(
       (left, right) =>
-        Number(right.tracked) - Number(left.tracked) ||
         Number(right.name === "origin") - Number(left.name === "origin") ||
+        Number(right.tracked) - Number(left.tracked) ||
         left.name.localeCompare(right.name),
     )[0];
 }
@@ -97,13 +98,56 @@ function toPrStep(
 }
 
 export function makeJjActions(dependencies: JjActionDependencies) {
+  const readStatus = (target: JjActionTarget) =>
+    Effect.gen(function* () {
+      const status = yield* dependencies.jj.status(target.cwd);
+      const preferred = target.preferredBookmark;
+      if (
+        !preferred ||
+        preferred === status.currentBookmark ||
+        !status.bookmarks.some(
+          (bookmark) => bookmark.name === preferred && bookmark.isLocal,
+        )
+      ) {
+        return status;
+      }
+      const remote = yield* resolveJjBookmarkRemote({
+        git: dependencies.git,
+        status,
+        bookmark: preferred,
+      });
+      const comparison = remote
+        ? remote.synced
+          ? { aheadCount: 0, behindCount: 0 }
+          : yield* dependencies.jj.compareBookmarkToRemote(
+              target.cwd,
+              preferred,
+              remote.remoteName,
+              remote.remoteBookmark,
+            )
+        : { aheadCount: 0, behindCount: 0 };
+      return {
+        ...status,
+        currentBookmark: preferred,
+        upstreamBookmark: remote?.remoteRevision ?? null,
+        aheadCount: comparison.aheadCount,
+        behindCount: comparison.behindCount,
+      };
+    });
+
   const pull = (target: JjActionTarget) =>
     Effect.gen(function* () {
       const operation = "ProjectVcs.pull";
-      const before = yield* dependencies.jj.status(target.cwd);
+      const before = yield* readStatus(target);
       const bookmark = before.currentBookmark;
-      const remoteName = remoteNameFromUpstream(before.upstreamBookmark);
-      if (!bookmark || !remoteName) {
+      const beforeRemote = bookmark
+        ? yield* resolveJjBookmarkRemote({
+            git: dependencies.git,
+            status: before,
+            bookmark,
+          })
+        : null;
+      if (!bookmark || !beforeRemote) {
         return yield* failPrecondition(
           operation,
           "The current JJ bookmark does not track a remote bookmark.",
@@ -116,33 +160,111 @@ export function makeJjActions(dependencies: JjActionDependencies) {
         );
       }
 
-      yield* dependencies.jj.fetchGit(target.cwd, remoteName);
-      const refreshed = yield* dependencies.jj.status(target.cwd);
-      if (refreshed.aheadCount > 0 && refreshed.behindCount > 0) {
+      yield* dependencies.jj.fetchGit(target.cwd, beforeRemote.remoteName);
+      const refreshed = yield* readStatus(target);
+      const refreshedRemote = yield* resolveJjBookmarkRemote({
+        git: dependencies.git,
+        status: refreshed,
+        bookmark,
+      });
+      if (!refreshedRemote) {
+        return yield* failPrecondition(
+          operation,
+          "The current JJ bookmark lost its remote mapping after fetch.",
+        );
+      }
+      const comparison = refreshedRemote.nativePush
+        ? {
+            aheadCount: refreshed.aheadCount,
+            behindCount: refreshed.behindCount,
+          }
+        : yield* dependencies.jj.compareBookmarkToRemote(
+            target.cwd,
+            bookmark,
+            refreshedRemote.remoteName,
+            refreshedRemote.remoteBookmark,
+          );
+      if (comparison.aheadCount > 0 && comparison.behindCount > 0) {
         return yield* failPrecondition(
           operation,
           "The local and remote JJ bookmarks have diverged; rebase explicitly before pulling.",
         );
       }
-      if (refreshed.behindCount === 0) {
+      if (comparison.behindCount === 0) {
         return {
           backend: "jj",
           epoch: target.epoch,
           status: "skipped_up_to_date",
           ref: bookmark,
-          upstreamRef: refreshed.upstreamBookmark,
+          upstreamRef: refreshedRemote.remoteRevision,
         };
       }
 
-      yield* dependencies.jj.advanceBookmark(target.cwd, bookmark, remoteName);
+      yield* dependencies.jj.advanceBookmark(
+        target.cwd,
+        bookmark,
+        refreshedRemote.remoteName,
+        refreshedRemote.remoteBookmark,
+      );
       return {
         backend: "jj",
         epoch: target.epoch,
         status: "pulled",
         ref: bookmark,
-        upstreamRef: `${bookmark}@${remoteName}`,
+        upstreamRef: refreshedRemote.remoteRevision,
       };
     });
+
+  const findOpenPullRequest = (
+    gitCwd: string,
+    head: JjGitHubHeadContext,
+  ) =>
+    Effect.gen(function* () {
+      for (const headSelector of head.selectors) {
+        const matches =
+          yield* dependencies.gitHubCli.listOpenPullRequests({
+            cwd: gitCwd,
+            headSelector,
+            limit: 10,
+          });
+        if (matches[0]) {
+          return matches[0];
+        }
+      }
+      return null;
+    });
+
+  const pushMappedBookmarkWithGit = (
+    target: JjActionTarget,
+    bookmark: string,
+    remote: JjBookmarkRemoteResolution,
+    gitCwd: string,
+  ) =>
+    dependencies.jj.withMutation(
+      target.cwd,
+      Effect.gen(function* () {
+        yield* dependencies.jj.execute({
+          operation: "JjActions.pushRemoteFallback.export",
+          cwd: target.cwd,
+          args: ["git", "export"],
+        });
+        yield* dependencies.git.execute({
+          operation: "JjActions.pushRemoteFallback.push",
+          cwd: gitCwd,
+          args: [
+            "push",
+            "--porcelain",
+            remote.remoteName,
+            `refs/heads/${bookmark}:refs/heads/${remote.remoteBookmark}`,
+          ],
+        });
+        yield* dependencies.jj.execute({
+          operation: "JjActions.pushRemoteFallback.import",
+          cwd: target.cwd,
+          args: ["git", "import"],
+        });
+      }),
+    );
 
   const createPullRequest = (
     target: JjActionTarget,
@@ -159,13 +281,20 @@ export function makeJjActions(dependencies: JjActionDependencies) {
         );
       }
 
-      const existing = yield* dependencies.gitHubCli.listOpenPullRequests({
-        cwd: gitCwd,
-        headSelector: bookmark,
-        limit: 10,
+      const remote = yield* resolveJjBookmarkRemote({
+        git: dependencies.git,
+        status,
+        bookmark,
       });
-      if (existing[0]) {
-        return toPrStep("opened_existing", existing[0]);
+      const headContext = yield* resolveJjGitHubHeadContext({
+        git: dependencies.git,
+        gitCwd,
+        bookmark,
+        remote,
+      });
+      const existing = yield* findOpenPullRequest(gitCwd, headContext);
+      if (existing) {
+        return toPrStep("opened_existing", existing);
       }
 
       const baseBranch = yield* dependencies.gitHubCli.getDefaultBranch({ cwd: gitCwd });
@@ -175,35 +304,33 @@ export function makeJjActions(dependencies: JjActionDependencies) {
           "GitHub did not report a default branch for this repository.",
         );
       }
-      if (baseBranch === bookmark) {
+      if (baseBranch === headContext.headBranch) {
         return yield* failPrecondition(
           "ProjectVcs.runStackedAction",
-          `Cannot create a pull request from '${bookmark}' into itself.`,
+          `Cannot create a pull request from '${headContext.headBranch}' into itself.`,
         );
       }
 
       const bookmarks = yield* dependencies.jj.listBookmarks(target.cwd);
       const base = bookmarks.find((entry) => entry.name === baseBranch);
-      const preferredRemote =
-        remoteNameFromUpstream(status.upstreamBookmark) ?? "origin";
-      const baseRemote = base?.remotes.find(
-        (remote) =>
-          remote.name === preferredRemote && remote.targetChangeId !== null,
-      );
+      const baseRemote = selectBaseRemote(base);
       const baseRevision = baseRemote
-        ? `${baseBranch}@${preferredRemote}`
+        ? `${baseBranch}@${baseRemote.name}`
         : baseBranch;
       const range = yield* dependencies.jj.readRangeDiff(
         target.cwd,
         baseRevision,
         bookmark,
       );
-      const head = yield* dependencies.jj.readRevisionIdentity(target.cwd, bookmark);
+      const headRevision = yield* dependencies.jj.readRevisionIdentity(
+        target.cwd,
+        bookmark,
+      );
       const generated = yield* dependencies.textGeneration.generatePrContent({
         cwd: target.cwd,
         baseBranch,
-        headBranch: bookmark,
-        commitSummary: head.description,
+        headBranch: headContext.headBranch,
+        commitSummary: headRevision.description,
         diffSummary: range.files
           .map((file) => `${file.status}: ${file.path}`)
           .join("\n")
@@ -229,22 +356,17 @@ export function makeJjActions(dependencies: JjActionDependencies) {
         .createPullRequest({
           cwd: gitCwd,
           baseBranch,
-          headSelector: bookmark,
+          headSelector: headContext.preferredSelector,
           title: generated.title,
           bodyFile,
         })
         .pipe(
           Effect.as(null),
           Effect.catch((error) =>
-            dependencies.gitHubCli
-              .listOpenPullRequests({
-                cwd: gitCwd,
-                headSelector: bookmark,
-                limit: 10,
-              })
+            findOpenPullRequest(gitCwd, headContext)
               .pipe(
-                Effect.flatMap((matches) =>
-                  matches[0] ? Effect.succeed(matches[0]) : Effect.fail(error),
+                Effect.flatMap((match) =>
+                  match ? Effect.succeed(match) : Effect.fail(error),
                 ),
               ),
           ),
@@ -259,17 +381,13 @@ export function makeJjActions(dependencies: JjActionDependencies) {
         return toPrStep("opened_existing", existingAfterCreate);
       }
 
-      const created = yield* dependencies.gitHubCli.listOpenPullRequests({
-        cwd: gitCwd,
-        headSelector: bookmark,
-        limit: 10,
-      });
-      return created[0]
-        ? toPrStep("created", created[0])
+      const created = yield* findOpenPullRequest(gitCwd, headContext);
+      return created
+        ? toPrStep("created", created)
         : {
             status: "created" as const,
             baseBranch,
-            headBranch: bookmark,
+            headBranch: headContext.headBranch,
             title: generated.title,
           };
     });
@@ -294,7 +412,7 @@ export function makeJjActions(dependencies: JjActionDependencies) {
         : Effect.void;
 
     const action = Effect.gen(function* () {
-      let status = yield* dependencies.jj.status(target.cwd);
+      let status = yield* readStatus(target);
       const wantsCommit = isCommitAction(input.action);
       const wantsPush =
         input.action === "push" ||
@@ -436,7 +554,7 @@ export function makeJjActions(dependencies: JjActionDependencies) {
               (commitMessage || fallbackCommitSubject(status)).split(/\r?\n/u)[0] ??
               fallbackCommitSubject(status),
           };
-          status = yield* dependencies.jj.status(target.cwd);
+          status = yield* readStatus(target);
           bookmark = bookmark ?? status.currentBookmark;
         }
       }
@@ -456,22 +574,49 @@ export function makeJjActions(dependencies: JjActionDependencies) {
           phase: "push",
           label: "Pushing...",
         });
-        const beforePush = yield* dependencies.jj.status(target.cwd);
-        const beforeRemote = selectBookmarkRemote(beforePush, bookmark);
+        const beforePush = yield* readStatus(target);
+        const beforeRemote = yield* resolveJjBookmarkRemote({
+          git: dependencies.git,
+          status: beforePush,
+          bookmark,
+        });
         if (beforeRemote?.synced) {
           pushStep = { status: "skipped_up_to_date" };
         } else {
-          yield* dependencies.jj.pushBookmark(target.cwd, bookmark);
-          const afterPush = yield* dependencies.jj.status(target.cwd);
-          const afterRemote = selectBookmarkRemote(afterPush, bookmark);
+          if (!beforePush.repository.gitStorePath) {
+            return yield* failPrecondition(
+              "ProjectVcs.runStackedAction",
+              "This JJ repository has no Git backing store for remote push.",
+            );
+          }
+          yield* beforeRemote && !beforeRemote.nativePush
+            ? pushMappedBookmarkWithGit(
+                target,
+                bookmark,
+                beforeRemote,
+                beforePush.repository.gitStorePath,
+              )
+            : beforeRemote
+              ? dependencies.jj.pushBookmark(
+                  target.cwd,
+                  bookmark,
+                  beforeRemote.remoteName,
+                )
+            : dependencies.jj.pushBookmark(target.cwd, bookmark);
+          const afterPush = yield* readStatus(target);
+          const afterRemote = yield* resolveJjBookmarkRemote({
+            git: dependencies.git,
+            status: afterPush,
+            bookmark,
+          });
           pushStep = {
             status: "pushed",
             branch: bookmark,
             upstreamBranch:
               afterRemote
-                ? `${bookmark}@${afterRemote.name}`
+                ? afterRemote.remoteRevision
                 : `${bookmark}@origin`,
-            setUpstream: beforeRemote === undefined,
+            setUpstream: beforeRemote === null,
           };
           status = afterPush;
         }

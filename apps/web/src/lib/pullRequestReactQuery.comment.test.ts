@@ -3,6 +3,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
 import { pullRequestCommentMutationOptions, pullRequestQueryKeys } from "./pullRequestReactQuery";
+import { vcsQueryKeys } from "./vcsReactQuery";
 
 describe("pullRequestCommentMutationOptions", () => {
   it("invalidates matching repository list scopes and detail only", async () => {
@@ -23,6 +24,7 @@ describe("pullRequestCommentMutationOptions", () => {
     });
     const detailKey = pullRequestQueryKeys.detail(input);
     const diffKey = pullRequestQueryKeys.diff(input);
+    const vcsPullRequestKey = [...vcsQueryKeys.pullRequests, projectId, 42] as const;
     queryClient.setQueryData(projectListKey, { entries: [] });
     queryClient.setQueryData(allProjectsListKey, { entries: [] });
     queryClient.setQueryData(unrelatedListKey, {
@@ -37,6 +39,7 @@ describe("pullRequestCommentMutationOptions", () => {
     });
     queryClient.setQueryData(detailKey, { state: "open" });
     queryClient.setQueryData(diffKey, {});
+    queryClient.setQueryData(vcsPullRequestKey, {});
     const options = pullRequestCommentMutationOptions(queryClient);
     if (!options.onSettled) throw new Error("Comment onSettled hook is missing.");
 
@@ -47,5 +50,6 @@ describe("pullRequestCommentMutationOptions", () => {
     expect(queryClient.getQueryState(unrelatedListKey)?.isInvalidated).toBe(false);
     expect(queryClient.getQueryState(detailKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(diffKey)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(vcsPullRequestKey)?.isInvalidated).toBe(true);
   });
 });

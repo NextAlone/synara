@@ -118,10 +118,10 @@ function buildImportedMessagesBootstrapText(input: {
   const sections: string[] = [input.intro, `Original conversation title: ${input.thread.title}`];
 
   if (input.thread.branch) {
-    sections.push(`Git branch: ${input.thread.branch}`);
+    sections.push(`Source control reference: ${input.thread.branch}`);
   }
   if (input.thread.worktreePath) {
-    sections.push(`Worktree path: ${input.thread.worktreePath}`);
+    sections.push(`Workspace path: ${input.thread.worktreePath}`);
   }
 
   const recentSection =

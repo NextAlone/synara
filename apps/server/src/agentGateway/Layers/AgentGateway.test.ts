@@ -165,6 +165,7 @@ interface GatewayHarness {
   readonly fetchedPullRequestRepositories: Array<string | undefined>;
   readonly worktreeRemoves: Array<{ path: string }>;
   readonly branchDeletes: Array<{ branch: string }>;
+  readonly jjStatusReads: string[];
   readonly jjRevisionReads: Array<{ cwd: string; revision: string | undefined }>;
   readonly jjWorkspaceCreates: Array<{
     projectId: string;
@@ -174,6 +175,7 @@ interface GatewayHarness {
     copyChangesFromCurrent: boolean;
   }>;
   readonly jjWorkspaceRemoves: Array<{ path: string; force?: boolean }>;
+  readonly jjWorkspaceForgets: Array<{ repositoryPath: string; name: string }>;
   readonly setThreadDetail: (thread: OrchestrationThread) => void;
   readonly deleteThread: (threadId: string) => void;
   readonly setProjectionTurn: (input: {
@@ -303,6 +305,8 @@ function makeHarnessLayer(
     readonly existingBranches?: ReadonlyArray<string>;
     readonly existingWorktrees?: Readonly<Record<string, string>>;
     readonly existingJjWorkspaces?: Readonly<Record<string, string>>;
+    readonly staleJjWorkspaces?: ReadonlyArray<string>;
+    readonly jjRepositoryWorkspaceRoot?: string;
     readonly jjWorkspaceCommitId?: string;
     readonly verifiedOwnershipTokens?: ReadonlyArray<string>;
     readonly failRecordWorktreeOwnership?: boolean;
@@ -365,6 +369,7 @@ function makeHarnessLayer(
   const fetchedPullRequestRepositories: Array<string | undefined> = [];
   const worktreeRemoves: Array<{ path: string }> = [];
   const branchDeletes: Array<{ branch: string }> = [];
+  const jjStatusReads: string[] = [];
   const jjRevisionReads: Array<{ cwd: string; revision: string | undefined }> = [];
   const jjWorkspaceCreates: Array<{
     projectId: string;
@@ -374,6 +379,7 @@ function makeHarnessLayer(
     copyChangesFromCurrent: boolean;
   }> = [];
   const jjWorkspaceRemoves: Array<{ path: string; force?: boolean }> = [];
+  const jjWorkspaceForgets: Array<{ repositoryPath: string; name: string }> = [];
   const branchWorktreePaths = new Map<string, string | null>(
     (options.existingBranches ?? []).map((branch) => [branch, null]),
   );
@@ -804,6 +810,12 @@ function makeHarnessLayer(
       ),
   } as unknown as (typeof GitCore)["Service"]);
   const jjLayer = Layer.succeed(JjCore, {
+    detectRepository: () =>
+      Effect.succeed({
+        workspaceRoot: options.jjRepositoryWorkspaceRoot ?? "/tmp/demo",
+        repositoryStorePath: "/tmp/demo/.jj/repo",
+        gitStorePath: "/tmp/demo/.git",
+      }),
     readRevisionIdentity: (cwd: string, revision?: string) =>
       Effect.sync(() => {
         jjRevisionReads.push({ cwd, revision });
@@ -813,29 +825,67 @@ function makeHarnessLayer(
           description: "",
         };
       }),
-    status: () =>
-      Effect.succeed({
-        repository: {
-          workspaceRoot: "/tmp/demo",
-          repositoryStorePath: "/tmp/demo/.jj/repo",
-          gitStorePath: "/tmp/demo/.git",
-        },
-        revision: {
-          changeId: "jj-workspace-change",
-          commitId: options.jjWorkspaceCommitId ?? "jj-workspace-commit",
-          description: "",
-        },
-        currentBookmark: null,
-        upstreamBookmark: null,
-        aheadCount: 0,
-        behindCount: 0,
-        bookmarks: [],
-        files: [],
-        hasChanges: false,
-        hasConflicts: false,
+    status: (cwd: string) =>
+      Effect.sync(() => {
+        jjStatusReads.push(cwd);
+        const isSourceWorkspace =
+          cwd === "/tmp/demo" || cwd === "/tmp/caller-worktree";
+        return {
+          repository: {
+            workspaceRoot: isSourceWorkspace ? cwd : "/tmp/demo",
+            repositoryStorePath: "/tmp/demo/.jj/repo",
+            gitStorePath: "/tmp/demo/.git",
+          },
+          revision: {
+            changeId: isSourceWorkspace
+              ? "jj-current-change"
+              : "jj-workspace-change",
+            commitId: isSourceWorkspace
+              ? "jj-current-commit"
+              : (options.jjWorkspaceCommitId ?? "jj-workspace-commit"),
+            description: "",
+          },
+          currentBookmark: null,
+          upstreamBookmark: null,
+          aheadCount: 0,
+          behindCount: 0,
+          bookmarks: [],
+          files: [],
+          hasChanges: false,
+          hasConflicts: false,
+        };
+      }),
+    forgetWorkspace: (repositoryPath: string, name: string) =>
+      Effect.sync(() => {
+        jjWorkspaceForgets.push({ repositoryPath, name });
       }),
   } as never);
   const projectVcsLayer = Layer.succeed(ProjectVcs, {
+    materializePullRequestHead: (input: { reference: string }) =>
+      Effect.sync(() => {
+        const number = Number(/(\d+)(?:\D*)$/u.exec(input.reference)?.[1] ?? "0");
+        fetchedPullRequests.push(number);
+        fetchedPullRequestRepositories.push(
+          input.reference.includes("github.com/") ? "example/repo" : undefined,
+        );
+        return {
+          pullRequest: {
+            number,
+            title: "Pull request",
+            url: `https://github.com/example/repo/pull/${number}`,
+            baseBranch: "main",
+            headBranch: "feature",
+            state: "open" as const,
+            isDraft: false,
+            mergeability: "unknown" as const,
+            additions: null,
+            deletions: null,
+            changedFiles: null,
+          },
+          branch: "feature",
+          revision: "fedcba9876543210fedcba9876543210fedcba98",
+        };
+      }),
     createWorkspace: (input: (typeof jjWorkspaceCreates)[number]) =>
       Effect.gen(function* () {
         jjWorkspaceCreates.push(input);
@@ -864,7 +914,15 @@ function makeHarnessLayer(
           stale: false,
           current: false,
           ref: null,
-        })),
+        })).concat(
+          (options.staleJjWorkspaces ?? []).map((name) => ({
+            name,
+            path: null,
+            stale: true,
+            current: false,
+            ref: null,
+          })),
+        ),
       }),
     removeWorkspace: (input: { path: string; force?: boolean }) =>
       Effect.sync(() => {
@@ -1266,9 +1324,11 @@ function makeHarnessLayer(
       fetchedPullRequestRepositories,
       worktreeRemoves,
       branchDeletes,
+      jjStatusReads,
       jjRevisionReads,
       jjWorkspaceCreates,
       jjWorkspaceRemoves,
+      jjWorkspaceForgets,
       setThreadDetail: (thread) => {
         threadsById.set(thread.id, thread);
         threadDetailsById.set(thread.id, thread);
@@ -2170,10 +2230,8 @@ describe("AgentGateway", () => {
         sourceRef: "jj-current-commit",
         copyChangesFromCurrent: true,
       });
-      assert.deepEqual(harness.jjRevisionReads, [
-        { cwd: "/tmp/demo", revision: "@" },
-        { cwd: "/tmp/demo", revision: undefined },
-      ]);
+      assert.equal(harness.jjStatusReads[0], "/tmp/demo");
+      assert.deepEqual(harness.jjRevisionReads, []);
 
       const create = harness.dispatched[0]!;
       assert.equal(create.type, "thread.create");
@@ -2183,6 +2241,81 @@ describe("AgentGateway", () => {
         assert.equal(create.associatedWorktreeRef, "jj-workspace-commit");
         assert.equal(create.worktreePath, harness.jjWorkspaceCreates[0]?.path);
       }
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("materializes a PR remotely before creating a native JJ workspace", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      vcsBackend: "jj",
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_thread",
+        args: {
+          requestId: "create-jj-pr-workspace",
+          prompt: "review the pull request with jj",
+          provider: "codex",
+          environment: "worktree",
+          baseRef: "https://github.com/example/repo/pull/425",
+        },
+      });
+
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.deepEqual(harness.fetchedPullRequests, [425]);
+      assert.deepEqual(harness.fetchedPullRequestRepositories, ["example/repo"]);
+      assert.lengthOf(harness.gitExecutions, 0);
+      assert.lengthOf(harness.worktreeCreates, 0);
+      assert.deepInclude(harness.jjWorkspaceCreates[0]!, {
+        sourceRef: "jj-reference-commit",
+        copyChangesFromCurrent: false,
+      });
+      assert.equal(harness.jjStatusReads[0], "/tmp/demo");
+      assert.deepEqual(harness.jjRevisionReads, [
+        {
+          cwd: "/tmp/demo",
+          revision: "fedcba9876543210fedcba9876543210fedcba98",
+        },
+      ]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("snapshots an explicit JJ HEAD from the caller's linked workspace", () => {
+    const isolatedParent = makeThreadShell("thread-parent", {
+      envMode: "worktree",
+      branch: null,
+      worktreePath: "/tmp/caller-worktree",
+      associatedWorktreePath: "/tmp/caller-worktree",
+      associatedWorktreeBranch: null,
+      associatedWorktreeRef: "jj-current-commit",
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(
+      [isolatedParent],
+      [],
+      { vcsBackend: "jj" },
+    );
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_thread",
+        args: {
+          requestId: "explicit-jj-head-from-caller-workspace",
+          prompt: "continue from this jj workspace",
+          provider: "codex",
+          environment: "worktree",
+          baseRef: "HEAD",
+        },
+      });
+
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.equal(harness.jjStatusReads[0], "/tmp/caller-worktree");
+      assert.deepInclude(harness.jjWorkspaceCreates[0]!, {
+        sourceRef: "jj-current-commit",
+        copyChangesFromCurrent: true,
+      });
+      assert.deepEqual(harness.jjRevisionReads, []);
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -2715,6 +2848,34 @@ describe("AgentGateway", () => {
       const harness = yield* makeHarness;
       assert.deepEqual(harness.jjWorkspaceRemoves, [{ path: plannedPath, force: true }]);
       assert.deepEqual(harness.worktreeRemoves, []);
+      assert.equal(harness.getOperationStatus("turn-parent-active"), "failed");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("forgets an operation-owned stale JJ workspace registration", () => {
+    const workspaceName = "synara-stale-recovery-workspace";
+    const plannedPath = "/tmp/missing-jj-recovery-workspace";
+    const interrupted = makeInterruptedJjWorkspaceOperation(
+      "jj-stale-recovery",
+      plannedPath,
+      workspaceName,
+      "jj-workspace-commit",
+    );
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      vcsBackend: "jj",
+      interruptedOperations: [interrupted],
+      staleJjWorkspaces: [workspaceName],
+      jjRepositoryWorkspaceRoot: "/tmp/jj-repository-root",
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      assert.deepEqual(harness.jjWorkspaceForgets, [
+        {
+          repositoryPath: "/tmp/jj-repository-root",
+          name: workspaceName,
+        },
+      ]);
+      assert.deepEqual(harness.jjWorkspaceRemoves, []);
       assert.equal(harness.getOperationStatus("turn-parent-active"), "failed");
     }).pipe(Effect.provide(gatewayLayer));
   });

@@ -46,6 +46,9 @@ function workspaceRootForProjectPath(
 export interface LegacyGitBackendBoundaryDependencies {
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly canonicalizePath: (path: string) => Effect.Effect<string>;
+  readonly resolveJjGitStorePath: (
+    cwd: string,
+  ) => Effect.Effect<string | null>;
 }
 
 export interface LegacyGitBackendBoundaryInput {
@@ -75,11 +78,19 @@ export function makeLegacyGitBackendBoundary(
         { concurrency: 2 },
       );
       const jjRoots: Array<{ readonly projectId: string; readonly root: string }> = [];
+      const jjRepositoryRoots: Array<{
+        readonly projectId: string;
+        readonly root: string;
+      }> = [];
 
       for (const project of snapshot.projects) {
         const binding = project.vcs.binding;
         if (binding?.backend !== "jj") continue;
         jjRoots.push({ projectId: project.id, root: binding.repoRoot });
+        jjRepositoryRoots.push({
+          projectId: project.id,
+          root: binding.repoRoot,
+        });
 
         for (const thread of snapshot.threads) {
           if (thread.projectId !== project.id) continue;
@@ -100,8 +111,33 @@ export function makeLegacyGitBackendBoundary(
         }
       }
 
+      const gitStoreRoots = yield* Effect.forEach(
+        jjRepositoryRoots,
+        (entry) =>
+          dependencies
+            .resolveJjGitStorePath(entry.root)
+            .pipe(
+              Effect.map((root) =>
+                root === null ? null : { ...entry, root },
+              ),
+              // The bound workspace root remains protected even when a stale
+              // repository cannot currently reveal its external Git store.
+              Effect.catch(() => Effect.succeed(null)),
+            ),
+        { concurrency: 4 },
+      );
       const canonicalRoots = yield* Effect.forEach(
-        jjRoots,
+        [
+          ...jjRoots,
+          ...gitStoreRoots.filter(
+            (
+              entry,
+            ): entry is {
+              readonly projectId: string;
+              readonly root: string;
+            } => entry !== null,
+          ),
+        ],
         (entry) =>
           dependencies
             .canonicalizePath(entry.root)

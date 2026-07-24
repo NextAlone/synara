@@ -13,6 +13,7 @@ import {
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullRequestRefInput,
+  GitResolvedPullRequest,
   GitPullRequestSnapshotInput,
   GitPullRequestSnapshotResult,
   GitReadWorkingTreeDiffInput,
@@ -69,6 +70,18 @@ export interface GitManagerShape {
   readonly resolvePullRequest: (
     input: GitPullRequestRefInput,
   ) => Effect.Effect<GitResolvePullRequestResult, GitManagerServiceError>;
+
+  /**
+   * Fetch a PR head into a local Git branch without changing a working copy.
+   *
+   * Used by JJ only as the explicit remote-ref bridge before `jj git import`.
+   */
+  readonly materializePullRequestHead: (
+    input: GitPullRequestRefInput,
+  ) => Effect.Effect<
+    { readonly pullRequest: GitResolvedPullRequest; readonly branch: string },
+    GitManagerServiceError
+  >;
 
   /**
    * Load live CI checks and top-level review comments for a pull request.

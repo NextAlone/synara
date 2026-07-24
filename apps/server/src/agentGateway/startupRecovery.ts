@@ -133,7 +133,39 @@ export function recoverInterruptedAgentGatewayOperations(input: {
                           }
                           return;
                         }
-                        if (!existsSync(plannedWorkspacePath)) return;
+                        const workspaces = yield* input.projectVcs.listWorkspaces({
+                          projectId: ProjectId.makeUnsafe(entry.projectId),
+                          expectedEpoch: entry.vcsEpoch,
+                        });
+                        const registered = workspaces.workspaces.find(
+                          (workspace) =>
+                            workspace.name === entry.worktreeOwnership!.token,
+                        );
+                        if (!existsSync(plannedWorkspacePath)) {
+                          if (!registered) return;
+                          if (!registered.stale) {
+                            return yield* Effect.fail(
+                              new Error(
+                                `Refusing to forget JJ workspace ${entry.worktreeOwnership.token}: its owned path is missing but the registration is still live.`,
+                              ),
+                            );
+                          }
+                          const repository = yield* input.jj.detectRepository(
+                            entry.workspaceRoot,
+                          );
+                          if (!repository) {
+                            return yield* Effect.fail(
+                              new Error(
+                                `Refusing to forget JJ workspace ${entry.worktreeOwnership.token}: the project repository is unavailable.`,
+                              ),
+                            );
+                          }
+                          yield* input.jj.forgetWorkspace(
+                            repository.workspaceRoot,
+                            entry.worktreeOwnership.token,
+                          );
+                          return;
+                        }
                         const status = yield* input.jj.status(plannedWorkspacePath);
                         if (status.revision.commitId !== entry.worktreeOwnership.head) {
                           return yield* Effect.fail(
@@ -142,16 +174,11 @@ export function recoverInterruptedAgentGatewayOperations(input: {
                             ),
                           );
                         }
-                        const workspaces = yield* input.projectVcs.listWorkspaces({
-                          projectId: ProjectId.makeUnsafe(entry.projectId),
-                          expectedEpoch: entry.vcsEpoch,
-                        });
-                        const registered = workspaces.workspaces.find(
-                          (workspace) =>
-                            workspace.name === entry.worktreeOwnership!.token &&
-                            workspace.path === plannedWorkspacePath,
-                        );
-                        if (!registered) {
+                        if (
+                          !registered ||
+                          registered.stale ||
+                          registered.path !== plannedWorkspacePath
+                        ) {
                           return yield* Effect.fail(
                             new Error(
                               `Refusing to clean JJ workspace ${plannedWorkspacePath}: its durable registration no longer matches.`,

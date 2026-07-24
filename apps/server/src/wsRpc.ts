@@ -55,6 +55,7 @@ import { GitManager } from "./git/Services/GitManager";
 import { GitHubCliError } from "./git/Errors";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
 import { TextGeneration } from "./git/Services/TextGeneration";
+import { JjCore } from "./vcs/Services/JjCore";
 import {
   beginGitHandoff,
   beginVcsHandoff,
@@ -309,6 +310,7 @@ const makeWsRpcHandlersLayer = () =>
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
       const git = yield* GitCore;
+      const jj = yield* JjCore;
       const gitManager = yield* GitManager;
       const gitStatusBroadcaster = yield* GitStatusBroadcaster;
       const keybindings = yield* Keybindings;
@@ -640,6 +642,10 @@ const makeWsRpcHandlersLayer = () =>
             Effect.provideService(FileSystem.FileSystem, fileSystem),
             Effect.provideService(Path.Path, path),
           ),
+        resolveJjGitStorePath: (cwd) =>
+          jj.detectRepository(cwd).pipe(
+            Effect.map((repository) => repository?.gitStorePath ?? null),
+          ),
       });
       const guardLegacyGitEffect = <A, E, R>(
         method: string,
@@ -657,9 +663,10 @@ const makeWsRpcHandlersLayer = () =>
         worktreesDir: config.worktreesDir,
         snapshotQuery: projectionReadModelQuery,
         git,
+        projectVcs,
       }).pipe(
         Effect.catchCause((cause) =>
-          Effect.logWarning("managed Git worktree retention failed", {
+          Effect.logWarning("managed VCS workspace retention failed", {
             cause: String(cause),
           }),
         ),
@@ -1142,6 +1149,26 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.vcsPull]: (input) =>
           rpcEffect(projectVcs.pull(input), "Failed to pull VCS reference"),
+        [WS_METHODS.vcsGithubRepository]: (input) =>
+          rpcEffect(
+            projectVcs.githubRepository(input),
+            "Failed to resolve GitHub repository",
+          ),
+        [WS_METHODS.vcsResolvePullRequest]: (input) =>
+          rpcEffect(
+            projectVcs.resolvePullRequest(input),
+            "Failed to resolve pull request",
+          ),
+        [WS_METHODS.vcsPullRequestSnapshot]: (input) =>
+          rpcEffect(
+            projectVcs.pullRequestSnapshot(input),
+            "Failed to load pull request checks and comments",
+          ),
+        [WS_METHODS.vcsPreparePullRequestThread]: (input) =>
+          rpcEffect(
+            projectVcs.preparePullRequestThread(input),
+            "Failed to prepare pull request thread",
+          ),
         [WS_METHODS.vcsRunStackedAction]: (input) =>
           bufferLiveUiStream(
             Stream.callback<GitActionProgressEvent, WsRpcError>((queue) =>

@@ -619,7 +619,7 @@ export function ChatHeader({
       />
       <TooltipPopup side="bottom">
         {!isGitRepo
-          ? "Diff panel is unavailable because this project is not a git repository."
+          ? "Diff panel is unavailable because this project has no configured source control repository."
           : diffDisabledReason && !diffOpen
             ? diffDisabledReason
             : diffToggleShortcutLabel

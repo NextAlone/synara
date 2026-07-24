@@ -69,8 +69,18 @@ export function resolveBranchToolbarValue(input: {
   activeWorktreePath: string | null;
   activeThreadBranch: string | null;
   currentGitBranch: string | null;
+  preferActiveThreadBranch?: boolean;
 }): string | null {
-  const { envMode, activeWorktreePath, activeThreadBranch, currentGitBranch } = input;
+  const {
+    envMode,
+    activeWorktreePath,
+    activeThreadBranch,
+    currentGitBranch,
+    preferActiveThreadBranch = false,
+  } = input;
+  if (preferActiveThreadBranch && activeThreadBranch !== null) {
+    return activeThreadBranch;
+  }
   if (envMode === "worktree" && !activeWorktreePath) {
     return activeThreadBranch ?? currentGitBranch;
   }
@@ -86,11 +96,13 @@ export function shouldSyncLocalThreadBranch(input: {
   currentGitBranch: string | null;
   hasServerThread: boolean;
   isBranchActionPending: boolean;
+  preferActiveThreadBranch?: boolean;
 }): boolean {
   return (
     input.envMode === "local" &&
     input.activeWorktreePath === null &&
     !input.isBranchActionPending &&
+    !(input.preferActiveThreadBranch && input.activeThreadBranch !== null) &&
     input.currentGitBranch !== null &&
     (input.hasServerThread || input.activeThreadBranch !== null) &&
     input.activeThreadBranch !== input.currentGitBranch

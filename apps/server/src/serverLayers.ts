@@ -94,6 +94,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
     Layer.provideMerge(studioOutputReactorLayer),
     Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(VcsLayerLive),
     Layer.provideMerge(TextGenerationLayerLive),
     Layer.provideMerge(ServerSettingsLive),
   );
@@ -193,6 +194,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
+    Layer.provideMerge(projectVcsLayer),
   );
 
   return Layer.mergeAll(

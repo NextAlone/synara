@@ -132,12 +132,12 @@ const make = Effect.gen(function* () {
   const pendingMessageStartByThread = new Map<ThreadId, MessageId>();
   // Coalesces live turn-diff recomputes: at most one queued + one in-flight per
   // thread. The flag is cleared when the worker starts processing the job so an
-  // edit arriving during the git work re-schedules and captures the newest tree.
+  // edit arriving during the VCS work re-schedules and captures the newest tree.
   const liveDiffScheduledThreads = new Set<ThreadId>();
 
   // Providers that stream their own unified diff (e.g. Codex) update the live
   // turn diff through ProviderRuntimeIngestion. For providers without that
-  // capability (e.g. Claude) we derive the live diff from git here instead.
+  // capability (e.g. Claude) we derive the live diff from the configured VCS here instead.
   const supportsLiveTurnDiffPatch = Effect.fnUntraced(function* (
     provider: ProviderRuntimeEvent["provider"],
   ) {
@@ -602,13 +602,13 @@ const make = Effect.gen(function* () {
     });
   });
 
-  // Derives a live turn diff from git while a turn is still running, for providers
+  // Derives a live turn diff from the configured VCS while a turn is still running, for providers
   // that do not stream their own unified diff (e.g. Claude). Snapshots the working
   // tree into a throwaway ref (isolated temp index — the real index/worktree are
   // untouched), diffs it against the turn-start baseline, and dispatches a
   // provider-diff placeholder so the "files changed" strip shows live +N/-M.
   //
-  // The terminal git checkpoint from `turn.completed` stays authoritative: it
+  // The terminal VCS checkpoint from `turn.completed` stays authoritative: it
   // captures with a real ref and status "ready", which the projector refuses to
   // let a later "missing" placeholder overwrite.
   const captureLiveTurnDiff = Effect.fnUntraced(function* (

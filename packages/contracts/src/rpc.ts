@@ -99,6 +99,16 @@ import {
 } from "./vcs";
 import { VcsRunStackedActionInput } from "./vcsActions";
 import {
+  VcsGitHubRepositoryInput,
+  VcsGitHubRepositoryResult,
+  VcsPreparePullRequestThreadInput,
+  VcsPreparePullRequestThreadResult,
+  VcsPullRequestSnapshotInput,
+  VcsPullRequestSnapshotResult,
+  VcsResolvePullRequestInput,
+  VcsResolvePullRequestResult,
+} from "./vcsPullRequests";
+import {
   PullRequestActionInput,
   PullRequestCommentInput,
   PullRequestActionResult,
@@ -509,6 +519,42 @@ export const WsVcsPullRpc = Rpc.make(WS_METHODS.vcsPull, {
   success: VcsPullResult,
   error: WsRpcError,
 });
+
+export const WsVcsResolvePullRequestRpc = Rpc.make(
+  WS_METHODS.vcsResolvePullRequest,
+  {
+    payload: VcsResolvePullRequestInput,
+    success: VcsResolvePullRequestResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsVcsGitHubRepositoryRpc = Rpc.make(
+  WS_METHODS.vcsGithubRepository,
+  {
+    payload: VcsGitHubRepositoryInput,
+    success: VcsGitHubRepositoryResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsVcsPullRequestSnapshotRpc = Rpc.make(
+  WS_METHODS.vcsPullRequestSnapshot,
+  {
+    payload: VcsPullRequestSnapshotInput,
+    success: VcsPullRequestSnapshotResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsVcsPreparePullRequestThreadRpc = Rpc.make(
+  WS_METHODS.vcsPreparePullRequestThread,
+  {
+    payload: VcsPreparePullRequestThreadInput,
+    success: VcsPreparePullRequestThreadResult,
+    error: WsRpcError,
+  },
+);
 
 export const WsVcsRunStackedActionRpc = Rpc.make(
   WS_METHODS.vcsRunStackedAction,
@@ -1105,6 +1151,10 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsVcsRemoveWorkspaceRpc,
   WsVcsHandoffThreadRpc,
   WsVcsPullRpc,
+  WsVcsGitHubRepositoryRpc,
+  WsVcsResolvePullRequestRpc,
+  WsVcsPullRequestSnapshotRpc,
+  WsVcsPreparePullRequestThreadRpc,
   WsVcsRunStackedActionRpc,
   WsGitGithubRepositoryRpc,
   WsGitStatusRpc,

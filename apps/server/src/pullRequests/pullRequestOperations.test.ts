@@ -1,6 +1,6 @@
 import { ProjectId, type OrchestrationProject } from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { GitHubPullRequestDetailData } from "../git/Services/GitHubCli";
 import { createGitHubCliWithFakeGh } from "../git/testing/fakeGitHubCli";
@@ -52,6 +52,48 @@ const detail: GitHubPullRequestDetailData = {
 };
 
 describe("makePullRequestOperations", () => {
+  it("uses the backend-resolved Git cwd for pull-request diffs", async () => {
+    const base = createGitHubCliWithFakeGh().service;
+    const getPullRequestDiff = vi.fn(() =>
+      Effect.succeed({ patch: "diff --git", truncated: false }),
+    );
+    const operations = makePullRequestOperations({
+      github: { ...base, getPullRequestDiff },
+      pins: {
+        listByProjectIds: () => Effect.succeed([]),
+        setPinned: () => Effect.void,
+      },
+      findProject: () => Effect.succeed(project),
+      validateRepository: (repository) => Effect.succeed(repository),
+      validateProjectRepository: (_project, repository) =>
+        Effect.succeed(repository),
+      resolveGitHubCwd: () => Effect.succeed("/jj/git-store"),
+      loadMergeCapabilities: () =>
+        Effect.succeed({
+          merge: true,
+          squash: true,
+          rebase: true,
+          deleteBranchOnMerge: false,
+        }),
+      withGitHubRead: (effect) => effect,
+      finalizeMutationCaches: () => Effect.void,
+    });
+
+    await Effect.runPromise(
+      operations.diff({
+        projectId: project.id,
+        repository: "acme/widgets",
+        number: 42,
+      }),
+    );
+
+    expect(getPullRequestDiff).toHaveBeenCalledWith({
+      cwd: "/jj/git-store",
+      repository: "acme/widgets",
+      number: 42,
+    });
+  });
+
   it("starts detail, merge-capability, and review-comment reads together", async () => {
     await Effect.runPromise(
       Effect.scoped(
@@ -82,6 +124,7 @@ describe("makePullRequestOperations", () => {
             findProject: () => Effect.succeed(project),
             validateRepository: (repository) => Effect.succeed(repository),
             validateProjectRepository: (_project, repository) => Effect.succeed(repository),
+            resolveGitHubCwd: () => Effect.succeed(project.workspaceRoot),
             loadMergeCapabilities: () =>
               waitForRelease(capabilitiesStarted, {
                 merge: true,

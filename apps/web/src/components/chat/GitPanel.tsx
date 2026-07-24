@@ -34,7 +34,11 @@ import {
 import { PlusIcon, RefreshCwIcon, RotateCcwIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
-import { createProjectSelector, createThreadSelector } from "~/storeSelectors";
+import {
+  createProjectSelector,
+  createThreadExistsSelector,
+  createThreadSelector,
+} from "~/storeSelectors";
 import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
@@ -206,13 +210,19 @@ export function GitPanel(props: {
   const thread = useStore(
     useMemo(() => createThreadSelector(props.hostThreadId), [props.hostThreadId]),
   );
+  const hasServerThread = useStore(
+    useMemo(
+      () => createThreadExistsSelector(props.hostThreadId),
+      [props.hostThreadId],
+    ),
+  );
   const project = useStore(
     useMemo(() => createProjectSelector(props.projectId), [props.projectId]),
   );
   const cwd = thread?.worktreePath ?? project?.cwd ?? null;
   const vcsTarget = makeVcsQueryTarget(
     project,
-    thread?.worktreePath ? thread.id : null,
+    hasServerThread ? props.hostThreadId : null,
   );
   const isGitBackend = vcsTarget.backend === "git";
 

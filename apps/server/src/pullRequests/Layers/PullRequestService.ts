@@ -12,13 +12,13 @@ import { Effect, Layer, Scope, Semaphore } from "effect";
 
 import { ServerConfig } from "../../config";
 import { GitHubCliError } from "../../git/Errors";
-import { GitCore } from "../../git/Services/GitCore";
 import {
   GitHubCli,
   type GitHubCliShape,
   type GitHubPullRequestListItem,
 } from "../../git/Services/GitHubCli";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery";
+import { ProjectVcs } from "../../vcs/Services/ProjectVcs";
 import {
   ProjectPullRequestPins,
   type ProjectPullRequestPinsShape,
@@ -36,7 +36,7 @@ import {
 } from "../../pullRequests.logic";
 import { makeKeyedSingleFlightCache } from "../KeyedSingleFlightCache";
 import { PullRequestService, type PullRequestServiceShape } from "../Services/PullRequestService";
-import { resolveGitHubRepositories, type GitHubRepositoryInventory } from "../repositoryResolution";
+import type { GitHubRepositoryInventory } from "../repositoryResolution";
 import {
   cleanupUnconfiguredPullRequestPins,
   indexProjectRepositoryInventories,
@@ -73,6 +73,9 @@ export interface PullRequestServiceDependencies {
   readonly resolveRepositories: (
     project: OrchestrationProject,
   ) => Effect.Effect<GitHubRepositoryInventory, unknown>;
+  readonly resolveGitHubCwd: (
+    project: OrchestrationProject,
+  ) => Effect.Effect<string, unknown>;
 }
 
 /** Exact gh error shape for a PR number that is known not to exist. Generic 404/auth failures are
@@ -554,6 +557,7 @@ export const makePullRequestService = (
       findProject,
       validateRepository: validatePullRequestRepository,
       validateProjectRepository: validateProjectPullRequestRepository,
+      resolveGitHubCwd: dependencies.resolveGitHubCwd,
       loadMergeCapabilities,
       withGitHubRead,
       finalizeMutationCaches: pullRequestMutationCacheFinalizer,
@@ -570,16 +574,38 @@ export const PullRequestServiceLive = Layer.effect(
   PullRequestService,
   Effect.gen(function* () {
     const config = yield* ServerConfig;
-    const git = yield* GitCore;
     const github = yield* GitHubCli;
     const pins = yield* ProjectPullRequestPins;
     const projection = yield* ProjectionSnapshotQuery;
+    const projectVcs = yield* ProjectVcs;
     return yield* makePullRequestService({
       homeDir: config.homeDir,
       github,
       pins,
       getSnapshot: () => projection.getSnapshot(),
-      resolveRepositories: (project) => resolveGitHubRepositories(git, project.workspaceRoot),
+      resolveRepositories: (project) =>
+        project.vcs.binding
+          ? projectVcs
+              .githubRepository({
+                projectId: project.id,
+                expectedEpoch: project.vcs.epoch,
+              })
+              .pipe(
+                Effect.map((result) => ({
+                  repositories: result.repositories,
+                  authoritative: true,
+                })),
+              )
+          : Effect.fail(
+              new Error(
+                "Choose Git or JJ for this project before loading pull requests.",
+              ),
+            ),
+      resolveGitHubCwd: (project) =>
+        projectVcs.remoteGitCwd({
+          projectId: project.id,
+          expectedEpoch: project.vcs.epoch,
+        }),
     });
   }),
 );

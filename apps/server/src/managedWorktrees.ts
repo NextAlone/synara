@@ -242,15 +242,23 @@ export function pruneProjectedArchivedManagedWorktrees(input: {
   readonly worktreesDir: string;
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly git: GitCoreShape;
+  readonly projectVcs: ProjectVcsShape;
 }): Effect.Effect<ReadonlyArray<GitManagedWorktreeInventoryEntry>, Error> {
   return Effect.gen(function* () {
     const snapshot = yield* input.snapshotQuery.getSnapshot();
-    return yield* pruneArchivedManagedWorktrees({
+    const gitInventory = yield* pruneArchivedManagedWorktrees({
       worktreesDir: input.worktreesDir,
       snapshotsDir: path.join(input.homeDir, "worktree-snapshots"),
       threads: snapshot.threads,
       git: input.git,
     });
+    yield* pruneArchivedManagedJjWorkspaces({
+      worktreesDir: input.worktreesDir,
+      snapshotQuery: input.snapshotQuery,
+      projectVcs: input.projectVcs,
+      threads: snapshot.threads,
+    });
+    return gitInventory;
   });
 }
 
@@ -344,6 +352,97 @@ export function listProjectedManagedWorkspaces(input: {
       (left, right) =>
         left.workspaceRoot.localeCompare(right.workspaceRoot) ||
         left.path.localeCompare(right.path),
+    );
+  });
+}
+
+function pruneArchivedManagedJjWorkspaces(input: {
+  readonly worktreesDir: string;
+  readonly snapshotQuery: ProjectionSnapshotQueryShape;
+  readonly projectVcs: ProjectVcsShape;
+  readonly threads: ReadonlyArray<OrchestrationThread>;
+}): Effect.Effect<void, Error> {
+  return Effect.gen(function* () {
+    const inventory = (
+      yield* listProjectedManagedWorkspaces({
+        worktreesDir: input.worktreesDir,
+        snapshotQuery: input.snapshotQuery,
+        projectVcs: input.projectVcs,
+      })
+    ).filter((entry) => entry.backend === "jj");
+    if (inventory.length === 0) return;
+
+    const canonicalByRecordedPath = yield* canonicalizeThreadWorktreePaths(
+      input.threads,
+    );
+    const canonicalThreadPath = (thread: OrchestrationThread): string | null => {
+      const recordedPath = threadManagedWorktreePath(thread);
+      return recordedPath === null
+        ? null
+        : (canonicalByRecordedPath.get(recordedPath) ?? null);
+    };
+    const inventoryByPath = new Map(
+      inventory.map((entry) => [entry.path, entry]),
+    );
+    const activePaths = new Set(
+      input.threads
+        .filter((thread) => (thread.archivedAt ?? null) === null)
+        .map(canonicalThreadPath)
+        .filter((value): value is string => value !== null),
+    );
+    const seenArchivedPaths = new Set<string>();
+    const removalCandidates = input.threads
+      .filter((thread) => (thread.archivedAt ?? null) !== null)
+      .map((thread) => {
+        const workspacePath = canonicalThreadPath(thread);
+        return workspacePath
+          ? { thread, entry: inventoryByPath.get(workspacePath) ?? null }
+          : { thread, entry: null };
+      })
+      .filter(
+        (
+          value,
+        ): value is {
+          thread: OrchestrationThread;
+          entry: ServerManagedWorktree;
+        } => value.entry !== null && !activePaths.has(value.entry.path),
+      )
+      .sort((left, right) =>
+        (right.thread.archivedAt ?? "").localeCompare(
+          left.thread.archivedAt ?? "",
+        ),
+      )
+      .filter(({ entry }) => {
+        if (seenArchivedPaths.has(entry.path)) return false;
+        seenArchivedPaths.add(entry.path);
+        return true;
+      })
+      .slice(MANAGED_WORKTREE_RETENTION_COUNT);
+
+    yield* Effect.forEach(
+      removalCandidates,
+      ({ thread, entry }) =>
+        input.projectVcs
+          .removeWorkspace({
+            projectId: entry.projectId,
+            expectedEpoch: entry.epoch,
+            path: entry.path,
+            force: true,
+          })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(
+                "managed JJ workspace retention skipped an unsafe cleanup",
+                {
+                  threadId: thread.id,
+                  workspacePath: entry.path,
+                  error:
+                    error instanceof Error ? error.message : String(error),
+                },
+              ),
+            ),
+          ),
+      { discard: true, concurrency: 1 },
     );
   });
 }

@@ -69,6 +69,7 @@ type CompletionEvaluationInputForTest = Parameters<
   TextGenerationShape["evaluateAutomationCompletion"]
 >[0];
 let gitMode: "nonRepo" | "worktree" = "nonRepo";
+let vcsBackend: "git" | "jj" = "git";
 let gitStatusHook: ((cwd: string) => Effect.Effect<void>) | null = null;
 let createWorktreeHook: ((input: VcsCreateWorkspaceInput) => Effect.Effect<void>) | null =
   null;
@@ -103,6 +104,7 @@ function resetHarness() {
   createdWorktrees.length = 0;
   removedWorktrees.length = 0;
   gitMode = "nonRepo";
+  vcsBackend = "git";
   gitStatusHook = null;
   createWorktreeHook = null;
   threadShell = Option.none();
@@ -117,6 +119,18 @@ function resetHarness() {
   completionEvaluationGate = null;
   failDispatchType = null;
   dispatchHook = null;
+}
+
+function currentProject() {
+  return {
+    ...project,
+    vcs: {
+      ...project.vcs,
+      binding: project.vcs.binding
+        ? { ...project.vcs.binding, backend: vcsBackend }
+        : null,
+    },
+  };
 }
 
 // Build a partial thread shell; only the fields reconcileThread reads are populated.
@@ -425,12 +439,13 @@ const projectionSnapshotQuery = {
     Effect.succeed({
       snapshotSequence: 0,
       spaces: [],
-      projects: [project],
+      projects: [currentProject()],
       threads: [],
       updatedAt: now,
     }),
-  getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.some(project as never)),
-  getProjectShellById: () => Effect.succeed(Option.some(project)),
+  getActiveProjectByWorkspaceRoot: () =>
+    Effect.succeed(Option.some(currentProject() as never)),
+  getProjectShellById: () => Effect.succeed(Option.some(currentProject())),
   getSpaceShellById: () => Effect.succeed(Option.none()),
   getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
   getThreadCheckpointContext: () => Effect.succeed(Option.none()),
@@ -478,10 +493,11 @@ const projectVcs = {
       return {
         projectId,
         threadId: null,
-        backend: "git" as const,
+        backend: vcsBackend,
         epoch: project.vcs.epoch,
-        binding: project.vcs.binding!,
+        binding: currentProject().vcs.binding!,
         cwd: project.workspaceRoot,
+        preferredReference: null,
       };
     }),
   createWorkspace: (input: VcsCreateWorkspaceInput) =>
@@ -491,7 +507,7 @@ const projectVcs = {
         yield* createWorktreeHook(input);
       }
       return {
-        backend: "git" as const,
+        backend: vcsBackend,
         epoch: project.vcs.epoch,
         workspace: {
           name: "automation-worktree",
@@ -865,6 +881,21 @@ layer("AutomationService", (it) => {
         threadCreate.associatedWorktreeRef,
         "0123456789abcdef0123456789abcdef01234567",
       );
+    }),
+  );
+
+  it.effect("uses the current change as the source of jj automation workspaces", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      gitMode = "worktree";
+      vcsBackend = "jj";
+      const service = yield* AutomationService;
+      const created = yield* service.create(createInput("worktree"));
+
+      yield* service.runNow({ automationId: created.id });
+
+      assert.strictEqual(createdWorktrees.length, 1);
+      assert.strictEqual(createdWorktrees[0]?.sourceRef, "@");
     }),
   );
 

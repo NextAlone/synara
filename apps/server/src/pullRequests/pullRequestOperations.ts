@@ -23,6 +23,9 @@ export function makePullRequestOperations(dependencies: {
     project: OrchestrationProject,
     repository: string,
   ) => Effect.Effect<string, unknown>;
+  resolveGitHubCwd: (
+    project: OrchestrationProject,
+  ) => Effect.Effect<string, unknown>;
   loadMergeCapabilities: (
     cwd: string,
     repository: string,
@@ -37,21 +40,22 @@ export function makePullRequestOperations(dependencies: {
   const loadDetail = (project: OrchestrationProject, repositoryInput: string, number: number) =>
     Effect.gen(function* () {
       const repository = yield* dependencies.validateProjectRepository(project, repositoryInput);
+      const cwd = yield* dependencies.resolveGitHubCwd(project);
       const [owner = "", repo = ""] = repository.split("/");
       const [detail, mergeCapabilities, reviewCommentsResult] = yield* Effect.all(
         [
           dependencies.withGitHubRead(
             dependencies.github.getPullRequestDetail({
-              cwd: project.workspaceRoot,
+              cwd,
               repository,
               number,
             }),
           ),
-          dependencies.loadMergeCapabilities(project.workspaceRoot, repository),
+          dependencies.loadMergeCapabilities(cwd, repository),
           dependencies
             .withGitHubRead(
               dependencies.github.getPullRequestReviewComments({
-                cwd: project.workspaceRoot,
+                cwd,
                 host: "github.com",
                 owner,
                 repo,
@@ -110,9 +114,10 @@ export function makePullRequestOperations(dependencies: {
     Effect.gen(function* () {
       const project = yield* dependencies.findProject(input.projectId);
       const repository = yield* dependencies.validateProjectRepository(project, input.repository);
+      const cwd = yield* dependencies.resolveGitHubCwd(project);
       return yield* dependencies.withGitHubRead(
         dependencies.github.getPullRequestDiff({
-          cwd: project.workspaceRoot,
+          cwd,
           repository,
           number: input.number,
         }),
@@ -123,10 +128,11 @@ export function makePullRequestOperations(dependencies: {
     Effect.gen(function* () {
       const project = yield* dependencies.findProject(input.projectId);
       const repository = yield* dependencies.validateProjectRepository(project, input.repository);
+      const cwd = yield* dependencies.resolveGitHubCwd(project);
       if (input.action === "merge") {
         const mergeMethod = input.mergeMethod ?? "merge";
         const capabilities = yield* dependencies.loadMergeCapabilities(
-          project.workspaceRoot,
+          cwd,
           repository,
         );
         if (!isPullRequestMergeMethodAllowed(capabilities, mergeMethod)) {
@@ -137,7 +143,7 @@ export function makePullRequestOperations(dependencies: {
       }
       yield* dependencies.github
         .runPullRequestAction({
-          cwd: project.workspaceRoot,
+          cwd,
           repository,
           number: input.number,
           action: input.action,
@@ -162,9 +168,10 @@ export function makePullRequestOperations(dependencies: {
     Effect.gen(function* () {
       const project = yield* dependencies.findProject(input.projectId);
       const repository = yield* dependencies.validateProjectRepository(project, input.repository);
+      const cwd = yield* dependencies.resolveGitHubCwd(project);
       yield* dependencies.github
         .commentOnPullRequest({
-          cwd: project.workspaceRoot,
+          cwd,
           repository,
           number: input.number,
           body: input.body,

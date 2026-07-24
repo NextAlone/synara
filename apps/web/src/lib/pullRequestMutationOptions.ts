@@ -9,6 +9,7 @@ import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 
 import { ensureNativeApi } from "~/nativeApi";
 import { gitQueryKeys } from "./gitReactQuery";
+import { vcsQueryKeys } from "./vcsReactQuery";
 import {
   cancelPullRequestListScopes,
   invalidateOtherPullRequestListQueries,
@@ -209,6 +210,8 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
           queryKey: pullRequestQueryKeys.detail(input),
           exact: true,
         }),
+        queryClient.invalidateQueries({ queryKey: vcsQueryKeys.statuses }),
+        queryClient.invalidateQueries({ queryKey: vcsQueryKeys.pullRequests }),
       ]);
       refreshPullRequestReviewRequestCounts(queryClient);
     },
@@ -222,6 +225,8 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
         queryClient.invalidateQueries({
           queryKey: gitQueryKeys.pullRequest(result.workspaceRoot),
         }),
+        queryClient.invalidateQueries({ queryKey: vcsQueryKeys.statuses }),
+        queryClient.invalidateQueries({ queryKey: vcsQueryKeys.pullRequests }),
       ]);
       refreshPullRequestReviewRequestCounts(queryClient);
     },
@@ -340,6 +345,7 @@ export function pullRequestCommentMutationOptions(queryClient: QueryClient) {
           queryKey: detailKey,
           exact: true,
         }),
+        queryClient.invalidateQueries({ queryKey: vcsQueryKeys.pullRequests }),
       ]);
     },
   });

@@ -21,7 +21,11 @@ import { PullRequestDiffStat } from "../../pullRequest/PullRequestDiffStat";
 import { PullRequestConflictIcon } from "../../pullRequest/pullRequestStatePresentation";
 import { PR_QUIET_INK_CLASS_NAME } from "../../pullRequest/pullRequestText";
 import { appendComposerPromptText } from "~/lib/chatReferences";
-import { gitPullRequestSnapshotQueryOptions, gitStatusQueryOptions } from "~/lib/gitReactQuery";
+import {
+  type VcsQueryTarget,
+  vcsPullRequestSnapshotQueryOptions,
+  vcsStatusQueryOptions,
+} from "~/lib/vcsReactQuery";
 import {
   ArrowUpRightIcon,
   ChatBubbleIcon,
@@ -186,7 +190,7 @@ function MenuPlaceholder({ text }: { text: string }) {
 }
 
 export function EnvironmentPullRequestSection({
-  gitCwd,
+  vcsTarget,
   enabled,
   activeThreadId,
   projectId,
@@ -194,7 +198,7 @@ export function EnvironmentPullRequestSection({
   onOpenUrl,
   onClose,
 }: {
-  gitCwd: string | null;
+  vcsTarget: VcsQueryTarget;
   /** Gate polling on the panel being open (mirrors the Local Servers section). */
   enabled: boolean;
   activeThreadId: ThreadId | null;
@@ -205,13 +209,13 @@ export function EnvironmentPullRequestSection({
   onClose: () => void;
 }) {
   const openPane = useRightDockStore((store) => store.openPane);
-  // Shares the cached git status the git block already fetches — no extra RPC.
-  const { data: gitStatus } = useQuery(gitStatusQueryOptions(gitCwd));
-  const pr = gitStatus?.pr ?? null;
+  // Shares the cached project-scoped status used by the VCS controls.
+  const { data: vcsStatus } = useQuery(vcsStatusQueryOptions(vcsTarget));
+  const pr = vcsStatus?.pullRequest ?? null;
 
   const snapshotQuery = useQuery(
-    gitPullRequestSnapshotQueryOptions({
-      cwd: gitCwd,
+    vcsPullRequestSnapshotQueryOptions({
+      target: vcsTarget,
       reference: pr?.url ?? null,
       enabled: enabled && pr !== null && pr.state === "open",
     }),

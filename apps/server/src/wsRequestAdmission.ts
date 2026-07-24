@@ -40,6 +40,7 @@ const EXPENSIVE_READ_METHODS = new Set<string>([
   WS_METHODS.vcsReadDiff,
   WS_METHODS.vcsListReferences,
   WS_METHODS.vcsListWorkspaces,
+  WS_METHODS.vcsPullRequestSnapshot,
   WS_METHODS.gitStatus,
   WS_METHODS.gitReadWorkingTreeDiff,
   WS_METHODS.gitSummarizeDiff,

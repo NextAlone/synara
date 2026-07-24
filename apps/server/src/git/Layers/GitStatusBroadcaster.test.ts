@@ -55,6 +55,8 @@ function makeTestLayer(state: {
     readWorkingTreeDiff: () => Effect.die("readWorkingTreeDiff should not be called in this test"),
     summarizeDiff: () => Effect.die("summarizeDiff should not be called in this test"),
     resolvePullRequest: () => Effect.die("resolvePullRequest should not be called in this test"),
+    materializePullRequestHead: () =>
+      Effect.die("materializePullRequestHead should not be called in this test"),
     pullRequestSnapshot: () => Effect.die("pullRequestSnapshot should not be called in this test"),
     preparePullRequestThread: () =>
       Effect.die("preparePullRequestThread should not be called in this test"),

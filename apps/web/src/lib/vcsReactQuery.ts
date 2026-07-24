@@ -8,6 +8,7 @@ import type {
   VcsCreateReferenceInput,
   VcsCreateWorkspaceInput,
   VcsHandoffThreadInput,
+  VcsPreparePullRequestThreadInput,
   VcsReadDiffInput,
   VcsRemoveWorkspaceInput,
   VcsStackedAction,
@@ -67,6 +68,8 @@ export const vcsQueryKeys = {
   references: ["vcs", "references"] as const,
   diffs: ["vcs", "diff"] as const,
   workspaces: ["vcs", "workspaces"] as const,
+  githubRepositories: ["vcs", "github-repository"] as const,
+  pullRequests: ["vcs", "pull-request"] as const,
   status: (target: VcsQueryTarget) =>
     [
       "vcs",
@@ -103,6 +106,36 @@ export const vcsQueryKeys = {
       target.epoch,
       target.backend,
     ] as const,
+  githubRepository: (target: VcsQueryTarget) =>
+    [
+      "vcs",
+      "github-repository",
+      target.projectId,
+      target.threadId,
+      target.epoch,
+      target.backend,
+    ] as const,
+  pullRequest: (target: VcsQueryTarget, reference: string | null) =>
+    [
+      "vcs",
+      "pull-request",
+      target.projectId,
+      target.threadId,
+      target.epoch,
+      target.backend,
+      reference,
+    ] as const,
+  pullRequestSnapshot: (target: VcsQueryTarget, reference: string | null) =>
+    [
+      "vcs",
+      "pull-request",
+      target.projectId,
+      target.threadId,
+      target.epoch,
+      target.backend,
+      "snapshot",
+      reference,
+    ] as const,
 };
 
 export const vcsMutationKeys = {
@@ -123,6 +156,15 @@ export const vcsMutationKeys = {
       "pull",
       target.projectId,
       target.threadId,
+      target.epoch,
+      target.backend,
+    ] as const,
+  preparePullRequestThread: (target: VcsQueryTarget) =>
+    [
+      "vcs",
+      "mutation",
+      "prepare-pull-request-thread",
+      target.projectId,
       target.epoch,
       target.backend,
     ] as const,
@@ -161,6 +203,78 @@ export function vcsReferencesQueryOptions(
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     refetchInterval: VCS_REFERENCES_REFETCH_INTERVAL_MS,
+  });
+}
+
+export function vcsResolvePullRequestQueryOptions(input: {
+  target: VcsQueryTarget;
+  reference: string | null;
+}) {
+  return queryOptions({
+    queryKey: vcsQueryKeys.pullRequest(input.target, input.reference),
+    queryFn: () => {
+      if (!input.reference) {
+        throw new Error("Pull request lookup is unavailable.");
+      }
+      return ensureNativeApi().vcs.resolvePullRequest({
+        ...requestTarget(input.target),
+        reference: input.reference,
+      });
+    },
+    enabled:
+      input.target.projectId !== null &&
+      input.target.backend !== null &&
+      input.reference !== null,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
+export function vcsGithubRepositoryQueryOptions(
+  target: VcsQueryTarget,
+  enabled = true,
+) {
+  return queryOptions({
+    queryKey: vcsQueryKeys.githubRepository(target),
+    queryFn: () => ensureNativeApi().vcs.githubRepository(requestTarget(target)),
+    enabled:
+      enabled && target.projectId !== null && target.backend !== null,
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
+export function vcsPullRequestSnapshotQueryOptions(input: {
+  target: VcsQueryTarget;
+  reference: string | null;
+  enabled?: boolean;
+}) {
+  return queryOptions({
+    queryKey: vcsQueryKeys.pullRequestSnapshot(input.target, input.reference),
+    queryFn: () => {
+      if (!input.reference) {
+        throw new Error("Pull request snapshot is unavailable.");
+      }
+      return ensureNativeApi().vcs.pullRequestSnapshot({
+        ...requestTarget(input.target),
+        reference: input.reference,
+      });
+    },
+    enabled:
+      (input.enabled ?? true) &&
+      input.target.projectId !== null &&
+      input.target.backend !== null &&
+      input.reference !== null,
+    staleTime: 30_000,
+    refetchInterval: (query) =>
+      query.state.data && query.state.data.pullRequest.state !== "open"
+        ? false
+        : 60_000,
+    refetchOnWindowFocus: (query) =>
+      !query.state.data || query.state.data.pullRequest.state === "open",
+    refetchOnReconnect: true,
   });
 }
 
@@ -251,6 +365,23 @@ export function vcsHandoffThreadMutationOptions(input: { queryClient: QueryClien
     mutationKey: ["vcs", "mutation", "handoff-thread"] as const,
     mutationFn: (request: VcsHandoffThreadInput) =>
       ensureNativeApi().vcs.handoffThread(request),
+    onSettled: mutationInvalidation(input.queryClient),
+  });
+}
+
+export function vcsPreparePullRequestThreadMutationOptions(input: {
+  target: VcsQueryTarget;
+  queryClient: QueryClient;
+}) {
+  return mutationOptions({
+    mutationKey: vcsMutationKeys.preparePullRequestThread(input.target),
+    mutationFn: (
+      request: Pick<VcsPreparePullRequestThreadInput, "reference" | "mode">,
+    ) =>
+      ensureNativeApi().vcs.preparePullRequestThread({
+        ...requestTarget(input.target),
+        ...request,
+      }),
     onSettled: mutationInvalidation(input.queryClient),
   });
 }

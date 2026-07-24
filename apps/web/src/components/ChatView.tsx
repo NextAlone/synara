@@ -69,12 +69,10 @@ import { Debouncer, useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate } from "@tanstack/react-router";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
-  gitGithubRepositoryQueryOptions,
-} from "~/lib/gitReactQuery";
-import {
   makeVcsQueryTarget,
   VCS_DIFF_LIVE_REFETCH_INTERVAL_MS,
   vcsCreateWorkspaceMutationOptions,
+  vcsGithubRepositoryQueryOptions,
   vcsReferencesQueryOptions,
 } from "~/lib/vcsReactQuery";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
@@ -3206,7 +3204,7 @@ export default function ChatView({
       : null;
   const vcsReferenceTarget = makeVcsQueryTarget(
     activeProject,
-    isServerThread && resolvedThreadWorktreePath ? activeThread?.id ?? null : null,
+    isServerThread ? activeThread?.id ?? null : null,
   );
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const mentionTriggerQuery = composerTrigger?.kind === "mention" ? composerTrigger.query : "";
@@ -4059,9 +4057,9 @@ export default function ChatView({
     environmentPanelOpen,
   });
   const githubRepositoryQuery = useQuery(
-    gitGithubRepositoryQueryOptions(
-      gitBranchSourceCwd,
-      environmentPanelVisible && vcsReferenceTarget.backend === "git",
+    vcsGithubRepositoryQueryOptions(
+      vcsReferenceTarget,
+      environmentPanelVisible,
     ),
   );
   const threadRecap = useThreadRecap({
@@ -10078,6 +10076,7 @@ export default function ChatView({
   // open, and the docked right column when it is closed) so the two never drift.
   const environmentPanelProps: Omit<EnvironmentPanelProps, "open" | "variant"> = {
     gitCwd: threadWorkspaceCwd,
+    vcsTarget: vcsReferenceTarget,
     openInTarget: threadWorkspaceCwd,
     githubRepository: githubRepositoryQuery.data?.repository ?? null,
     githubRepositories: githubRepositoryQuery.data?.repositories ?? [],
@@ -11061,7 +11060,7 @@ export default function ChatView({
               <PullRequestThreadDialog
                 key={pullRequestDialogState.key}
                 open
-                cwd={threadArtifactWorkspaceRoot}
+                target={vcsReferenceTarget}
                 initialReference={pullRequestDialogState.initialReference}
                 onOpenChange={(open) => {
                   if (!open) {
@@ -11159,6 +11158,7 @@ export default function ChatView({
       />
       <ThreadWorktreeHandoffDialog
         open={worktreeHandoffDialogOpen}
+        backend={activeProject?.vcs.binding?.backend ?? null}
         worktreeName={worktreeHandoffName}
         busy={handoffBusy}
         onWorktreeNameChange={setWorktreeHandoffName}

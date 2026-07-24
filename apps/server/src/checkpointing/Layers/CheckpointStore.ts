@@ -259,26 +259,32 @@ const makeCheckpointStore = Effect.gen(function* () {
           if (existingRevision !== null) return;
         }
 
-        // Snapshot the filesystem into @ before reading its immutable commit id.
+        // Snapshot the filesystem into @, then duplicate that revision for the
+        // checkpoint. A bookmark attached directly to @ would follow later
+        // rewrites; advancing @ with `jj new` would instead make normal working
+        // copy changes disappear from status/commit flows.
         yield* jj.execute({
           operation: "CheckpointStore.captureCheckpoint.jjSnapshot",
           cwd: input.cwd,
           args: ["status"],
         });
-        const snapshot = yield* jj.readRevisionIdentity(input.cwd);
-
-        // Move the working copy to a fresh child before anchoring the snapshot.
-        // This keeps subsequent agent edits off the checkpoint revision.
+        const snapshotToken = randomUUID();
+        const snapshotDescription = `synara checkpoint snapshot ${snapshotToken}`;
+        const duplicateDescriptionTemplate = JSON.stringify(snapshotDescription);
         yield* jj.execute({
-          operation: "CheckpointStore.captureCheckpoint.jjContinue",
+          operation: "CheckpointStore.captureCheckpoint.jjDuplicate",
           cwd: input.cwd,
           args: [
-            "new",
-            "--message",
-            "wip: Synara checkpoint continuation",
-            snapshot.commitId,
+            "--config",
+            `templates.duplicate_description=${JSON.stringify(duplicateDescriptionTemplate)}`,
+            "duplicate",
+            "@",
           ],
         });
+        const snapshot = yield* jj.readRevisionIdentity(
+          input.cwd,
+          `description(substring:${JSON.stringify(snapshotToken)})`,
+        );
         yield* jj.execute({
           operation: "CheckpointStore.captureCheckpoint.jjAnchor",
           cwd: input.cwd,
@@ -290,7 +296,17 @@ const makeCheckpointStore = Effect.gen(function* () {
             snapshot.commitId,
             jjCheckpointBookmark(input.checkpointRef),
           ],
-        });
+        }).pipe(
+          Effect.onError(() =>
+            jj
+              .execute({
+                operation: "CheckpointStore.captureCheckpoint.jjCleanup",
+                cwd: input.cwd,
+                args: ["--ignore-working-copy", "abandon", snapshot.commitId],
+              })
+              .pipe(Effect.ignore),
+          ),
+        );
       }),
     );
 
@@ -659,35 +675,60 @@ const makeCheckpointStore = Effect.gen(function* () {
         );
         if (!fromRevision || !toRevision) return false;
 
-        // Synara capture makes each turn snapshot a direct child of its start
-        // snapshot. Verify that invariant before applying the native inverse.
-        const parentDelta = yield* jj.execute({
-          operation: "CheckpointStore.reverseCheckpointDiff.jjVerify",
+        const turnDiff = yield* jj.readRangeDiff(
+          input.cwd,
+          fromRevision,
+          toRevision,
+        );
+        const affectedPaths = [
+          ...new Set(
+            turnDiff.files.flatMap((file) => [
+              file.sourcePath,
+              file.targetPath,
+            ]),
+          ),
+        ];
+        if (affectedPaths.length === 0) return true;
+
+        // Restoring exact checkpoint content is native and handles binary files,
+        // but it would overwrite newer edits in the same paths. Refuse that
+        // case instead of silently discarding post-checkpoint work.
+        const currentDelta = yield* jj.execute({
+          operation: "CheckpointStore.reverseCheckpointDiff.jjVerifyCurrent",
           cwd: input.cwd,
           args: [
             "--ignore-working-copy",
             "diff",
             "--from",
-            fromRevision,
+            toRevision,
             "--to",
-            `${toRevision}-`,
+            "@",
             "--summary",
             "--",
-            ".",
+            ...affectedPaths,
           ],
           maxOutputBytes: input.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
         });
-        if (parentDelta.stdout.trim().length > 0) {
+        if (currentDelta.stdout.trim().length > 0) {
           return yield* new CheckpointInvariantError({
             operation: "CheckpointStore.reverseCheckpointDiff.jj",
-            detail: "Turn checkpoint is not based on its recorded start snapshot.",
+            detail:
+              "The workspace changed again in files touched by this turn; refusing to overwrite newer JJ changes.",
           });
         }
 
         yield* jj.execute({
           operation: "CheckpointStore.reverseCheckpointDiff.jj",
           cwd: input.cwd,
-          args: ["restore", "--changes-in", toRevision, "--into", "@", "--", "."],
+          args: [
+            "restore",
+            "--from",
+            fromRevision,
+            "--into",
+            "@",
+            "--",
+            ...affectedPaths,
+          ],
         });
         return true;
       }),
@@ -725,12 +766,19 @@ const makeCheckpointStore = Effect.gen(function* () {
           input.checkpointRefs,
           (checkpointRef) =>
             resolveJjCheckpointRevision(input.cwd, checkpointRef).pipe(
-              Effect.map((revision) => (revision === null ? null : checkpointRef)),
+              Effect.map((revision) =>
+                revision === null ? null : { checkpointRef, revision },
+              ),
             ),
           { concurrency: 4 },
         );
         const existing = resolved.filter(
-          (checkpointRef): checkpointRef is CheckpointRef => checkpointRef !== null,
+          (
+            entry,
+          ): entry is {
+            readonly checkpointRef: CheckpointRef;
+            readonly revision: string;
+          } => entry !== null,
         );
         if (existing.length === 0) return;
         yield* jj.execute({
@@ -740,9 +788,51 @@ const makeCheckpointStore = Effect.gen(function* () {
             "--ignore-working-copy",
             "bookmark",
             "delete",
-            ...existing.map(jjCheckpointBookmark),
+            ...existing.map((entry) => jjCheckpointBookmark(entry.checkpointRef)),
           ],
         });
+        yield* Effect.forEach(
+          [...new Set(existing.map((entry) => entry.revision))],
+          (revision) =>
+            jj
+              .execute({
+                operation: "CheckpointStore.deleteCheckpointRefs.jjRemainingBookmarks",
+                cwd: input.cwd,
+                args: [
+                  "--ignore-working-copy",
+                  "bookmark",
+                  "list",
+                  "-r",
+                  revision,
+                  "-T",
+                  'name ++ "\n"',
+                ],
+              })
+              .pipe(
+                Effect.flatMap((remaining) =>
+                  remaining.stdout.trim().length > 0
+                    ? Effect.void
+                    : jj
+                        .execute({
+                          operation: "CheckpointStore.deleteCheckpointRefs.jjAbandon",
+                          cwd: input.cwd,
+                          args: ["--ignore-working-copy", "abandon", revision],
+                        })
+                        .pipe(Effect.asVoid),
+                ),
+                Effect.catch((error) =>
+                  Effect.logWarning(
+                    "checkpoint cleanup left an unreferenced JJ snapshot",
+                    {
+                      cwd: input.cwd,
+                      revision,
+                      error: error instanceof Error ? error.message : String(error),
+                    },
+                  ),
+                ),
+              ),
+          { discard: true, concurrency: 1 },
+        );
       }),
     );
 

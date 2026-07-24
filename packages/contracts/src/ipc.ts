@@ -107,6 +107,16 @@ import type {
 } from "./vcs";
 import type { VcsRunStackedActionInput } from "./vcsActions";
 import type {
+  VcsGitHubRepositoryInput,
+  VcsGitHubRepositoryResult,
+  VcsPreparePullRequestThreadInput,
+  VcsPreparePullRequestThreadResult,
+  VcsPullRequestSnapshotInput,
+  VcsPullRequestSnapshotResult,
+  VcsResolvePullRequestInput,
+  VcsResolvePullRequestResult,
+} from "./vcsPullRequests";
+import type {
   PullRequestActionInput,
   PullRequestActionResult,
   PullRequestCommentInput,
@@ -617,6 +627,18 @@ export interface NativeApi {
     removeWorkspace: (input: VcsRemoveWorkspaceInput) => Promise<VcsRemoveWorkspaceResult>;
     handoffThread: (input: VcsHandoffThreadInput) => Promise<VcsHandoffThreadResult>;
     pull: (input: VcsPullInput) => Promise<VcsPullResult>;
+    githubRepository: (
+      input: VcsGitHubRepositoryInput,
+    ) => Promise<VcsGitHubRepositoryResult>;
+    resolvePullRequest: (
+      input: VcsResolvePullRequestInput,
+    ) => Promise<VcsResolvePullRequestResult>;
+    pullRequestSnapshot: (
+      input: VcsPullRequestSnapshotInput,
+    ) => Promise<VcsPullRequestSnapshotResult>;
+    preparePullRequestThread: (
+      input: VcsPreparePullRequestThreadInput,
+    ) => Promise<VcsPreparePullRequestThreadResult>;
     runStackedAction: (
       input: VcsRunStackedActionInput,
     ) => Promise<GitRunStackedActionResult>;

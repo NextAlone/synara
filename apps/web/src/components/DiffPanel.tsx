@@ -488,7 +488,7 @@ export default function DiffPanel({
   const activeCwd = diffEnvironmentState.cwd;
   const vcsTarget = makeVcsQueryTarget(
     activeProject,
-    serverThreadCatalog && resolvedThreadWorktreePath ? activeThreadId : null,
+    serverThreadCatalog ? activeThreadId : null,
   );
   const repoScopeOptions =
     vcsTarget.backend === "jj" ? JJ_DIFF_SCOPE_OPTIONS : DIFF_PANEL_PICKER_SCOPE_OPTIONS;
@@ -660,14 +660,20 @@ export default function DiffPanel({
     vcsDiffQueryOptions({
       target: vcsTarget,
       scope: "unstaged",
-      enabled: scopeCountQueriesEnabled && !diffEnvironmentPending,
+      enabled:
+        vcsTarget.backend === "git" &&
+        scopeCountQueriesEnabled &&
+        !diffEnvironmentPending,
     }),
   );
   const stagedDiffQuery = useQuery(
     vcsDiffQueryOptions({
       target: vcsTarget,
       scope: "staged",
-      enabled: scopeCountQueriesEnabled && !diffEnvironmentPending,
+      enabled:
+        vcsTarget.backend === "git" &&
+        scopeCountQueriesEnabled &&
+        !diffEnvironmentPending,
     }),
   );
   const branchDiffQuery = useQuery(

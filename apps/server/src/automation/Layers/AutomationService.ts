@@ -816,7 +816,7 @@ export const AutomationServiceLive = Layer.effect(
               .createWorkspace({
                 projectId: project.id,
                 expectedEpoch: project.vcs.epoch,
-                sourceRef: "HEAD",
+                sourceRef: binding.backend === "jj" ? "@" : "HEAD",
                 path: null,
                 copyChangesFromCurrent: true,
               })

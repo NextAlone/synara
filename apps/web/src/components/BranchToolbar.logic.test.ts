@@ -132,6 +132,18 @@ describe("resolveBranchToolbarValue", () => {
       }),
     ).toBe("main");
   });
+
+  it("keeps an explicit JJ draft bookmark when several bookmarks share one revision", () => {
+    expect(
+      resolveBranchToolbarValue({
+        envMode: "local",
+        activeWorktreePath: null,
+        activeThreadBranch: "feature/selected",
+        currentGitBranch: "feature/other",
+        preferActiveThreadBranch: true,
+      }),
+    ).toBe("feature/selected");
+  });
 });
 
 describe("shouldSyncLocalThreadBranch", () => {
@@ -196,6 +208,20 @@ describe("shouldSyncLocalThreadBranch", () => {
         currentGitBranch: "main",
         hasServerThread: true,
         isBranchActionPending: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not overwrite an explicit JJ draft bookmark from nearest-bookmark status", () => {
+    expect(
+      shouldSyncLocalThreadBranch({
+        envMode: "local",
+        activeWorktreePath: null,
+        activeThreadBranch: "feature/selected",
+        currentGitBranch: "feature/other",
+        hasServerThread: false,
+        isBranchActionPending: false,
+        preferActiveThreadBranch: true,
       }),
     ).toBe(false);
   });

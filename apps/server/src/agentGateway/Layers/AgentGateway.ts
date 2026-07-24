@@ -211,7 +211,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_create_threads",
       description:
-        "Create an exact batch of 1–20 standalone Synara threads. Worktree threads use a detached HEAD at baseRef (or the selected checkout's HEAD) and copy local checkout changes plus .worktreeinclude files when the ref is that checkout's HEAD. Validation/preflight failures create nothing and may be corrected with the same requestId; durable retries replay the exact operation.",
+        "Create an exact batch of 1–20 standalone Synara threads. Isolated threads use the project's selected Git or JJ backend at baseRef (or the selected checkout's current revision) and copy local checkout changes plus .worktreeinclude files when that revision is selected. Validation/preflight failures create nothing and may be corrected with the same requestId; durable retries replay the exact operation.",
       inputSchema: {
         type: "object",
         properties: {
@@ -237,7 +237,7 @@ export const makeAgentGateway = Effect.gen(function* () {
                 baseRef: {
                   type: "string",
                   description:
-                    "Local Git revision, #PR, or GitHub pull-request URL for a detached worktree. Defaults to the selected checkout's HEAD.",
+                    "Local Git ref/commit, JJ revset, #PR, or GitHub pull-request URL for an isolated workspace. Defaults to the selected checkout's current revision.",
                 },
                 runtimeMode: {
                   type: "string",
@@ -275,7 +275,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_create_thread",
       description:
-        "Create exactly one standalone Synara thread. Worktree threads start at a detached HEAD. For two or more threads use one synara_create_threads call instead.",
+        "Create exactly one standalone Synara thread. Isolated threads start from the selected Git or JJ revision. For two or more threads use one synara_create_threads call instead.",
       inputSchema: {
         type: "object",
         properties: {
@@ -296,7 +296,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           baseRef: {
             type: "string",
             description:
-              "Local Git revision, #PR, or GitHub pull-request URL for a detached worktree. Defaults to the selected checkout's HEAD.",
+              "Local Git ref/commit, JJ revset, #PR, or GitHub pull-request URL for an isolated workspace. Defaults to the selected checkout's current revision.",
           },
           runtimeMode: { type: "string", enum: ["approval-required", "full-access"] },
         },
@@ -538,9 +538,10 @@ export const makeAgentGateway = Effect.gen(function* () {
               worktreesDir: serverConfig.worktreesDir,
               snapshotQuery,
               git,
+              projectVcs,
             }).pipe(
               Effect.catchCause((cause) =>
-                Effect.logWarning("agent gateway managed worktree retention failed", {
+                Effect.logWarning("agent gateway managed workspace retention failed", {
                   cause: String(cause),
                 }),
               ),

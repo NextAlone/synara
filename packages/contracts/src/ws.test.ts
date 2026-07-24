@@ -108,6 +108,26 @@ it.effect("accepts project-scoped VCS reference mutations", () =>
   }),
 );
 
+it.effect("accepts project-scoped VCS pull request preparation", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WebSocketRequest, {
+      id: "req-vcs-pr-1",
+      body: {
+        _tag: WS_METHODS.vcsPreparePullRequestThread,
+        projectId: "project-1",
+        expectedEpoch: 2,
+        reference: "#42",
+        mode: "worktree",
+      },
+    });
+
+    assert.strictEqual(
+      parsed.body._tag,
+      WS_METHODS.vcsPreparePullRequestThread,
+    );
+  }),
+);
+
 it.effect("accepts project script discovery requests", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WebSocketRequest, {

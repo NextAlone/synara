@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { gitQueryKeys } from "./gitReactQuery";
 import { pullRequestActionMutationOptions, pullRequestQueryKeys } from "./pullRequestReactQuery";
+import { vcsQueryKeys } from "./vcsReactQuery";
 
 describe("pullRequestActionMutationOptions", () => {
   it("cancels an ordinary list refetch before applying optimistic fields", async () => {
@@ -41,7 +42,7 @@ describe("pullRequestActionMutationOptions", () => {
     await refetch;
   });
 
-  it("invalidates only repository scopes, matching detail, and the affected git PR cache", async () => {
+  it("invalidates repository scopes plus legacy Git and project VCS PR caches", async () => {
     const queryClient = new QueryClient();
     const projectId = "project-a" as ProjectId;
     const otherProjectId = "project-b" as ProjectId;
@@ -67,6 +68,8 @@ describe("pullRequestActionMutationOptions", () => {
     const gitStatusKey = gitQueryKeys.status("/repo");
     const gitPullRequestKey = gitQueryKeys.pullRequest("/repo");
     const unrelatedGitPullRequestKey = gitQueryKeys.pullRequest("/other-repo");
+    const vcsStatusKey = [...vcsQueryKeys.statuses, projectId] as const;
+    const vcsPullRequestKey = [...vcsQueryKeys.pullRequests, projectId, 42] as const;
     queryClient.setQueryData(listKey, {
       entries: [
         {
@@ -99,6 +102,8 @@ describe("pullRequestActionMutationOptions", () => {
       gitStatusKey,
       gitPullRequestKey,
       unrelatedGitPullRequestKey,
+      vcsStatusKey,
+      vcsPullRequestKey,
     ]) {
       queryClient.setQueryData(key, {});
     }
@@ -122,6 +127,8 @@ describe("pullRequestActionMutationOptions", () => {
     expect(queryClient.getQueryState(gitStatusKey)?.isInvalidated).toBe(false);
     expect(queryClient.getQueryState(gitPullRequestKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(unrelatedGitPullRequestKey)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(vcsStatusKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(vcsPullRequestKey)?.isInvalidated).toBe(true);
   });
 
   it("updates the global row when an action starts from another associated project", async () => {

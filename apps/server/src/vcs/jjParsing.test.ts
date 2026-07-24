@@ -5,6 +5,7 @@ import {
   parseJjBookmarkNames,
   parseJjBookmarks,
   parseJjFileChanges,
+  parseJjGitRemotes,
   parseJjRevisionIdentity,
   parseJjWorkspaces,
 } from "./jjParsing.ts";
@@ -122,6 +123,20 @@ describe("JJ machine output parsing", () => {
     });
     expect(findJjWorkspaceRegistration(workspaces, "gone")).toEqual({ kind: "stale" });
     expect(findJjWorkspaceRegistration(workspaces, "missing")).toEqual({ kind: "absent" });
+  });
+
+  it("parses and sorts Git remotes", () => {
+    expect(
+      parseJjGitRemotes(
+        "upstream https://github.com/acme/upstream.git\norigin git@github.com:acme/repo.git\n",
+      ),
+    ).toEqual([
+      { name: "origin", url: "git@github.com:acme/repo.git" },
+      {
+        name: "upstream",
+        url: "https://github.com/acme/upstream.git",
+      },
+    ]);
   });
 
   it("rejects malformed JSONL rows at the command boundary", () => {

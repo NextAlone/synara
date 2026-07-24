@@ -12,7 +12,7 @@ import type {
   PullRequestMergeMethod,
 } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useRef, useState } from "react";
+import { lazy, Suspense, useMemo, useRef, useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import {
@@ -64,16 +64,21 @@ import {
   LinkIcon,
   XIcon,
 } from "~/lib/icons";
-import { gitPreparePullRequestThreadMutationOptions } from "~/lib/gitReactQuery";
 import {
   pullRequestActionMutationOptions,
   pullRequestDetailQueryOptions,
   pullRequestQueryErrorState,
 } from "~/lib/pullRequestReactQuery";
+import {
+  makeVcsQueryTarget,
+  vcsPreparePullRequestThreadMutationOptions,
+} from "~/lib/vcsReactQuery";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { useStore } from "~/store";
+import { createProjectSelector } from "~/storeSelectors";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
@@ -174,11 +179,16 @@ export function PullRequestDetailPanel({
   const actionMutation = useMutation(pullRequestActionMutationOptions(queryClient));
   const detail = detailQuery.data;
   const detailErrorState = pullRequestQueryErrorState(detailQuery);
-  // Shared git prepare mutation (instead of a raw native call) so Git status/snapshot caches
-  // invalidate exactly like every other prepare-thread flow in the app.
+  const project = useStore(
+    useMemo(() => createProjectSelector(input.projectId), [input.projectId]),
+  );
+  const vcsTarget = makeVcsQueryTarget(project);
+  // Use the configured project backend for local PR preparation. Hosted PR
+  // metadata remains GitHub-backed, while checkout/workspace creation stays
+  // native to Git or JJ.
   const prepareThreadMutation = useMutation(
-    gitPreparePullRequestThreadMutationOptions({
-      cwd: detail?.workspaceRoot ?? null,
+    vcsPreparePullRequestThreadMutationOptions({
+      target: vcsTarget,
       queryClient,
     }),
   );

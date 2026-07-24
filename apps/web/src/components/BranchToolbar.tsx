@@ -536,8 +536,12 @@ export default function BranchToolbar({
                     }
                   }}
                 >
-                  <MenuRadioItem value="git">Git</MenuRadioItem>
-                  <MenuRadioItem value="jj">Jujutsu (JJ)</MenuRadioItem>
+                  <MenuRadioItem value="git">
+                    Git{vcsBackend === null ? " (initialize if needed)" : ""}
+                  </MenuRadioItem>
+                  <MenuRadioItem value="jj">
+                    Jujutsu (JJ){vcsBackend === null ? " (initialize if needed)" : ""}
+                  </MenuRadioItem>
                 </MenuRadioGroup>
               </MenuGroup>
             </ComposerPickerMenuPopup>

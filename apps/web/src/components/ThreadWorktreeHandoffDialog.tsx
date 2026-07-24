@@ -13,6 +13,7 @@ import { Input } from "./ui/input";
 
 interface ThreadWorktreeHandoffDialogProps {
   open: boolean;
+  backend: "git" | "jj" | null;
   worktreeName: string;
   busy?: boolean;
   onWorktreeNameChange: (value: string) => void;
@@ -22,6 +23,7 @@ interface ThreadWorktreeHandoffDialogProps {
 
 export function ThreadWorktreeHandoffDialog({
   open,
+  backend,
   worktreeName,
   busy = false,
   onWorktreeNameChange,
@@ -42,6 +44,7 @@ export function ThreadWorktreeHandoffDialog({
   }, [open]);
 
   const canSubmit = !busy && worktreeName.trim().length > 0;
+  const isJjBackend = backend === "jj";
 
   const handleSubmit = () => {
     if (canSubmit) {
@@ -60,9 +63,13 @@ export function ThreadWorktreeHandoffDialog({
     >
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Hand off to worktree</DialogTitle>
+          <DialogTitle>
+            {isJjBackend ? "Hand off to JJ workspace" : "Hand off to worktree"}
+          </DialogTitle>
           <DialogDescription>
-            Create a detached worktree from the current branch to continue working in parallel.
+            {isJjBackend
+              ? "Create an isolated JJ workspace from the current change to continue working in parallel."
+              : "Create a detached worktree from the current branch to continue working in parallel."}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -73,7 +80,9 @@ export function ThreadWorktreeHandoffDialog({
             }}
           >
             <label className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Worktree name</span>
+              <span className="text-xs font-medium text-foreground">
+                {isJjBackend ? "Bookmark name" : "Worktree name"}
+              </span>
               <Input
                 ref={worktreeInputRef}
                 value={worktreeName}
@@ -85,7 +94,7 @@ export function ThreadWorktreeHandoffDialog({
                     onOpenChange(false);
                   }
                 }}
-                placeholder="synara/feature-name"
+                placeholder={isJjBackend ? "feature-name" : "synara/feature-name"}
               />
             </label>
           </form>

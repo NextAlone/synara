@@ -53,6 +53,7 @@ import {
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
+import { JjCore, type JjCoreShape } from "../../vcs/Services/JjCore.ts";
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { TurnCheckpointCoordinatorLive } from "./TurnCheckpointCoordinator.ts";
@@ -185,6 +186,7 @@ describe("ProviderCommandReactor", () => {
     readonly forkThreadResult?: ProviderForkThreadResult | null;
     readonly startReactor?: boolean;
     readonly interruptTurn?: ProviderServiceShape["interruptTurn"];
+    readonly vcsBackend?: "git" | "jj";
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
@@ -401,6 +403,10 @@ describe("ProviderCommandReactor", () => {
     );
     const publishBranch = vi.fn(() => Effect.void);
     const withMutation: GitCoreShape["withMutation"] = (_cwd, effect) => effect;
+    const createAvailableBookmark = vi.fn<
+      JjCoreShape["createAvailableBookmark"]
+    >((_cwd, desiredName) => Effect.succeed(desiredName));
+    const pushBookmark = vi.fn<JjCoreShape["pushBookmark"]>(() => Effect.void);
     const generateBranchName = vi.fn<TextGenerationShape["generateBranchName"]>(() =>
       Effect.fail(
         new TextGenerationError({
@@ -486,6 +492,12 @@ describe("ProviderCommandReactor", () => {
         } as unknown as GitCoreShape),
       ),
       Layer.provideMerge(
+        Layer.succeed(JjCore, {
+          createAvailableBookmark,
+          pushBookmark,
+        } as unknown as JjCoreShape),
+      ),
+      Layer.provideMerge(
         Layer.succeed(TextGeneration, {
           generateBranchName,
           generateThreadTitle,
@@ -546,7 +558,7 @@ describe("ProviderCommandReactor", () => {
         projectId: asProjectId("project-1"),
         expectedEpoch: 0,
         binding: {
-          backend: "git",
+          backend: input?.vcsBackend ?? "git",
           repoRoot: "/tmp/provider-project",
           projectRelativePath: ".",
         },
@@ -593,6 +605,8 @@ describe("ProviderCommandReactor", () => {
       clearSessionResumeCursor,
       renameBranch,
       publishBranch,
+      createAvailableBookmark,
+      pushBookmark,
       generateBranchName,
       generateThreadTitle,
       captureStudioOutputBaseline,
@@ -4203,6 +4217,71 @@ describe("ProviderCommandReactor", () => {
       branch: "synara/app-startup-crash",
       worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
       associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+      associatedWorktreeBranch: "synara/app-startup-crash",
+      associatedWorktreeRef: "synara/app-startup-crash",
+    });
+  });
+
+  it("creates and publishes a first-turn JJ workspace bookmark", async () => {
+    const harness = await createHarness({ vcsBackend: "jj" });
+    const now = new Date().toISOString();
+    harness.generateBranchName.mockImplementation(() =>
+      Effect.succeed({
+        branch: "app-startup-crash",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-jj-workspace-bootstrap"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        envMode: "worktree",
+        branch: null,
+        worktreePath: "/tmp/provider-project/.worktrees/jj-cb661f0d",
+        associatedWorktreePath: "/tmp/provider-project/.worktrees/jj-cb661f0d",
+        associatedWorktreeBranch: null,
+        associatedWorktreeRef: "jj-workspace-commit",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-jj-workspace-name"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-jj-workspace-name"),
+          role: "user",
+          text: "The app crashes during startup, fix it",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.createAvailableBookmark.mock.calls.length === 1);
+    await waitFor(() => harness.pushBookmark.mock.calls.length === 1);
+    expect(harness.renameBranch).not.toHaveBeenCalled();
+    expect(harness.createAvailableBookmark).toHaveBeenCalledWith(
+      "/tmp/provider-project/.worktrees/jj-cb661f0d",
+      "synara/app-startup-crash",
+      "@-",
+    );
+    expect(harness.pushBookmark).toHaveBeenCalledWith(
+      "/tmp/provider-project/.worktrees/jj-cb661f0d",
+      "synara/app-startup-crash",
+    );
+
+    await waitFor(
+      async () =>
+        (await readHarnessThread(harness))?.branch ===
+        "synara/app-startup-crash",
+    );
+    expect(await readHarnessThread(harness)).toMatchObject({
+      branch: "synara/app-startup-crash",
       associatedWorktreeBranch: "synara/app-startup-crash",
       associatedWorktreeRef: "synara/app-startup-crash",
     });

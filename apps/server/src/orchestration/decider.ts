@@ -111,6 +111,97 @@ function withEventBase(
   };
 }
 
+function requireVcsBindingChangeAllowed(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: Extract<
+    OrchestrationCommand,
+    { type: "project.meta.update" | "project.vcs-binding.set" }
+  >;
+  readonly projectId: Extract<
+    OrchestrationCommand,
+    { type: "project.vcs-binding.set" }
+  >["projectId"];
+  readonly blockWorktreeThreads: boolean;
+}) {
+  const liveThreads = listThreadsByProjectId(input.readModel, input.projectId).filter(
+    (thread) => thread.deletedAt === null,
+  );
+  const activeThread = liveThreads.find(
+    (thread) =>
+      threadHasInFlightTurn(thread) ||
+      threadHasCheckpointRevertInProgress(thread),
+  );
+  if (activeThread) {
+    return Effect.fail(
+      new OrchestrationCommandInvariantError({
+        commandType: input.command.type,
+        detail: threadHasInFlightTurn(activeThread)
+          ? `Thread '${activeThread.id}' has an active turn. Stop it before changing the project VCS binding.`
+          : `${checkpointRevertInProgressDetail(activeThread.id)} Changing the project VCS binding is unavailable until it finishes.`,
+      }),
+    );
+  }
+
+  const worktreeThreadCount = input.blockWorktreeThreads
+    ? liveThreads.filter((thread) => thread.worktreePath !== null).length
+    : 0;
+  if (worktreeThreadCount > 0) {
+    return Effect.fail(
+      new OrchestrationCommandInvariantError({
+        commandType: input.command.type,
+        detail: `Move or remove ${worktreeThreadCount} existing worktree thread(s) before changing this project's VCS binding.`,
+      }),
+    );
+  }
+  return Effect.void;
+}
+
+function staleLocalThreadReferenceEvents(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly projectId: Extract<
+    OrchestrationCommand,
+    { type: "project.vcs-binding.set" }
+  >["projectId"];
+  readonly occurredAt: string;
+  readonly commandId: OrchestrationCommand["commandId"];
+  readonly causationEventId: OrchestrationEvent["eventId"];
+  readonly clearLastKnownPr: boolean;
+}) {
+  return listThreadsByProjectId(input.readModel, input.projectId)
+    .filter(
+      (thread) =>
+        thread.deletedAt === null &&
+        thread.worktreePath === null &&
+        (thread.branch !== null ||
+          thread.associatedWorktreePath !== null ||
+          thread.associatedWorktreeBranch !== null ||
+          thread.associatedWorktreeRef !== null ||
+          (input.clearLastKnownPr && thread.lastKnownPr !== null)),
+    )
+    .map(
+      (thread) =>
+        ({
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: thread.id,
+            occurredAt: input.occurredAt,
+            commandId: input.commandId,
+          }),
+          causationEventId: input.causationEventId,
+          type: "thread.meta-updated",
+          payload: {
+            threadId: thread.id,
+            branch: null,
+            associatedWorktreePath: null,
+            associatedWorktreeBranch: null,
+            associatedWorktreeRef: null,
+            ...(input.clearLastKnownPr ? { lastKnownPr: null } : {}),
+            updatedAt: input.occurredAt,
+          },
+        }) as const,
+    );
+}
+
 function checkpointRevertSucceededEvent(input: {
   readonly commandId: OrchestrationCommand["commandId"];
   readonly threadId: Extract<OrchestrationCommand, { type: "thread.revert.complete" }>["threadId"];
@@ -765,6 +856,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: "The legacy Chats container workspace root cannot be changed.",
         });
       }
+      if (invalidatesVcsBinding && existingProject.vcs.binding !== null) {
+        yield* requireVcsBindingChangeAllowed({
+          readModel,
+          command,
+          projectId: command.projectId,
+          blockWorktreeThreads: true,
+        });
+      }
       if (effectiveSpaceId !== null) {
         // Assignability is an invariant of the resulting row, not only of commands that
         // explicitly set spaceId. Metadata-only updates must not turn an already-filed
@@ -826,7 +925,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         wasPinned: existingProject.isPinned === true,
       });
       const occurredAt = nowIso();
-      return {
+      const projectUpdateEvent = {
         ...withEventBase({
           aggregateKind: "project",
           aggregateId: command.projectId,
@@ -855,7 +954,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           updatedAt: occurredAt,
         },
-      };
+      } as const;
+      if (!invalidatesVcsBinding) {
+        return projectUpdateEvent;
+      }
+      const threadReferenceEvents = staleLocalThreadReferenceEvents({
+        readModel,
+        projectId: command.projectId,
+        occurredAt,
+        commandId: command.commandId,
+        causationEventId: projectUpdateEvent.eventId,
+        clearLastKnownPr: true,
+      });
+      return threadReferenceEvents.length === 0
+        ? projectUpdateEvent
+        : [projectUpdateEvent, ...threadReferenceEvents];
     }
 
     case "project.vcs-binding.set": {
@@ -891,17 +1004,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
 
-      const activeThread = listThreadsByProjectId(readModel, command.projectId).find(
-        (thread) => thread.deletedAt === null && threadHasInFlightTurn(thread),
-      );
-      if (activeThread) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `Thread '${activeThread.id}' has an active turn. Stop it before changing the project VCS binding.`,
-        });
-      }
+      const clearsStaleThreadReferences =
+        command.binding === null ||
+        (currentVcs.binding === null
+          ? command.binding?.backend === "jj"
+          : !vcsBindingsEqual(currentVcs.binding, command.binding));
+      yield* requireVcsBindingChangeAllowed({
+        readModel,
+        command,
+        projectId: command.projectId,
+        blockWorktreeThreads: clearsStaleThreadReferences,
+      });
 
-      return {
+      const bindingEvent = {
         ...withEventBase({
           aggregateKind: "project",
           aggregateId: command.projectId,
@@ -917,7 +1032,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
           updatedAt: command.updatedAt,
         },
-      };
+      } as const;
+      if (!clearsStaleThreadReferences) {
+        return bindingEvent;
+      }
+
+      const threadReferenceEvents = staleLocalThreadReferenceEvents({
+        readModel,
+        projectId: command.projectId,
+        occurredAt: command.updatedAt,
+        commandId: command.commandId,
+        causationEventId: bindingEvent.eventId,
+        clearLastKnownPr:
+          command.binding === null ||
+          (currentVcs.binding !== null &&
+            command.binding !== null &&
+            (currentVcs.binding.repoRoot !== command.binding.repoRoot ||
+              currentVcs.binding.projectRelativePath !==
+                command.binding.projectRelativePath)),
+      });
+      return threadReferenceEvents.length === 0
+        ? bindingEvent
+        : [bindingEvent, ...threadReferenceEvents];
     }
 
     case "project.delete": {

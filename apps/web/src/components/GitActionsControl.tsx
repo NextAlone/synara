@@ -87,20 +87,25 @@ import { ScrollArea } from "~/components/ui/scroll-area";
 import { Textarea } from "~/components/ui/textarea";
 import { toastManager } from "~/components/ui/toast";
 import { openInPreferredEditor } from "~/editorPreferences";
-import { gitInitMutationOptions } from "~/lib/gitReactQuery";
 import {
   invalidateVcsQueries,
   makeVcsQueryTarget,
+  vcsDiffQueryOptions,
   vcsMutationKeys,
   vcsPullMutationOptions,
   vcsReferencesQueryOptions,
   vcsRunStackedActionMutationOptions,
   vcsStatusQueryOptions,
 } from "~/lib/vcsReactQuery";
+import { fileDiffStatsByPath } from "~/lib/diffRendering";
 import { cn, newCommandId, randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { readNativeApi } from "~/nativeApi";
-import { createProjectSelector, createThreadSelector } from "~/storeSelectors";
+import {
+  createProjectSelector,
+  createThreadExistsSelector,
+  createThreadSelector,
+} from "~/storeSelectors";
 import { useStore } from "~/store";
 
 interface GitActionsControlProps {
@@ -180,17 +185,20 @@ function getMenuActionDisabledReason({
   gitStatus,
   isBusy,
   hasOriginRemote,
+  isJjBackend,
 }: {
   item: GitActionMenuItem;
   gitStatus: GitStatusResult | null;
   isBusy: boolean;
   hasOriginRemote: boolean;
+  isJjBackend: boolean;
 }): string | null {
   if (!item.disabled) return null;
-  if (isBusy) return "Source-control action in progress.";
-  if (!gitStatus) return "Git status is unavailable.";
+  if (isBusy) return `${isJjBackend ? "JJ" : "Git"} action in progress.`;
+  if (!gitStatus) return `${isJjBackend ? "JJ" : "Git"} status is unavailable.`;
 
   const hasBranch = gitStatus.branch !== null;
+  const referenceLabel = isJjBackend ? "Bookmark" : "Branch";
   const hasChanges = gitStatus.hasWorkingTreeChanges;
   const hasOpenPr = gitStatus.pr?.state === "open";
   const isAhead = gitStatus.aheadCount > 0;
@@ -205,13 +213,17 @@ function getMenuActionDisabledReason({
 
   if (item.id === "push") {
     if (!hasBranch) {
-      return "Detached HEAD: checkout a branch before pushing.";
+      return isJjBackend
+        ? "No bookmark selected: select a bookmark before pushing."
+        : "Detached HEAD: checkout a branch before pushing.";
     }
     if (hasChanges) {
-      return "Commit or stash local changes before pushing.";
+      return isJjBackend
+        ? "Commit local changes before pushing."
+        : "Commit or stash local changes before pushing.";
     }
     if (isBehind) {
-      return "Branch is behind upstream. Pull/rebase before pushing.";
+      return `${referenceLabel} is behind upstream. Pull/rebase before pushing.`;
     }
     if (!gitStatus.hasUpstream && !hasOriginRemote) {
       return 'Add an "origin" remote before pushing.';
@@ -224,10 +236,12 @@ function getMenuActionDisabledReason({
 
   if (item.id === "commit_push") {
     if (!hasBranch) {
-      return "Detached HEAD: checkout a branch before committing and pushing.";
+      return isJjBackend
+        ? "No bookmark selected: select a bookmark before committing and pushing."
+        : "Detached HEAD: checkout a branch before committing and pushing.";
     }
     if (isBehind) {
-      return "Branch is behind upstream. Pull/rebase before committing and pushing.";
+      return `${referenceLabel} is behind upstream. Pull/rebase before committing and pushing.`;
     }
     if (!gitStatus.hasUpstream && !hasOriginRemote) {
       return 'Add an "origin" remote before committing and pushing.';
@@ -242,7 +256,9 @@ function getMenuActionDisabledReason({
     return "View PR is currently unavailable.";
   }
   if (!hasBranch) {
-    return "Detached HEAD: checkout a branch before creating a PR.";
+    return isJjBackend
+      ? "No bookmark selected: select a bookmark before creating a PR."
+      : "Detached HEAD: checkout a branch before creating a PR.";
   }
   if (hasChanges) {
     return "Commit local changes before creating a PR.";
@@ -254,7 +270,7 @@ function getMenuActionDisabledReason({
     return "No local commits to include in a PR.";
   }
   if (isBehind) {
-    return "Branch is behind upstream. Pull/rebase before creating a PR.";
+    return `${referenceLabel} is behind upstream. Pull/rebase before creating a PR.`;
   }
   return "Create PR is currently unavailable.";
 }
@@ -347,6 +363,9 @@ export default function GitActionsControl({
   const activeThread = useStore(
     useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
   );
+  const hasServerThread = useStore(
+    useMemo(() => createThreadExistsSelector(activeThreadId), [activeThreadId]),
+  );
   const activeProject = useStore(
     useMemo(
       () => createProjectSelector(activeThread?.projectId),
@@ -357,12 +376,14 @@ export default function GitActionsControl({
     () =>
       makeVcsQueryTarget(
         activeProject,
-        activeThread?.worktreePath ? activeThreadId : null,
+        hasServerThread ? activeThreadId : null,
       ),
-    [activeProject, activeThread?.worktreePath, activeThreadId],
+    [activeProject, activeThreadId, hasServerThread],
   );
   const isJjBackend = vcsTarget.backend === "jj";
+  const backendName = isJjBackend ? "JJ" : "Git";
   const referenceLabel = isJjBackend ? "Bookmark" : "Branch";
+  const referenceKind = isJjBackend ? "bookmark" : "branch";
   const backendActionLabel = isJjBackend ? "JJ action" : "Git action";
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const threadToastData = useMemo(
@@ -402,15 +423,13 @@ export default function GitActionsControl({
     [referencesQuery.data],
   );
   const branchListReady = referencesQuery.isSuccess;
-  // Default to true while loading so we don't flash init controls.
-  const isRepo = branchList?.isRepo ?? true;
   const hasOriginRemote = branchList?.hasOriginRemote ?? false;
   const currentBranch = branchList?.branches.find((branch) => branch.current)?.name ?? null;
   // Only poll status after branch discovery confirms a repo — avoids non-repo
   // cwds feeding a permanent "Refreshing git status..." invalidation loop.
   const statusQuery = useQuery(
     vcsStatusQueryOptions(vcsTarget, {
-      enabled: branchListReady && branchList?.isRepo === true,
+      enabled: branchListReady,
     }),
   );
   const gitStatus = useMemo(
@@ -435,12 +454,38 @@ export default function GitActionsControl({
 
   const gitStatusForActions = isGitStatusOutOfSync ? null : gitStatus;
 
-  const allFiles = gitStatusForActions?.workingTree.files ?? [];
+  const jjWorkingDiffQuery = useQuery(
+    vcsDiffQueryOptions({
+      target: vcsTarget,
+      scope: "workingTree",
+      enabled:
+        isJjBackend &&
+        isCommitDialogOpen &&
+        branchListReady,
+    }),
+  );
+  const jjDiffStats = useMemo(
+    () => fileDiffStatsByPath(jjWorkingDiffQuery.data?.patch),
+    [jjWorkingDiffQuery.data?.patch],
+  );
+  const allFiles = useMemo(
+    () =>
+      (gitStatusForActions?.workingTree.files ?? []).map((file) => {
+        if (!isJjBackend) return file;
+        const stats = jjDiffStats.get(file.path);
+        return stats
+          ? {
+              ...file,
+              insertions: stats.additions,
+              deletions: stats.deletions,
+            }
+          : file;
+      }),
+    [gitStatusForActions?.workingTree.files, isJjBackend, jjDiffStats],
+  );
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));
   const allSelected = excludedFiles.size === 0;
   const noneSelected = selectedFiles.length === 0;
-
-  const initMutation = useMutation(gitInitMutationOptions({ cwd: gitCwd, queryClient }));
 
   const runImmediateGitActionMutation = useMutation(
     vcsRunStackedActionMutationOptions({
@@ -543,13 +588,17 @@ export default function GitActionsControl({
         hasOriginRemote,
         shouldOfferCreateBranch,
         defaultBranchName,
+        referenceKind,
+        backendName,
       ),
     [
       defaultBranchName,
+      backendName,
       gitStatusForActions,
       hasOriginRemote,
       isDefaultBranch,
       isGitActionRunning,
+      referenceKind,
       shouldOfferCreateBranch,
     ],
   );
@@ -572,6 +621,7 @@ export default function GitActionsControl({
         action: pendingDefaultBranchAction.action,
         branchName: pendingDefaultBranchAction.branchName,
         includesCommit: pendingDefaultBranchAction.includesCommit,
+        referenceKind,
       })
     : null;
   useEffect(() => {
@@ -1089,7 +1139,7 @@ export default function GitActionsControl({
         toastManager.add({
           type: "success",
           title: `Keeping ${trimmedName}`,
-          description: "Branch name confirmed.",
+          description: `${referenceLabel} name confirmed.`,
           data: threadToastData,
         });
         return;
@@ -1111,7 +1161,7 @@ export default function GitActionsControl({
         await api.vcs.createReference({
           ...target,
           name: trimmedName,
-          publish: vcsTarget.backend === "git" && hasOriginRemote,
+          publish: hasOriginRemote,
         });
         await api.vcs.switchReference({
           ...target,
@@ -1152,7 +1202,7 @@ export default function GitActionsControl({
       } catch (error) {
         toastManager.update(toastId, {
           type: "error",
-          title: "Failed to create branch",
+          title: `Failed to create ${referenceLabel.toLowerCase()}`,
           description: error instanceof Error ? error.message : "An error occurred.",
           data: threadToastData,
         });
@@ -1217,6 +1267,8 @@ export default function GitActionsControl({
     const pullAvailability = resolvePullActionAvailability({
       gitStatus: gitStatusForActions,
       isBusy: isGitActionRunning,
+      referenceKind,
+      backendName,
     });
 
     if (commitMenuItem) {
@@ -1229,6 +1281,7 @@ export default function GitActionsControl({
           gitStatus: gitStatusForActions,
           isBusy: isGitActionRunning,
           hasOriginRemote,
+          isJjBackend,
         }),
         icon: "commit",
         onSelect: () => openDialogForMenuItem(commitMenuItem),
@@ -1245,6 +1298,7 @@ export default function GitActionsControl({
           gitStatus: gitStatusForActions,
           isBusy: isGitActionRunning,
           hasOriginRemote,
+          isJjBackend,
         }),
         icon: "push",
         onSelect: () => openDialogForMenuItem(commitPushMenuItem),
@@ -1270,6 +1324,7 @@ export default function GitActionsControl({
           gitStatus: gitStatusForActions,
           isBusy: isGitActionRunning,
           hasOriginRemote,
+          isJjBackend,
         }),
         icon: "push",
         onSelect: () => openDialogForMenuItem(pushMenuItem),
@@ -1286,6 +1341,7 @@ export default function GitActionsControl({
           gitStatus: gitStatusForActions,
           isBusy: isGitActionRunning,
           hasOriginRemote,
+          isJjBackend,
         }),
         icon: "pr",
         onSelect: () => openDialogForMenuItem(prMenuItem),
@@ -1298,8 +1354,8 @@ export default function GitActionsControl({
       disabled: createBranchDisabled,
       disabledReason: createBranchDisabled
         ? isGitActionRunning
-          ? "Source-control action in progress."
-          : "Source-control status is unavailable."
+          ? `${backendName} action in progress.`
+          : `${backendName} status is unavailable.`
         : null,
       icon: "branch",
       onSelect: openCreateBranchDialog,
@@ -1309,11 +1365,14 @@ export default function GitActionsControl({
   }, [
     gitActionMenuItems,
     gitStatusForActions,
+    backendName,
     hasOriginRemote,
+    isJjBackend,
     isGitActionRunning,
     openCreateBranchDialog,
     openDialogForMenuItem,
     referenceLabel,
+    referenceKind,
     runSyncWithRemote,
   ]);
 
@@ -1415,7 +1474,9 @@ export default function GitActionsControl({
         !gitStatusForActions.hasWorkingTreeChanges &&
         gitStatusForActions.behindCount > 0 &&
         gitStatusForActions.aheadCount === 0 && (
-          <p className="px-3 py-1.5 text-xs text-warning">Behind upstream. Pull/rebase first.</p>
+          <p className="px-3 py-1.5 text-xs text-warning">
+            {referenceLabel} is behind upstream. Pull/rebase first.
+          </p>
         )}
       {isGitStatusOutOfSync && (
         <p className="px-3 py-1.5 text-xs text-muted-foreground">
@@ -1453,10 +1514,13 @@ export default function GitActionsControl({
                 <span className="text-muted-foreground">{referenceLabel}</span>
                 <span className="flex items-center justify-between gap-2">
                   <span className="font-medium">
-                    {gitStatusForActions?.branch ?? "(detached HEAD)"}
+                    {gitStatusForActions?.branch ??
+                      (isJjBackend ? "(no bookmark)" : "(detached HEAD)")}
                   </span>
                   {isDefaultBranch && (
-                    <span className="text-right text-warning text-xs">Warning: default branch</span>
+                    <span className="text-right text-warning text-xs">
+                      Warning: default {referenceKind}
+                    </span>
                   )}
                 </span>
               </div>
@@ -1610,7 +1674,8 @@ export default function GitActionsControl({
         <DialogPopup className="max-w-xl">
           <DialogHeader>
             <DialogTitle>
-              {pendingDefaultBranchActionCopy?.title ?? "Run action on default branch?"}
+              {pendingDefaultBranchActionCopy?.title ??
+                `Run action on default ${referenceKind}?`}
             </DialogTitle>
             <DialogDescription>{pendingDefaultBranchActionCopy?.description}</DialogDescription>
           </DialogHeader>
@@ -1631,7 +1696,7 @@ export default function GitActionsControl({
             >
               {pendingDefaultBranchAction &&
               requiresFeatureBranchForDefaultBranchAction(pendingDefaultBranchAction.action)
-                ? "Create feature branch & continue"
+                ? `Create feature ${referenceKind} & continue`
                 : (pendingDefaultBranchActionCopy?.continueLabel ?? "Continue")}
             </Button>
             {pendingDefaultBranchAction &&
@@ -1641,7 +1706,9 @@ export default function GitActionsControl({
                 shape="capsule"
                 onClick={checkoutFeatureBranchAndContinuePendingAction}
               >
-                Checkout feature branch & continue
+                {isJjBackend
+                  ? "Create feature bookmark & continue"
+                  : "Checkout feature branch & continue"}
               </Button>
             ) : null}
           </DialogFooter>
@@ -1724,51 +1791,42 @@ export default function GitActionsControl({
   if (isPanel) {
     return (
       <>
-        {!isRepo ? (
-          <EnvironmentRow
-            icon={<GitActionGlyph name="branch" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-            label={initMutation.isPending ? "Initializing..." : "Initialize Git"}
-            disabled={initMutation.isPending}
-            onClick={() => initMutation.mutate()}
-          />
-        ) : (
-          <Menu
-            onOpenChange={(open) => {
-              if (open) void invalidateVcsQueries(queryClient);
-            }}
-          >
-            <MenuTrigger
-              render={
-                <button
-                  type="button"
-                  className={cn(
-                    ENVIRONMENT_ROW_CLASS_NAME,
-                    shouldDimPanelCommitPushRow && "opacity-55",
-                  )}
-                  aria-label={
-                    shouldDimPanelCommitPushRow
-                      ? "Commit and Push unavailable; open Git actions menu"
-                      : "Commit and Push"
-                  }
-                  title={
-                    shouldDimPanelCommitPushRow
-                      ? "Commit and Push unavailable. Open for more Git actions."
-                      : "Commit and Push"
-                  }
-                />
-              }
-            >
-              <EnvironmentRowBody
-                icon={<GitActionGlyph name="push" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-                label="Commit and Push"
-                trailing={<EnvironmentRowChevron />}
+        <Menu
+          onOpenChange={(open) => {
+            if (open) void invalidateVcsQueries(queryClient);
+          }}
+        >
+          <MenuTrigger
+            render={
+              <button
+                type="button"
+                className={cn(
+                  ENVIRONMENT_ROW_CLASS_NAME,
+                  shouldDimPanelCommitPushRow && "opacity-55",
+                )}
+                aria-label={
+                  shouldDimPanelCommitPushRow
+                    ? `Commit and Push unavailable; open ${isJjBackend ? "JJ" : "Git"} actions menu`
+                    : "Commit and Push"
+                }
+                title={
+                  shouldDimPanelCommitPushRow
+                    ? `Commit and Push unavailable. Open for more ${isJjBackend ? "JJ" : "Git"} actions.`
+                    : "Commit and Push"
+                }
               />
-            </MenuTrigger>
-            <ComposerPickerMenuPopup align="start" side="bottom" className="w-60 min-w-60">
-              {gitMenuContent}
-            </ComposerPickerMenuPopup>
-          </Menu>
-        )}
+            }
+          >
+            <EnvironmentRowBody
+              icon={<GitActionGlyph name="push" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+              label="Commit and Push"
+              trailing={<EnvironmentRowChevron />}
+            />
+          </MenuTrigger>
+          <ComposerPickerMenuPopup align="start" side="bottom" className="w-60 min-w-60">
+            {gitMenuContent}
+          </ComposerPickerMenuPopup>
+        </Menu>
         {gitActionDialogs}
       </>
     );
@@ -1776,18 +1834,7 @@ export default function GitActionsControl({
 
   return (
     <>
-      {!isRepo ? (
-        <Button
-          variant="chrome-outline"
-          size="xs"
-          className={cn(CHAT_HEADER_CONTROL_CLASS_NAME, CHAT_HEADER_ICON_STRENGTH_CLASS_NAME)}
-          disabled={initMutation.isPending}
-          onClick={() => initMutation.mutate()}
-        >
-          {initMutation.isPending ? "Initializing..." : "Initialize Git"}
-        </Button>
-      ) : (
-        <ChatHeaderSplitGroup label={isJjBackend ? "JJ actions" : "Git actions"}>
+      <ChatHeaderSplitGroup label={isJjBackend ? "JJ actions" : "Git actions"}>
           {quickActionDisabledReason ? (
             <Popover>
               <PopoverTrigger
@@ -1868,8 +1915,7 @@ export default function GitActionsControl({
               {gitMenuContent}
             </ComposerPickerMenuPopup>
           </Menu>
-        </ChatHeaderSplitGroup>
-      )}
+      </ChatHeaderSplitGroup>
 
       {gitActionDialogs}
     </>

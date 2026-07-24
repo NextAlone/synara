@@ -462,7 +462,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       if (deprecatedBranchName) {
         return yield* Effect.fail(
           new ToolInputError(
-            '"branchName" is no longer supported for managed worktrees. Synara creates a detached HEAD; create a branch inside the new thread when the work is ready.',
+            '"branchName" is no longer supported for managed workspaces. Synara creates an unnamed isolated revision; create a branch or bookmark inside the new thread when the work is ready.',
           ),
         );
       }
@@ -563,6 +563,17 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               caller?.projectId === projectId
                 ? (caller.worktreePath ?? project.workspaceRoot)
                 : project.workspaceRoot;
+            const sourceJjStatus =
+              vcsBinding.backend === "jj"
+                ? yield* jj.status(sourceCwd).pipe(
+                    Effect.mapError(
+                      (error) =>
+                        new ToolInputError(
+                          `JJ workspace "${sourceCwd}" is unavailable. ${errorText(error)}`,
+                        ),
+                    ),
+                  )
+                : null;
             const pullRequest = parsePullRequestSelector(requestedRef);
             if (vcsBinding.backend === "git") {
               worktreeRef = yield* (
@@ -609,44 +620,39 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             } else {
               // Pull-request selectors are remote-only: fetch through Git, then
               // return immediately to JJ for revision resolution and workspace creation.
-              const jjRequestedRevision =
-                pullRequest === null
-                  ? requestedRef === "HEAD"
-                    ? "@"
-                    : requestedRef
-                  : yield* git
-                      .withMutation(
-                        project.workspaceRoot,
-                        git.fetchPullRequestCommit({
-                          cwd: project.workspaceRoot,
-                          prNumber: pullRequest.number,
-                          ...(pullRequest.repositoryNameWithOwner
-                            ? {
-                                expectedRepositoryNameWithOwner:
-                                  pullRequest.repositoryNameWithOwner,
-                              }
-                            : {}),
-                        }),
-                      )
-                      .pipe(
-                        Effect.mapError(
-                          (error) =>
-                            new ToolInputError(
-                              `Pull request "${requestedRef}" could not be fetched for JJ. ${errorText(error)}`,
-                            ),
+              if (pullRequest === null && requestedRef === "HEAD") {
+                worktreeRef = sourceJjStatus!.revision.commitId;
+              } else {
+                const jjRequestedRevision =
+                  pullRequest === null
+                    ? requestedRef
+                    : yield* projectVcs
+                        .materializePullRequestHead({
+                          projectId,
+                          expectedEpoch: project.vcs.epoch,
+                          reference: requestedRef,
+                        })
+                        .pipe(
+                          Effect.map((result) => result.revision),
+                          Effect.mapError(
+                            (error) =>
+                              new ToolInputError(
+                                `Pull request "${requestedRef}" could not be fetched for JJ. ${errorText(error)}`,
+                              ),
+                          ),
+                        );
+                worktreeRef = yield* jj
+                  .readRevisionIdentity(sourceCwd, jjRequestedRevision)
+                  .pipe(
+                    Effect.map((revision) => revision.commitId),
+                    Effect.mapError(
+                      (error) =>
+                        new ToolInputError(
+                          `JJ revision "${requestedRef}" is unavailable. ${errorText(error)}`,
                         ),
-                      );
-              worktreeRef = yield* jj
-                .readRevisionIdentity(sourceCwd, jjRequestedRevision)
-                .pipe(
-                  Effect.map((revision) => revision.commitId),
-                  Effect.mapError(
-                    (error) =>
-                      new ToolInputError(
-                        `JJ revision "${requestedRef}" is unavailable. ${errorText(error)}`,
-                      ),
-                  ),
-                );
+                    ),
+                  );
+              }
             }
             const sourceHead =
               vcsBinding.backend === "git"
@@ -661,15 +667,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                       Effect.map((result) => result.stdout.trim()),
                       Effect.mapError((error) => new ToolInputError(errorText(error))),
                     )
-                : (
-                    yield* jj
-                      .readRevisionIdentity(sourceCwd)
-                      .pipe(
-                        Effect.mapError(
-                          (error) => new ToolInputError(errorText(error)),
-                        ),
-                      )
-                  ).commitId;
+                : sourceJjStatus!.revision.commitId;
             copyChangesFrom = sourceHead === worktreeRef ? sourceCwd : null;
             const plannedRepositoryWorkspacePath = join(
               serverConfig.worktreesDir,

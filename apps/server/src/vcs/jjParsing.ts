@@ -57,6 +57,11 @@ export interface JjWorkspace {
   readonly registration: Exclude<JjWorkspaceRegistration, { readonly kind: "absent" }>;
 }
 
+export interface JjGitRemote {
+  readonly name: string;
+  readonly url: string;
+}
+
 const RawRevisionIdentity = Schema.Struct({
   changeId: TrimmedNonEmptyString,
   commitId: TrimmedNonEmptyString,
@@ -180,6 +185,19 @@ export function parseJjWorkspaces(output: string): JjWorkspace[] {
       ? { kind: "stale" as const }
       : { kind: "present" as const, root: workspace.root },
   }));
+}
+
+export function parseJjGitRemotes(output: string): JjGitRemote[] {
+  return output
+    .split("\n")
+    .flatMap((line) => {
+      const separator = line.search(/\s/u);
+      if (separator <= 0) return [];
+      const name = line.slice(0, separator).trim();
+      const url = line.slice(separator).trim();
+      return name.length > 0 && url.length > 0 ? [{ name, url }] : [];
+    })
+    .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
 export function findJjWorkspaceRegistration(

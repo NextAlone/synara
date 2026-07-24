@@ -74,6 +74,12 @@ import {
 } from "./vcs";
 import { VcsRunStackedActionInput } from "./vcsActions";
 import {
+  VcsGitHubRepositoryInput,
+  VcsPreparePullRequestThreadInput,
+  VcsPullRequestSnapshotInput,
+  VcsResolvePullRequestInput,
+} from "./vcsPullRequests";
+import {
   TerminalAckOutputInput,
   TerminalClearInput,
   TerminalCloseInput,
@@ -176,6 +182,10 @@ export const WS_METHODS = {
   vcsRemoveWorkspace: "vcs.removeWorkspace",
   vcsHandoffThread: "vcs.handoffThread",
   vcsPull: "vcs.pull",
+  vcsGithubRepository: "vcs.githubRepository",
+  vcsResolvePullRequest: "vcs.resolvePullRequest",
+  vcsPullRequestSnapshot: "vcs.pullRequestSnapshot",
+  vcsPreparePullRequestThread: "vcs.preparePullRequestThread",
   vcsRunStackedAction: "vcs.runStackedAction",
 
   // Git methods
@@ -359,6 +369,13 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.vcsRemoveWorkspace, VcsRemoveWorkspaceInput),
   tagRequestBody(WS_METHODS.vcsHandoffThread, VcsHandoffThreadInput),
   tagRequestBody(WS_METHODS.vcsPull, VcsPullInput),
+  tagRequestBody(WS_METHODS.vcsGithubRepository, VcsGitHubRepositoryInput),
+  tagRequestBody(WS_METHODS.vcsResolvePullRequest, VcsResolvePullRequestInput),
+  tagRequestBody(WS_METHODS.vcsPullRequestSnapshot, VcsPullRequestSnapshotInput),
+  tagRequestBody(
+    WS_METHODS.vcsPreparePullRequestThread,
+    VcsPreparePullRequestThreadInput,
+  ),
   tagRequestBody(WS_METHODS.vcsRunStackedAction, VcsRunStackedActionInput),
 
   // Git methods
