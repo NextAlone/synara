@@ -2,16 +2,19 @@ import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
-import type { OrchestrationThread } from "@synara/contracts";
+import { ProjectId, type OrchestrationThread } from "@synara/contracts";
 import { Effect } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { GitCoreShape } from "./git/Services/GitCore.ts";
+import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
+  listProjectedManagedWorkspaces,
   listManagedWorktrees,
   MANAGED_WORKTREE_RETENTION_COUNT,
   pruneArchivedManagedWorktrees,
 } from "./managedWorktrees.ts";
+import type { ProjectVcsShape } from "./vcs/Services/ProjectVcs.ts";
 
 const temporaryRoots: string[] = [];
 
@@ -33,6 +36,115 @@ afterEach(async () => {
 });
 
 describe("managed worktrees", () => {
+  it("lists managed Git and JJ workspaces through each project's selected backend", async () => {
+    const root = await fs.mkdtemp(path.join(tmpdir(), "synara-managed-vcs-workspaces-"));
+    temporaryRoots.push(root);
+    const gitPath = path.join(root, "git", "synara");
+    const jjPath = path.join(root, "jj", "synara");
+    await fs.mkdir(gitPath, { recursive: true });
+    await fs.mkdir(jjPath, { recursive: true });
+    const gitProjectId = ProjectId.makeUnsafe("project-git");
+    const jjProjectId = ProjectId.makeUnsafe("project-jj");
+    const projects = [
+      {
+        id: gitProjectId,
+        kind: "project",
+        title: "Git",
+        workspaceRoot: "/repo/git",
+        defaultModelSelection: null,
+        scripts: [],
+        isPinned: false,
+        vcs: {
+          epoch: 2,
+          binding: {
+            backend: "git",
+            repoRoot: "/repo/git",
+            projectRelativePath: ".",
+          },
+        },
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: jjProjectId,
+        kind: "project",
+        title: "JJ",
+        workspaceRoot: "/repo/jj",
+        defaultModelSelection: null,
+        scripts: [],
+        isPinned: false,
+        vcs: {
+          epoch: 4,
+          binding: {
+            backend: "jj",
+            repoRoot: "/repo/jj",
+            projectRelativePath: ".",
+          },
+        },
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ] as const;
+    const snapshotQuery = {
+      getShellSnapshot: () =>
+        Effect.succeed({
+          snapshotSequence: 1,
+          spaces: [],
+          projects,
+          threads: [],
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        }),
+    } as unknown as ProjectionSnapshotQueryShape;
+    const projectVcs = {
+      listWorkspaces: ({ projectId }: { readonly projectId: ProjectId }) =>
+        Effect.succeed({
+          backend: projectId === gitProjectId ? ("git" as const) : ("jj" as const),
+          epoch: projectId === gitProjectId ? 2 : 4,
+          workspaces: [
+            {
+              name: "primary",
+              path: projectId === gitProjectId ? "/repo/git" : "/repo/jj",
+              stale: false,
+              current: true,
+              ref: null,
+            },
+            {
+              name: "managed",
+              path: projectId === gitProjectId ? gitPath : jjPath,
+              stale: false,
+              current: false,
+              ref: null,
+            },
+          ],
+        }),
+    } as unknown as ProjectVcsShape;
+
+    await expect(
+      Effect.runPromise(
+        listProjectedManagedWorkspaces({
+          worktreesDir: root,
+          snapshotQuery,
+          projectVcs,
+        }),
+      ),
+    ).resolves.toEqual([
+      {
+        projectId: gitProjectId,
+        backend: "git",
+        epoch: 2,
+        path: await fs.realpath(gitPath),
+        workspaceRoot: "/repo/git",
+      },
+      {
+        projectId: jjProjectId,
+        backend: "jj",
+        epoch: 4,
+        path: await fs.realpath(jjPath),
+        workspaceRoot: "/repo/jj",
+      },
+    ]);
+  });
+
   it("discovers linked worktrees and reports their primary checkout", async () => {
     const { root, paths } = await makeManagedRoot(2);
     const git = {

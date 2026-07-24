@@ -25,6 +25,8 @@ import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionT
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { JjCore } from "../../vcs/Services/JjCore.ts";
+import { ProjectVcs } from "../../vcs/Services/ProjectVcs.ts";
 import { serveExternalMcpStdio, writeExternalMcpClientCredential } from "../bridge.ts";
 import { computeExternalMcpRuntimeProof } from "../runtimeProof.ts";
 import { ExternalMcpGateway } from "../Services/ExternalMcpGateway.ts";
@@ -48,6 +50,14 @@ function projectShell(workspaceRoot: string): OrchestrationProjectShell {
     defaultModelSelection: null,
     scripts: [],
     isPinned: false,
+    vcs: {
+      epoch: 1,
+      binding: {
+        backend: "git",
+        repoRoot: workspaceRoot,
+        projectRelativePath: ".",
+      },
+    },
     createdAt: NOW,
     updatedAt: NOW,
   };
@@ -267,6 +277,8 @@ describe("external MCP gateway stdio flow", () => {
       removeWorktree: () => Effect.void,
       deleteBranchIfUnchanged: () => Effect.void,
     } as never);
+    const jjLayer = Layer.succeed(JjCore, {} as never);
+    const projectVcsLayer = Layer.succeed(ProjectVcs, {} as never);
 
     const providerDiscoveryLayer = Layer.succeed(ProviderDiscoveryService, {
       listModels: ({ provider }: { readonly provider: string }) =>
@@ -326,6 +338,8 @@ describe("external MCP gateway stdio flow", () => {
       Layer.provide(snapshotLayer),
       Layer.provide(engineLayer),
       Layer.provide(gitLayer),
+      Layer.provide(jjLayer),
+      Layer.provide(projectVcsLayer),
       Layer.provide(providerDiscoveryLayer),
       Layer.provide(providerHealthLayer),
       Layer.provide(ServerSettingsService.layerTest()),

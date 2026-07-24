@@ -62,6 +62,7 @@ import {
 import {
   VcsCreateReferenceInput,
   VcsCreateWorkspaceInput,
+  VcsHandoffThreadInput,
   VcsListReferencesInput,
   VcsListWorkspacesInput,
   VcsReadDiffInput,
@@ -171,6 +172,7 @@ export const WS_METHODS = {
   vcsListWorkspaces: "vcs.listWorkspaces",
   vcsCreateWorkspace: "vcs.createWorkspace",
   vcsRemoveWorkspace: "vcs.removeWorkspace",
+  vcsHandoffThread: "vcs.handoffThread",
 
   // Git methods
   gitPull: "git.pull",
@@ -351,6 +353,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.vcsListWorkspaces, VcsListWorkspacesInput),
   tagRequestBody(WS_METHODS.vcsCreateWorkspace, VcsCreateWorkspaceInput),
   tagRequestBody(WS_METHODS.vcsRemoveWorkspace, VcsRemoveWorkspaceInput),
+  tagRequestBody(WS_METHODS.vcsHandoffThread, VcsHandoffThreadInput),
 
   // Git methods
   tagRequestBody(WS_METHODS.gitPull, GitPullInput),

@@ -413,7 +413,7 @@ describe("ProjectVcs", () => {
       workspace: {
         name: "synara-abc123",
         path: "/managed/abc123/synara/app",
-        ref: "main",
+        ref: "workspace-commit",
         branch: null,
       },
     });
@@ -537,5 +537,214 @@ describe("ProjectVcs", () => {
     ).rejects.toThrow("has changes or conflicts");
     expect(forgetWorkspace).not.toHaveBeenCalled();
     expect(removeDirectory).not.toHaveBeenCalled();
+  });
+
+  it("hands a local thread into a JJ workspace without invoking Git", async () => {
+    const startNewChange = vi.fn(() =>
+      Effect.succeed({
+        changeId: "local-continuation",
+        commitId: "local-continuation-commit",
+        description: "wip: Synara local workspace continuation",
+      }),
+    );
+    const gitHandoff = vi.fn();
+    const deps = dependencies({
+      project: project({ epoch: 8, binding: jjBinding }),
+      thread: {
+        id: THREAD_ID,
+        projectId: PROJECT_ID,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        associatedWorktreePath: null,
+        associatedWorktreeBranch: null,
+        associatedWorktreeRef: null,
+      },
+      gitManager: { handoffThread: gitHandoff },
+      jj: {
+        status: (cwd) =>
+          Effect.succeed({
+            repository: {
+              workspaceRoot: cwd,
+              repositoryStorePath: "/store",
+              gitStorePath: "/repo",
+            },
+            revision:
+              cwd === "/repo/app"
+                ? {
+                    changeId: "source-change",
+                    commitId: "source-commit",
+                    description: "wip: source",
+                  }
+                : {
+                    changeId: "workspace-change",
+                    commitId: "workspace-commit",
+                    description: "wip: workspace",
+                  },
+            currentBookmark: "feature",
+            upstreamBookmark: null,
+            aheadCount: 0,
+            behindCount: 0,
+            bookmarks: [],
+            files: [],
+            hasChanges: cwd === "/repo/app",
+            hasConflicts: false,
+          }),
+        createWorkspace: (workspaceInput) =>
+          Effect.succeed({
+            name: workspaceInput.workspaceName,
+            path: workspaceInput.workspacePath,
+            revision: {
+              changeId: "workspace-change",
+              commitId: "workspace-commit",
+              description: workspaceInput.message,
+            },
+          }),
+        getWorkspaceRegistration: () => Effect.succeed({ kind: "absent" as const }),
+        forgetWorkspace: () => Effect.void,
+        startNewChange,
+        resolveNearestBookmark: () => Effect.succeed("feature"),
+      },
+    });
+    const service = makeProjectVcsWith(deps.value);
+
+    const result = await Effect.runPromise(
+      service.handoffThread({
+        commandId: CommandId.makeUnsafe("cmd-jj-handoff-workspace"),
+        projectId: PROJECT_ID,
+        threadId: THREAD_ID,
+        expectedEpoch: 8,
+        targetMode: "worktree",
+        preferredLocalReference: null,
+        preferredWorkspaceBaseReference: "feature",
+        preferredNewWorkspaceName: "feature",
+      }),
+    );
+
+    expect(startNewChange).toHaveBeenCalledWith(
+      "/repo/app",
+      "source-commit",
+      "wip: Synara local workspace continuation",
+    );
+    expect(gitHandoff).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      backend: "jj",
+      epoch: 8,
+      targetMode: "worktree",
+      branch: "feature",
+      worktreePath: "/managed/abc123/synara/app",
+      associatedWorktreeRef: "workspace-commit",
+      changesTransferred: true,
+      conflictsDetected: false,
+    });
+  });
+
+  it("merges a JJ thread workspace into local before forgetting it", async () => {
+    const execute = vi.fn(() =>
+      Effect.succeed({ code: 0, stdout: "", stderr: "" }),
+    );
+    const forgetWorkspace = vi.fn(() => Effect.void);
+    const removeDirectory = vi.fn(async () => undefined);
+    const deps = dependencies({
+      project: project({ epoch: 9, binding: jjBinding }),
+      thread: {
+        id: THREAD_ID,
+        projectId: PROJECT_ID,
+        envMode: "worktree",
+        branch: "feature",
+        worktreePath: "/workspaces/feature/app",
+        associatedWorktreePath: "/workspaces/feature/app",
+        associatedWorktreeBranch: "feature",
+        associatedWorktreeRef: "source-commit",
+      },
+      jj: {
+        status: (cwd) =>
+          Effect.succeed({
+            repository: {
+              workspaceRoot: cwd,
+              repositoryStorePath: "/store",
+              gitStorePath: "/repo",
+            },
+            revision:
+              cwd === "/workspaces/feature/app"
+                ? {
+                    changeId: "source-change",
+                    commitId: "source-commit",
+                    description: "wip: source",
+                  }
+                : {
+                    changeId: "merge-change",
+                    commitId: "merge-commit",
+                    description: "wip: merge",
+                  },
+            currentBookmark: "feature",
+            upstreamBookmark: null,
+            aheadCount: 0,
+            behindCount: 0,
+            bookmarks: [],
+            files: [],
+            hasChanges: cwd === "/workspaces/feature/app",
+            hasConflicts: false,
+          }),
+        readRevisionIdentity: () =>
+          Effect.succeed({
+            changeId: "local-change",
+            commitId: "local-commit",
+            description: "wip: local",
+          }),
+        withMutation: (_cwd, effect) => effect,
+        execute,
+        resolveNearestBookmark: () => Effect.succeed("feature"),
+        listWorkspaces: () =>
+          Effect.succeed([
+            {
+              name: "feature-workspace",
+              registration: {
+                kind: "present" as const,
+                root: "/workspaces/feature",
+              },
+            },
+          ]),
+        forgetWorkspace,
+      },
+      removeDirectory,
+    });
+    const service = makeProjectVcsWith(deps.value);
+
+    const result = await Effect.runPromise(
+      service.handoffThread({
+        commandId: CommandId.makeUnsafe("cmd-jj-handoff-local"),
+        projectId: PROJECT_ID,
+        threadId: THREAD_ID,
+        expectedEpoch: 9,
+        targetMode: "local",
+        preferredLocalReference: "feature",
+        preferredWorkspaceBaseReference: null,
+        preferredNewWorkspaceName: null,
+      }),
+    );
+
+    expect(execute).toHaveBeenCalledWith({
+      operation: "ProjectVcs.handoffThread.mergeIntoLocal",
+      cwd: "/repo/app",
+      args: [
+        "new",
+        "--message",
+        "wip: Synara JJ workspace handoff",
+        "source-change",
+        "local-change",
+      ],
+    });
+    expect(forgetWorkspace).toHaveBeenCalledWith("/repo", "feature-workspace");
+    expect(removeDirectory).toHaveBeenCalledWith("/workspaces/feature");
+    expect(result).toMatchObject({
+      backend: "jj",
+      epoch: 9,
+      targetMode: "local",
+      worktreePath: null,
+      associatedWorktreePath: "/workspaces/feature/app",
+      changesTransferred: true,
+      conflictsDetected: false,
+    });
   });
 });

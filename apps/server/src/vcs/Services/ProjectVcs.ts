@@ -7,6 +7,8 @@ import type {
   VcsCreateReferenceResult,
   VcsCreateWorkspaceInput,
   VcsCreateWorkspaceResult,
+  VcsHandoffThreadInput,
+  VcsHandoffThreadResult,
   VcsListReferencesInput,
   VcsListReferencesResult,
   VcsListWorkspacesInput,
@@ -78,6 +80,9 @@ export interface ProjectVcsShape {
   readonly removeWorkspace: (
     input: VcsRemoveWorkspaceInput,
   ) => Effect.Effect<VcsRemoveWorkspaceResult, ProjectVcsServiceError>;
+  readonly handoffThread: (
+    input: VcsHandoffThreadInput,
+  ) => Effect.Effect<VcsHandoffThreadResult, ProjectVcsServiceError>;
 }
 
 export class ProjectVcs extends ServiceMap.Service<ProjectVcs, ProjectVcsShape>()(

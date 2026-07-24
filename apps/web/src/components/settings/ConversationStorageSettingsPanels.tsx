@@ -3,13 +3,13 @@
 // Layer: Settings UI components
 // Exports: WorktreesSettingsPanel, ArchivedSettingsPanel
 
-import type { ThreadId } from "@synara/contracts";
+import type { ProjectId, ThreadId } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 
 import { Button } from "~/components/ui/button";
-import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
+import { vcsRemoveWorkspaceMutationOptions } from "~/lib/vcsReactQuery";
 import { ArchiveIcon } from "~/lib/icons";
 import {
   deleteArchivedThreadFromClient,
@@ -77,7 +77,7 @@ function WorktreesStatus(props: { children: string; error?: boolean }) {
 export function WorktreesSettingsPanel({ active }: { readonly active: boolean }) {
   const queryClient = useQueryClient();
   const worktreesQuery = useQuery(serverWorktreesQueryOptions());
-  const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
+  const removeWorktreeMutation = useMutation(vcsRemoveWorkspaceMutationOptions({ queryClient }));
   const removeDeletedThreadFromClientState = useStore(
     (store) => store.removeDeletedThreadFromClientState,
   );
@@ -88,6 +88,9 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
     type WorktreeGroup = {
       workspaceRoot: string;
       worktrees: Array<{
+        projectId: ProjectId;
+        backend: "git" | "jj";
+        epoch: number;
         path: string;
         linkedThreads: typeof threadShells;
       }>;
@@ -96,6 +99,9 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
     const groupByRoot = new Map<string, WorktreeGroup>();
     for (const worktree of worktreesQuery.data?.worktrees ?? []) {
       const nextWorktree = {
+        projectId: worktree.projectId,
+        backend: worktree.backend,
+        epoch: worktree.epoch,
         path: worktree.path,
         linkedThreads: threadShells.filter((thread) =>
           isThreadAssociatedWithWorktree(thread, worktree.path),
@@ -117,7 +123,11 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
   }, [threadShells, worktreesQuery.data?.worktrees]);
 
   const deleteManagedWorktree = useCallback(
-    async (input: { workspaceRoot: string; worktreePath: string }) => {
+    async (input: {
+      projectId: ProjectId;
+      epoch: number;
+      worktreePath: string;
+    }) => {
       const api = readNativeApi() ?? ensureNativeApi();
       const displayName = formatWorktreePathForDisplay(input.worktreePath);
       const snapshot = await api.orchestration.getShellSnapshot().catch(() => null);
@@ -150,7 +160,7 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
               "",
               "Delete the worktree anyway?",
             ].join("\n")
-          : [`Delete worktree "${displayName}"?`, "This removes the Git worktree from disk."].join(
+          : [`Delete workspace "${displayName}"?`, "This removes the VCS workspace from disk."].join(
               "\n",
             ),
       );
@@ -163,14 +173,15 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
           removeDeletedThreadFromClientState,
         });
         await removeWorktreeMutation.mutateAsync({
-          cwd: input.workspaceRoot,
+          projectId: input.projectId,
+          expectedEpoch: input.epoch,
           path: input.worktreePath,
           force: true,
         });
         await queryClient.invalidateQueries({ queryKey: serverQueryKeys.worktrees() });
         toastManager.add({
           type: "success",
-          title: "Worktree deleted",
+          title: "Workspace deleted",
           description:
             linkedArchivedThreadIds.length > 0
               ? `${displayName} was removed and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedArchivedThreadIds.length, "conversation")} were deleted.`
@@ -179,8 +190,8 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
       } catch (error) {
         toastManager.add({
           type: "error",
-          title: "Could not delete worktree",
-          description: error instanceof Error ? error.message : "Unable to delete the worktree.",
+          title: "Could not delete workspace",
+          description: error instanceof Error ? error.message : "Unable to delete the workspace.",
         });
       }
     },
@@ -190,19 +201,19 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
   if (!active) return null;
 
   if (worktreesQuery.isLoading) {
-    return <WorktreesStatus>Loading managed worktrees...</WorktreesStatus>;
+    return <WorktreesStatus>Loading managed workspaces...</WorktreesStatus>;
   }
   if (worktreesQuery.isError) {
     return (
       <WorktreesStatus error>
         {worktreesQuery.error instanceof Error
           ? worktreesQuery.error.message
-          : "Unable to load worktrees."}
+          : "Unable to load workspaces."}
       </WorktreesStatus>
     );
   }
   if (worktreesByWorkspaceRoot.length === 0) {
-    return <WorktreesStatus>No app-managed worktrees found yet.</WorktreesStatus>;
+    return <WorktreesStatus>No app-managed workspaces found yet.</WorktreesStatus>;
   }
 
   return (
@@ -213,7 +224,7 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
             <SettingsListRow
               key={worktree.path}
               align="start"
-              title="Worktree"
+              title={worktree.backend === "jj" ? "JJ workspace" : "Git worktree"}
               description={
                 <div className="space-y-2">
                   <div
@@ -255,7 +266,8 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
                     disabled={removeWorktreeMutation.isPending}
                     onClick={() =>
                       void deleteManagedWorktree({
-                        workspaceRoot: group.workspaceRoot,
+                        projectId: worktree.projectId,
+                        epoch: worktree.epoch,
                         worktreePath: worktree.path,
                       })
                     }

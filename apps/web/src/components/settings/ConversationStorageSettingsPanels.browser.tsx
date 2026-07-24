@@ -10,6 +10,9 @@ import { render } from "vitest-browser-react";
 const harness = vi.hoisted(() => ({
   worktrees: [
     {
+      projectId: "project-1",
+      backend: "git",
+      epoch: 1,
       workspaceRoot: "/repo",
       path: "/repo/.worktrees/feature",
     },
@@ -32,8 +35,8 @@ vi.mock("~/lib/serverReactQuery", () => ({
   serverWorktreesQueryOptions: () => ({ queryKey: ["worktrees"] }),
 }));
 
-vi.mock("~/lib/gitReactQuery", () => ({
-  gitRemoveWorktreeMutationOptions: () => ({}),
+vi.mock("~/lib/vcsReactQuery", () => ({
+  vcsRemoveWorkspaceMutationOptions: () => ({}),
 }));
 
 vi.mock("~/storeSelectors", () => ({

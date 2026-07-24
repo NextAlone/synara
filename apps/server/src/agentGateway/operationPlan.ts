@@ -1,4 +1,7 @@
 export interface RecoverableCreationPlanEntry {
+  readonly projectId: string | null;
+  readonly vcsBackend: "git" | "jj";
+  readonly vcsEpoch: number | null;
   readonly workspaceRoot: string;
   readonly environment: "local" | "worktree";
   readonly worktreeRef: string | null;
@@ -85,6 +88,14 @@ export function parseRecoverableCreationPlan(
           }
         : null;
     return {
+      projectId: typeof value.projectId === "string" ? value.projectId : null,
+      vcsBackend: value.vcsBackend === "jj" ? "jj" : "git",
+      vcsEpoch:
+        typeof value.vcsEpoch === "number" &&
+        Number.isSafeInteger(value.vcsEpoch) &&
+        value.vcsEpoch >= 0
+          ? value.vcsEpoch
+          : null,
       workspaceRoot: value.workspaceRoot,
       environment: value.environment,
       worktreeRef: typeof value.worktreeRef === "string" ? value.worktreeRef : null,
@@ -151,6 +162,9 @@ export function redactCreationPlanForPurgedCaller(input: {
 }): string {
   return JSON.stringify(
     parseRecoverableCreationPlan(input.planJson, input.operationId).map((entry) => ({
+      ...(entry.projectId ? { projectId: entry.projectId } : {}),
+      vcsBackend: entry.vcsBackend,
+      ...(entry.vcsEpoch !== null ? { vcsEpoch: entry.vcsEpoch } : {}),
       workspaceRoot: entry.environment === "worktree" ? entry.workspaceRoot : "",
       environment: entry.environment,
       ...(entry.worktreeRef ? { worktreeRef: entry.worktreeRef } : {}),

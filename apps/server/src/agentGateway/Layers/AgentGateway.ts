@@ -70,6 +70,8 @@ import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
+import { JjCore } from "../../vcs/Services/JjCore.ts";
+import { ProjectVcs } from "../../vcs/Services/ProjectVcs.ts";
 
 const AGENT_GATEWAY_INSTRUCTIONS = SYNARA_GATEWAY_HARNESS_POLICY;
 
@@ -79,6 +81,8 @@ export const makeAgentGateway = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
   const git = yield* GitCore;
+  const jj = yield* JjCore;
+  const projectVcs = yield* ProjectVcs;
   const providerDiscovery = yield* ProviderDiscoveryService;
   const providerHealth = yield* ProviderHealth;
   const serverSettings = yield* ServerSettingsService;
@@ -122,6 +126,8 @@ export const makeAgentGateway = Effect.gen(function* () {
     snapshotQuery,
     orchestrationEngine,
     git,
+    jj,
+    projectVcs,
   });
 
   const requireThreadShell = (threadId: string) =>
@@ -190,6 +196,8 @@ export const makeAgentGateway = Effect.gen(function* () {
     snapshotQuery,
     orchestrationEngine,
     git,
+    jj,
+    projectVcs,
     providerDiscovery,
     operationRepository,
     serverConfig,

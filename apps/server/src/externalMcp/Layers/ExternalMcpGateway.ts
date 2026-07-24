@@ -21,6 +21,8 @@ import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionT
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { JjCore } from "../../vcs/Services/JjCore.ts";
+import { ProjectVcs } from "../../vcs/Services/ProjectVcs.ts";
 import { AgentGatewayOperationRepository } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
 import { makeCreateThreadsHandler } from "../../agentGateway/creationCoordinator.ts";
 import { recoverInterruptedAgentGatewayOperations } from "../../agentGateway/startupRecovery.ts";
@@ -155,6 +157,8 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
   const settings = yield* ServerSettingsService;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const git = yield* GitCore;
+  const jj = yield* JjCore;
+  const projectVcs = yield* ProjectVcs;
   const serverConfig = yield* ServerConfig;
   const operationRepository = yield* AgentGatewayOperationRepository;
 
@@ -170,6 +174,8 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     snapshotQuery,
     orchestrationEngine,
     git,
+    jj,
+    projectVcs,
   });
 
   const loadProviderAvailabilities = Effect.gen(function* () {
@@ -215,6 +221,8 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     snapshotQuery,
     orchestrationEngine,
     git,
+    jj,
+    projectVcs,
     providerDiscovery,
     operationRepository,
     externalMcpRepository: externalRepository,

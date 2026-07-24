@@ -3,14 +3,23 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import type { OrchestrationThread, ServerManagedWorktree } from "@synara/contracts";
+import type {
+  OrchestrationThread,
+  ServerManagedWorktree,
+} from "@synara/contracts";
 import { Effect } from "effect";
 
 import type { GitCoreShape } from "./git/Services/GitCore.ts";
 import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import type { ProjectVcsShape } from "./vcs/Services/ProjectVcs.ts";
 
 const MANAGED_WORKTREE_SCAN_DEPTH = 6;
 export const MANAGED_WORKTREE_RETENTION_COUNT = 15;
+
+interface GitManagedWorktreeInventoryEntry {
+  readonly path: string;
+  readonly workspaceRoot: string;
+}
 
 async function findLinkedWorktreeRoots(root: string, current = root, depth = 0): Promise<string[]> {
   if (depth > MANAGED_WORKTREE_SCAN_DEPTH) return [];
@@ -45,7 +54,7 @@ function parsePrimaryWorktreePath(stdout: string): string | null {
 export function listManagedWorktrees(input: {
   readonly worktreesDir: string;
   readonly git: GitCoreShape;
-}): Effect.Effect<ReadonlyArray<ServerManagedWorktree>, Error> {
+}): Effect.Effect<ReadonlyArray<GitManagedWorktreeInventoryEntry>, Error> {
   return Effect.tryPromise({
     try: () => findLinkedWorktreeRoots(input.worktreesDir),
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
@@ -82,7 +91,7 @@ export function listManagedWorktrees(input: {
     ),
     Effect.map((entries) =>
       entries
-        .filter((entry): entry is ServerManagedWorktree => entry !== null)
+        .filter((entry): entry is GitManagedWorktreeInventoryEntry => entry !== null)
         .sort((left, right) => left.path.localeCompare(right.path)),
     ),
   );
@@ -122,7 +131,7 @@ export function pruneArchivedManagedWorktrees(input: {
   readonly snapshotsDir: string;
   readonly threads: ReadonlyArray<OrchestrationThread>;
   readonly git: GitCoreShape;
-}): Effect.Effect<ReadonlyArray<ServerManagedWorktree>, Error> {
+}): Effect.Effect<ReadonlyArray<GitManagedWorktreeInventoryEntry>, Error> {
   return Effect.gen(function* () {
     const inventory = yield* listManagedWorktrees(input);
     const canonicalByRecordedPath = yield* canonicalizeThreadWorktreePaths(input.threads);
@@ -147,7 +156,12 @@ export function pruneArchivedManagedWorktrees(input: {
           : { thread, entry: null };
       })
       .filter(
-        (value): value is { thread: OrchestrationThread; entry: ServerManagedWorktree } =>
+        (
+          value,
+        ): value is {
+          thread: OrchestrationThread;
+          entry: GitManagedWorktreeInventoryEntry;
+        } =>
           value.entry !== null && !activePaths.has(value.entry.path),
       )
       .sort((left, right) =>
@@ -228,7 +242,7 @@ export function pruneProjectedArchivedManagedWorktrees(input: {
   readonly worktreesDir: string;
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly git: GitCoreShape;
-}): Effect.Effect<ReadonlyArray<ServerManagedWorktree>, Error> {
+}): Effect.Effect<ReadonlyArray<GitManagedWorktreeInventoryEntry>, Error> {
   return Effect.gen(function* () {
     const snapshot = yield* input.snapshotQuery.getSnapshot();
     return yield* pruneArchivedManagedWorktrees({
@@ -237,5 +251,99 @@ export function pruneProjectedArchivedManagedWorktrees(input: {
       threads: snapshot.threads,
       git: input.git,
     });
+  });
+}
+
+function pathIsInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (!path.isAbsolute(relative) &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`))
+  );
+}
+
+/** List app-managed Git worktrees and JJ workspaces through the configured project backend. */
+export function listProjectedManagedWorkspaces(input: {
+  readonly worktreesDir: string;
+  readonly snapshotQuery: ProjectionSnapshotQueryShape;
+  readonly projectVcs: ProjectVcsShape;
+}): Effect.Effect<ReadonlyArray<ServerManagedWorktree>, Error> {
+  return Effect.gen(function* () {
+    const snapshot = yield* input.snapshotQuery.getShellSnapshot().pipe(
+      Effect.mapError((cause) =>
+        cause instanceof Error ? cause : new Error(String(cause)),
+      ),
+    );
+    const managedRoot = yield* Effect.tryPromise({
+      try: () =>
+        fs.realpath(input.worktreesDir).catch(() => path.resolve(input.worktreesDir)),
+      catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+    });
+    const listed = yield* Effect.forEach(
+      snapshot.projects,
+      (project) => {
+        const binding = project.vcs.binding;
+        if (!binding) return Effect.succeed<ReadonlyArray<ServerManagedWorktree>>([]);
+        return input.projectVcs
+          .listWorkspaces({
+            projectId: project.id,
+            expectedEpoch: project.vcs.epoch,
+          })
+          .pipe(
+            Effect.flatMap((result) =>
+              Effect.forEach(
+                result.workspaces,
+                (workspace) => {
+                  if (workspace.path === null || workspace.current) {
+                    return Effect.succeed<ServerManagedWorktree | null>(null);
+                  }
+                  return Effect.tryPromise({
+                    try: () =>
+                      fs
+                        .realpath(workspace.path!)
+                        .catch(() => path.resolve(workspace.path!)),
+                    catch: (cause) =>
+                      cause instanceof Error ? cause : new Error(String(cause)),
+                  }).pipe(
+                    Effect.map((workspacePath) =>
+                      pathIsInside(managedRoot, workspacePath)
+                        ? {
+                            projectId: project.id,
+                            backend: binding.backend,
+                            epoch: project.vcs.epoch,
+                            path: workspacePath,
+                            workspaceRoot: project.workspaceRoot,
+                          }
+                        : null,
+                    ),
+                  );
+                },
+                { concurrency: 4 },
+              ),
+            ),
+            Effect.catch((error) =>
+              Effect.logWarning("managed workspace inventory skipped a project", {
+                projectId: project.id,
+                backend: binding.backend,
+                error: error instanceof Error ? error.message : String(error),
+              }).pipe(Effect.as([])),
+            ),
+          );
+      },
+      { concurrency: 4 },
+    );
+    const byIdentity = new Map<string, ServerManagedWorktree>();
+    for (const entry of listed.flat()) {
+      if (entry !== null) {
+        byIdentity.set(`${entry.projectId}\0${entry.path}`, entry);
+      }
+    }
+    return [...byIdentity.values()].sort(
+      (left, right) =>
+        left.workspaceRoot.localeCompare(right.workspaceRoot) ||
+        left.path.localeCompare(right.path),
+    );
   });
 }

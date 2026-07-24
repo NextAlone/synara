@@ -86,6 +86,8 @@ import type {
   VcsCreateReferenceResult,
   VcsCreateWorkspaceInput,
   VcsCreateWorkspaceResult,
+  VcsHandoffThreadInput,
+  VcsHandoffThreadResult,
   VcsListReferencesInput,
   VcsListReferencesResult,
   VcsListWorkspacesInput,
@@ -610,6 +612,7 @@ export interface NativeApi {
     listWorkspaces: (input: VcsListWorkspacesInput) => Promise<VcsListWorkspacesResult>;
     createWorkspace: (input: VcsCreateWorkspaceInput) => Promise<VcsCreateWorkspaceResult>;
     removeWorkspace: (input: VcsRemoveWorkspaceInput) => Promise<VcsRemoveWorkspaceResult>;
+    handoffThread: (input: VcsHandoffThreadInput) => Promise<VcsHandoffThreadResult>;
   };
   git: {
     // Existing branch/worktree API

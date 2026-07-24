@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { resolveWorktreeHandoffIntent } from "@synara/shared/worktreeHandoff";
 import { useCallback, useState } from "react";
-import { gitHandoffThreadMutationOptions } from "~/lib/gitReactQuery";
+import { vcsHandoffThreadMutationOptions } from "~/lib/vcsReactQuery";
 import { buildSuggestedWorktreeName } from "../components/ChatView.logic";
 import { toastManager } from "../components/ui/toast";
 import { newCommandId } from "../lib/utils";
@@ -30,7 +30,7 @@ export function useThreadWorkspaceHandoff(input: {
 }) {
   const queryClient = useQueryClient();
   const handoffThreadMutation = useMutation(
-    gitHandoffThreadMutationOptions({ cwd: input.activeProject?.cwd ?? null, queryClient }),
+    vcsHandoffThreadMutationOptions({ queryClient }),
   );
   const [worktreeHandoffDialogOpen, setWorktreeHandoffDialogOpen] = useState(false);
   const [worktreeHandoffName, setWorktreeHandoffName] = useState("");
@@ -49,22 +49,23 @@ export function useThreadWorkspaceHandoff(input: {
 
       try {
         await input.stopActiveThreadSession();
+        const vcs = input.activeProject.vcs;
+        if (!vcs?.binding) {
+          throw new Error("Choose Git or JJ for this project before moving the thread workspace.");
+        }
         const result = await handoffThreadMutation.mutateAsync({
           commandId: newCommandId(),
+          projectId: input.activeProject.id,
           threadId: input.activeThread.id,
+          expectedEpoch: vcs.epoch,
           targetMode,
-          currentBranch: input.activeThread.branch ?? null,
-          worktreePath: input.activeThread.worktreePath ?? null,
-          associatedWorktreePath: input.activeThreadAssociatedWorktree.associatedWorktreePath,
-          associatedWorktreeBranch: input.activeThreadAssociatedWorktree.associatedWorktreeBranch,
-          associatedWorktreeRef: input.activeThreadAssociatedWorktree.associatedWorktreeRef,
-          preferredLocalBranch: input.activeRootBranch ?? input.activeThread.branch ?? null,
-          preferredWorktreeBaseBranch:
+          preferredLocalReference: input.activeRootBranch ?? input.activeThread.branch ?? null,
+          preferredWorkspaceBaseReference:
             input.activeRootBranch ??
             input.activeThreadAssociatedWorktree.associatedWorktreeBranch ??
             input.activeThread.branch ??
             null,
-          preferredNewWorktreeName: options?.preferredWorktreeName ?? null,
+          preferredNewWorkspaceName: options?.preferredWorktreeName ?? null,
         });
 
         if (targetMode === "worktree" && result.worktreePath) {
@@ -82,7 +83,7 @@ export function useThreadWorkspaceHandoff(input: {
           type: result.conflictsDetected ? "warning" : "success",
           title:
             targetMode === "worktree"
-              ? "Thread handed off to worktree"
+              ? "Thread handed off to workspace"
               : "Thread handed off to local",
           ...(result.message ? { description: result.message } : {}),
         });
@@ -92,7 +93,7 @@ export function useThreadWorkspaceHandoff(input: {
           type: "error",
           title:
             targetMode === "worktree"
-              ? "Could not hand off to worktree"
+              ? "Could not hand off to workspace"
               : "Could not hand off to local",
           description:
             error instanceof Error ? error.message : "An error occurred during the handoff.",

@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 
 import {
+  CommandId,
   NonNegativeInt,
   PositiveInt,
   ProjectId,
@@ -267,3 +268,33 @@ export const VcsRemoveWorkspaceResult = Schema.Struct({
   removed: Schema.Boolean,
 });
 export type VcsRemoveWorkspaceResult = typeof VcsRemoveWorkspaceResult.Type;
+
+export const VcsHandoffThreadMode = Schema.Literals(["local", "worktree"]);
+export type VcsHandoffThreadMode = typeof VcsHandoffThreadMode.Type;
+
+export const VcsHandoffThreadInput = Schema.Struct({
+  commandId: CommandId,
+  projectId: ProjectId,
+  threadId: ThreadId,
+  expectedEpoch: NonNegativeInt,
+  targetMode: VcsHandoffThreadMode,
+  preferredLocalReference: Schema.NullOr(TrimmedNonEmptyString),
+  preferredWorkspaceBaseReference: Schema.NullOr(TrimmedNonEmptyString),
+  preferredNewWorkspaceName: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type VcsHandoffThreadInput = typeof VcsHandoffThreadInput.Type;
+
+export const VcsHandoffThreadResult = Schema.Struct({
+  backend: VcsBackend,
+  epoch: NonNegativeInt,
+  targetMode: VcsHandoffThreadMode,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  associatedWorktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  associatedWorktreeBranch: Schema.NullOr(TrimmedNonEmptyString),
+  associatedWorktreeRef: Schema.NullOr(TrimmedNonEmptyString),
+  changesTransferred: Schema.Boolean,
+  conflictsDetected: Schema.Boolean,
+  message: Schema.NullOr(Schema.String),
+});
+export type VcsHandoffThreadResult = typeof VcsHandoffThreadResult.Type;

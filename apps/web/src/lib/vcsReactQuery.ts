@@ -5,6 +5,7 @@ import type {
   VcsBackend,
   VcsCreateReferenceInput,
   VcsCreateWorkspaceInput,
+  VcsHandoffThreadInput,
   VcsReadDiffInput,
   VcsRemoveWorkspaceInput,
   VcsSwitchReferenceInput,
@@ -215,6 +216,15 @@ export function vcsRemoveWorkspaceMutationOptions(input: { queryClient: QueryCli
     mutationKey: ["vcs", "mutation", "remove-workspace"] as const,
     mutationFn: (request: VcsRemoveWorkspaceInput) =>
       ensureNativeApi().vcs.removeWorkspace(request),
+    onSettled: mutationInvalidation(input.queryClient),
+  });
+}
+
+export function vcsHandoffThreadMutationOptions(input: { queryClient: QueryClient }) {
+  return mutationOptions({
+    mutationKey: ["vcs", "mutation", "handoff-thread"] as const,
+    mutationFn: (request: VcsHandoffThreadInput) =>
+      ensureNativeApi().vcs.handoffThread(request),
     onSettled: mutationInvalidation(input.queryClient),
   });
 }

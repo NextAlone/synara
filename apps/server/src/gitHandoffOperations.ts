@@ -1,6 +1,8 @@
 import {
   GitHandoffThreadInput,
   GitHandoffThreadResult,
+  VcsHandoffThreadInput,
+  VcsHandoffThreadResult,
   type OrchestrationCommand,
 } from "@synara/contracts";
 import { Data, Effect, Schema } from "effect";
@@ -24,6 +26,14 @@ export type GitHandoffOperation =
       readonly result: GitHandoffThreadResult;
     };
 
+export type VcsHandoffOperation =
+  | { readonly phase: "new" }
+  | { readonly phase: "pending" | "uncertain" }
+  | {
+      readonly phase: "git_applied" | "completed";
+      readonly result: VcsHandoffThreadResult;
+    };
+
 export class GitHandoffOperationError extends Data.TaggedError("GitHandoffOperationError")<{
   readonly message: string;
   readonly cause?: unknown;
@@ -36,6 +46,12 @@ const parseResult = (row: HandoffRow) =>
   Effect.try({
     try: () => Schema.decodeUnknownSync(GitHandoffThreadResult)(JSON.parse(row.resultJson ?? "")),
     catch: operationError(`Invalid persisted Git handoff result for ${row.commandId}.`),
+  });
+
+const parseVcsResult = (row: HandoffRow) =>
+  Effect.try({
+    try: () => Schema.decodeUnknownSync(VcsHandoffThreadResult)(JSON.parse(row.resultJson ?? "")),
+    catch: operationError(`Invalid persisted VCS handoff result for ${row.commandId}.`),
   });
 
 const readOperation = (commandId: string) =>
@@ -61,7 +77,17 @@ const decodeOperation = (
     ? parseResult(row).pipe(Effect.map((result) => ({ phase: row.phase, result })))
     : Effect.succeed({ phase: row.phase });
 
-export const beginGitHandoff = (input: GitHandoffThreadInput) =>
+const decodeVcsOperation = (
+  row: HandoffRow,
+): Effect.Effect<VcsHandoffOperation, GitHandoffOperationError> =>
+  row.phase === "git_applied" || row.phase === "completed"
+    ? parseVcsResult(row).pipe(Effect.map((result) => ({ phase: row.phase, result })))
+    : Effect.succeed({ phase: row.phase });
+
+const beginHandoff = (input: {
+  readonly commandId: string;
+  readonly threadId: string;
+}) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const inputJson = JSON.stringify(input);
@@ -74,16 +100,30 @@ export const beginGitHandoff = (input: GitHandoffThreadInput) =>
       )
       ON CONFLICT (command_id) DO NOTHING
       RETURNING command_id AS "commandId"
-    `.pipe(Effect.mapError(operationError("Failed to begin Git handoff operation.")));
-    if (inserted.length > 0) return { phase: "new" } as const;
+    `.pipe(Effect.mapError(operationError("Failed to begin VCS handoff operation.")));
+    if (inserted.length > 0) return { inputJson, row: null } as const;
 
     const existing = yield* readOperation(input.commandId);
     if (!existing || existing.threadId !== input.threadId || existing.inputJson !== inputJson) {
       return yield* new GitHandoffOperationError({
-        message: `Git handoff command identity ${input.commandId} was reused with different input.`,
+        message: `VCS handoff command identity ${input.commandId} was reused with different input.`,
       });
     }
-    return yield* decodeOperation(existing);
+    return { inputJson, row: existing } as const;
+  });
+
+export const beginGitHandoff = (input: GitHandoffThreadInput) =>
+  Effect.gen(function* () {
+    const begun = yield* beginHandoff(input);
+    return begun.row === null ? ({ phase: "new" } as const) : yield* decodeOperation(begun.row);
+  });
+
+export const beginVcsHandoff = (input: VcsHandoffThreadInput) =>
+  Effect.gen(function* () {
+    const begun = yield* beginHandoff(input);
+    return begun.row === null
+      ? ({ phase: "new" } as const)
+      : yield* decodeVcsOperation(begun.row);
   });
 
 export const recordGitHandoffResult = (commandId: string, result: GitHandoffThreadResult) =>
@@ -97,6 +137,12 @@ export const recordGitHandoffResult = (commandId: string, result: GitHandoffThre
       WHERE command_id = ${commandId} AND phase = 'pending'
     `.pipe(Effect.mapError(operationError("Failed to persist applied Git handoff result.")));
   });
+
+export const recordVcsHandoffResult = (
+  commandId: string,
+  result: VcsHandoffThreadResult,
+) =>
+  recordGitHandoffResult(commandId, result);
 
 export const completeGitHandoff = (commandId: string) =>
   Effect.gen(function* () {
@@ -120,6 +166,22 @@ export const discardPendingGitHandoff = (commandId: string) =>
 export const gitHandoffMetadataCommand = (
   input: Pick<GitHandoffThreadInput, "commandId" | "threadId">,
   result: GitHandoffThreadResult,
+): OrchestrationCommand => ({
+  type: "thread.meta.update",
+  commandId: input.commandId,
+  threadId: input.threadId,
+  envMode: result.targetMode,
+  branch: result.branch,
+  worktreePath: result.worktreePath,
+  associatedWorktreePath: result.associatedWorktreePath,
+  associatedWorktreeBranch: result.associatedWorktreeBranch,
+  associatedWorktreeRef: result.associatedWorktreeRef,
+  ...(result.targetMode === "worktree" ? { createBranchFlowCompleted: false } : {}),
+});
+
+export const vcsHandoffMetadataCommand = (
+  input: Pick<VcsHandoffThreadInput, "commandId" | "threadId">,
+  result: VcsHandoffThreadResult,
 ): OrchestrationCommand => ({
   type: "thread.meta.update",
   commandId: input.commandId,
@@ -163,14 +225,33 @@ export const recoverGitHandoffOperations = (
     `.pipe(Effect.mapError(operationError("Failed to list recoverable Git handoffs.")));
 
     for (const row of rows) {
-      const input = yield* Effect.try({
-        try: () => Schema.decodeUnknownSync(GitHandoffThreadInput)(JSON.parse(row.inputJson)),
-        catch: operationError(`Invalid persisted Git handoff input for ${row.commandId}.`),
+      const rawInput = yield* Effect.try({
+        try: () => JSON.parse(row.inputJson) as unknown,
+        catch: operationError(`Invalid persisted VCS handoff input for ${row.commandId}.`),
       });
-      const result = yield* parseResult(row);
-      yield* dispatch(gitHandoffMetadataCommand(input, result)).pipe(
-        Effect.mapError(operationError(`Failed to recover Git handoff ${row.commandId}.`)),
-      );
+      if (
+        typeof rawInput === "object" &&
+        rawInput !== null &&
+        "projectId" in rawInput
+      ) {
+        const input = yield* Effect.try({
+          try: () => Schema.decodeUnknownSync(VcsHandoffThreadInput)(rawInput),
+          catch: operationError(`Invalid persisted VCS handoff input for ${row.commandId}.`),
+        });
+        const result = yield* parseVcsResult(row);
+        yield* dispatch(vcsHandoffMetadataCommand(input, result)).pipe(
+          Effect.mapError(operationError(`Failed to recover VCS handoff ${row.commandId}.`)),
+        );
+      } else {
+        const input = yield* Effect.try({
+          try: () => Schema.decodeUnknownSync(GitHandoffThreadInput)(rawInput),
+          catch: operationError(`Invalid persisted Git handoff input for ${row.commandId}.`),
+        });
+        const result = yield* parseResult(row);
+        yield* dispatch(gitHandoffMetadataCommand(input, result)).pipe(
+          Effect.mapError(operationError(`Failed to recover Git handoff ${row.commandId}.`)),
+        );
+      }
       yield* completeGitHandoff(row.commandId);
     }
   });

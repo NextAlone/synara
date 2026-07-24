@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 
-import { CommandId, ThreadId } from "@synara/contracts";
+import { CommandId, ProjectId, ThreadId } from "@synara/contracts";
 import { Effect, Option } from "effect";
 
 import type { GitCoreShape } from "../git/Services/GitCore.ts";
@@ -13,6 +13,8 @@ import type {
 import { gatewayIsoNow } from "./creationUtils.ts";
 import { parseRecoverableCreationPlan } from "./operationPlan.ts";
 import { errorText } from "./toolInput.ts";
+import type { JjCoreShape } from "../vcs/Services/JjCore.ts";
+import type { ProjectVcsShape } from "../vcs/Services/ProjectVcs.ts";
 
 /**
  * Compensate durable gateway operations that were interrupted by a server
@@ -34,6 +36,8 @@ export function recoverInterruptedAgentGatewayOperations(input: {
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly orchestrationEngine: OrchestrationEngineShape;
   readonly git: GitCoreShape;
+  readonly jj: JjCoreShape;
+  readonly projectVcs: ProjectVcsShape;
 }) {
   return Effect.gen(function* () {
     const interruptedOperations = yield* input.operationRepository.listNonTerminal().pipe(
@@ -108,7 +112,64 @@ export function recoverInterruptedAgentGatewayOperations(input: {
               projectionDeferredThreadIds.has(entry.ids.threadId)
                 ? Effect.void
                 : entry.environment === "worktree" && entry.plannedWorktreePath
-                  ? input.git
+                  ? entry.vcsBackend === "jj"
+                    ? Effect.gen(function* () {
+                        const plannedWorkspacePath = entry.plannedWorktreePath;
+                        if (plannedWorkspacePath === null) return;
+                        if (!entry.projectId || entry.vcsEpoch === null) {
+                          return yield* Effect.fail(
+                            new Error(
+                              `Cleanup remains pending for JJ workspace ${plannedWorkspacePath}: its project VCS identity is incomplete.`,
+                            ),
+                          );
+                        }
+                        if (!entry.worktreeOwnership) {
+                          if (existsSync(plannedWorkspacePath)) {
+                            return yield* Effect.fail(
+                              new Error(
+                                `Cleanup remains pending for unverified JJ workspace ${plannedWorkspacePath}.`,
+                              ),
+                            );
+                          }
+                          return;
+                        }
+                        if (!existsSync(plannedWorkspacePath)) return;
+                        const status = yield* input.jj.status(plannedWorkspacePath);
+                        if (status.revision.commitId !== entry.worktreeOwnership.head) {
+                          return yield* Effect.fail(
+                            new Error(
+                              `Refusing to clean JJ workspace ${plannedWorkspacePath}: its working-copy revision changed after ownership was recorded.`,
+                            ),
+                          );
+                        }
+                        const workspaces = yield* input.projectVcs.listWorkspaces({
+                          projectId: ProjectId.makeUnsafe(entry.projectId),
+                          expectedEpoch: entry.vcsEpoch,
+                        });
+                        const registered = workspaces.workspaces.find(
+                          (workspace) =>
+                            workspace.name === entry.worktreeOwnership!.token &&
+                            workspace.path === plannedWorkspacePath,
+                        );
+                        if (!registered) {
+                          return yield* Effect.fail(
+                            new Error(
+                              `Refusing to clean JJ workspace ${plannedWorkspacePath}: its durable registration no longer matches.`,
+                            ),
+                          );
+                        }
+                        yield* input.projectVcs.removeWorkspace({
+                          projectId: ProjectId.makeUnsafe(entry.projectId),
+                          expectedEpoch: entry.vcsEpoch,
+                          path: plannedWorkspacePath,
+                          force: true,
+                        });
+                      }).pipe(
+                        Effect.catch((error) =>
+                          Effect.sync(() => recoveryErrors.push(errorText(error))),
+                        ),
+                      )
+                    : input.git
                       .withMutation(
                         entry.workspaceRoot,
                         Effect.gen(function* () {

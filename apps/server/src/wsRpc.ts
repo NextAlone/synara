@@ -57,15 +57,21 @@ import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
 import { TextGeneration } from "./git/Services/TextGeneration";
 import {
   beginGitHandoff,
+  beginVcsHandoff,
   completeGitHandoff,
   discardPendingGitHandoff,
   gitHandoffMetadataCommand,
   recordGitHandoffResult,
+  recordVcsHandoffResult,
+  vcsHandoffMetadataCommand,
 } from "./gitHandoffOperations";
 import { Keybindings } from "./keybindings";
 import { createLocalPreviewGrant } from "./localImageFiles";
 import { listLocalServers, stopLocalServer } from "./localServerMonitor";
-import { listManagedWorktrees, pruneProjectedArchivedManagedWorktrees } from "./managedWorktrees";
+import {
+  listProjectedManagedWorkspaces,
+  pruneProjectedArchivedManagedWorktrees,
+} from "./managedWorktrees";
 import {
   attachmentPrincipalForSession,
   CurrentManagedAttachmentPrincipal,
@@ -627,29 +633,23 @@ const makeWsRpcHandlersLayer = () =>
           ),
         );
 
+      const listManagedWorkspaces = listProjectedManagedWorkspaces({
+        worktreesDir: config.worktreesDir,
+        snapshotQuery: projectionReadModelQuery,
+        projectVcs,
+      });
       const pruneManagedWorktrees = pruneProjectedArchivedManagedWorktrees({
         homeDir: config.homeDir,
         worktreesDir: config.worktreesDir,
         snapshotQuery: projectionReadModelQuery,
         git,
       }).pipe(
-        // A retention failure must not present as an empty inventory: fall back
-        // to a plain scan so listing callers still see the real worktrees.
         Effect.catchCause((cause) =>
-          Effect.logWarning("managed worktree retention failed", {
+          Effect.logWarning("managed Git worktree retention failed", {
             cause: String(cause),
-          }).pipe(
-            Effect.andThen(
-              listManagedWorktrees({ worktreesDir: config.worktreesDir, git }).pipe(
-                Effect.catchCause((listCause) =>
-                  Effect.logWarning("managed worktree inventory scan failed", {
-                    cause: String(listCause),
-                  }).pipe(Effect.as([])),
-                ),
-              ),
-            ),
-          ),
+          }),
         ),
+        Effect.andThen(listManagedWorkspaces),
       );
       const getOrchestrationHighWaterSequence = orchestrationEngine.getEventHighWaterSequence.pipe(
         Effect.mapError((cause) =>
@@ -1090,6 +1090,42 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(projectVcs.createWorkspace(input), "Failed to create project VCS workspace"),
         [WS_METHODS.vcsRemoveWorkspace]: (input) =>
           rpcEffect(projectVcs.removeWorkspace(input), "Failed to remove project VCS workspace"),
+        [WS_METHODS.vcsHandoffThread]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const operation = yield* beginVcsHandoff(input);
+              if (operation.phase === "pending" || operation.phase === "uncertain") {
+                return yield* new WsRpcError({
+                  message:
+                    operation.phase === "pending"
+                      ? "This VCS workspace handoff is already running."
+                      : "This VCS workspace handoff was interrupted before its filesystem result became durable; inspect the workspace before retrying.",
+                });
+              }
+              if (operation.phase === "completed") return operation.result;
+
+              const result =
+                operation.phase === "git_applied"
+                  ? operation.result
+                  : yield* projectVcs.handoffThread(input).pipe(
+                      Effect.catch((error) =>
+                        discardPendingGitHandoff(input.commandId).pipe(
+                          Effect.catch(() => Effect.void),
+                          Effect.andThen(Effect.fail(error)),
+                        ),
+                      ),
+                      Effect.tap((vcsResult) =>
+                        recordVcsHandoffResult(input.commandId, vcsResult),
+                      ),
+                    );
+              yield* dispatchOrchestrationCommand(
+                vcsHandoffMetadataCommand(input, result),
+              );
+              yield* completeGitHandoff(input.commandId);
+              return result;
+            }),
+            "Failed to hand off thread workspace",
+          ),
 
         [WS_METHODS.gitGithubRepository]: (input) =>
           rpcEffect(resolveGitHubRepository(git, input.cwd), "Failed to resolve GitHub repository"),

@@ -88,6 +88,7 @@ import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopT
 import { useTheme } from "../hooks/useTheme";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
+import { invalidateVcsQueries } from "../lib/vcsReactQuery";
 import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { useProviderAuthRefreshOnFocus } from "../hooks/useProviderAuthRefreshOnFocus";
@@ -1183,6 +1184,7 @@ function EventRouter() {
         needsBroadGitInvalidation = false;
         pendingGitInvalidationThreadIds = new Set();
         void invalidateGitQueries(queryClient);
+        void invalidateVcsQueries(queryClient);
       } else if (pendingGitInvalidationThreadIds.size > 0) {
         const currentState = useStore.getState();
         const scopedCwds = new Set<string>();
@@ -1196,6 +1198,7 @@ function EventRouter() {
           }
         }
         pendingGitInvalidationThreadIds = new Set();
+        void invalidateVcsQueries(queryClient);
         if (hasUnresolvedThread || scopedCwds.size === 0) {
           void invalidateGitQueries(queryClient);
         } else {

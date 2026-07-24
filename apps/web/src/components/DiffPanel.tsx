@@ -632,7 +632,7 @@ export default function DiffPanel({
       cacheScope: selectedTurn ? `turn:${selectedTurn.turnId}` : conversationCacheScope,
       enabled:
         diffQueriesEnabled &&
-        vcsTarget.backend === "git" &&
+        vcsTarget.backend !== null &&
         isGitRepo &&
         !diffEnvironmentPending &&
         diffViewKind === "turn",

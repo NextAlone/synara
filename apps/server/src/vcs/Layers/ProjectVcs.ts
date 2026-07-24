@@ -8,6 +8,7 @@ import {
   type ProjectVcsBinding,
   type VcsBackend,
   type VcsFileChange,
+  type VcsHandoffThreadResult,
   type VcsListReferencesResult,
   type VcsListWorkspacesResult,
   type VcsStatusResult,
@@ -828,7 +829,7 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
             workspace: {
               name: created.name,
               path: workspaceProjectPath(created.path, target.binding),
-              ref: input.sourceRef,
+              ref: created.revision.commitId,
               branch: null,
             },
           };
@@ -920,6 +921,212 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
       ),
     );
 
+  const handoffThread: ProjectVcsShape["handoffThread"] = (input) =>
+    resolveTarget({
+      projectId: input.projectId,
+      threadId: input.threadId,
+      expectedEpoch: input.expectedEpoch,
+    }).pipe(
+      Effect.flatMap((target) =>
+        dependencies.projection.getThreadShellById(input.threadId).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                Effect.fail(
+                  projectError(
+                    "ProjectVcs.handoffThread",
+                    "thread-not-found",
+                    `Thread '${input.threadId}' does not exist or is deleted.`,
+                  ),
+                ),
+              onSome: Effect.succeed,
+            }),
+          ),
+          Effect.flatMap((thread) =>
+            Effect.gen(function* () {
+              const primaryProjectCwd = projectPathForBinding(target.binding);
+              if (target.backend === "git") {
+                const toRepositoryWorkspacePath = (projectPath: string | null) =>
+                  projectPath === null
+                    ? null
+                    : workspaceRootForProjectPath(projectPath, target.binding);
+                const gitResult = yield* dependencies.gitManager.handoffThread({
+                  cwd: primaryProjectCwd,
+                  targetMode: input.targetMode,
+                  currentBranch: thread.branch,
+                  worktreePath: toRepositoryWorkspacePath(thread.worktreePath),
+                  associatedWorktreePath: toRepositoryWorkspacePath(
+                    thread.associatedWorktreePath ?? null,
+                  ),
+                  associatedWorktreeBranch: thread.associatedWorktreeBranch ?? null,
+                  associatedWorktreeRef: thread.associatedWorktreeRef ?? null,
+                  preferredLocalBranch: input.preferredLocalReference,
+                  preferredWorktreeBaseBranch: input.preferredWorkspaceBaseReference,
+                  preferredNewWorktreeName: input.preferredNewWorkspaceName,
+                });
+                const toProjectWorkspacePath = (workspacePath: string | null) =>
+                  workspacePath === null
+                    ? null
+                    : workspaceProjectPath(workspacePath, target.binding);
+                return {
+                  ...gitResult,
+                  backend: "git",
+                  epoch: target.epoch,
+                  worktreePath: toProjectWorkspacePath(gitResult.worktreePath),
+                  associatedWorktreePath: toProjectWorkspacePath(
+                    gitResult.associatedWorktreePath,
+                  ),
+                } satisfies VcsHandoffThreadResult;
+              }
+
+              if (input.targetMode === "worktree") {
+                if (thread.envMode === "worktree" && thread.worktreePath) {
+                  const status = yield* dependencies.jj.status(thread.worktreePath);
+                  return {
+                    backend: "jj",
+                    epoch: target.epoch,
+                    targetMode: "worktree",
+                    branch: status.currentBookmark,
+                    worktreePath: thread.worktreePath,
+                    associatedWorktreePath:
+                      thread.associatedWorktreePath ?? thread.worktreePath,
+                    associatedWorktreeBranch:
+                      thread.associatedWorktreeBranch ?? status.currentBookmark,
+                    associatedWorktreeRef:
+                      thread.associatedWorktreeRef ?? status.revision.commitId,
+                    changesTransferred: false,
+                    conflictsDetected: status.hasConflicts,
+                    message: "The thread is already using its JJ workspace.",
+                  } satisfies VcsHandoffThreadResult;
+                }
+
+                const sourceStatus = yield* dependencies.jj.status(primaryProjectCwd);
+                const sourceRevision = sourceStatus.revision;
+                const associatedPath = thread.associatedWorktreePath ?? null;
+                const reusableAssociatedPath =
+                  associatedPath !== null &&
+                  !(yield* Effect.promise(() => dependencies.pathExists(associatedPath)))
+                    ? associatedPath
+                    : null;
+                const created = yield* createWorkspace({
+                  projectId: input.projectId,
+                  expectedEpoch: input.expectedEpoch,
+                  sourceRef: sourceRevision.commitId,
+                  path: reusableAssociatedPath,
+                  copyChangesFromCurrent: true,
+                });
+                const continueLocal = dependencies.jj.startNewChange(
+                  primaryProjectCwd,
+                  sourceRevision.commitId,
+                  "wip: Synara local workspace continuation",
+                );
+                yield* continueLocal.pipe(
+                  Effect.onError(() =>
+                    removeWorkspace({
+                      projectId: input.projectId,
+                      expectedEpoch: input.expectedEpoch,
+                      path: created.workspace.path,
+                      force: true,
+                    }).pipe(Effect.ignore),
+                  ),
+                );
+                const [workspaceStatus, workspaceRef] = yield* Effect.all(
+                  [
+                    dependencies.jj.status(created.workspace.path),
+                    dependencies.jj.resolveNearestBookmark(created.workspace.path),
+                  ],
+                  { concurrency: 2 },
+                );
+                return {
+                  backend: "jj",
+                  epoch: target.epoch,
+                  targetMode: "worktree",
+                  branch: workspaceRef,
+                  worktreePath: created.workspace.path,
+                  associatedWorktreePath: created.workspace.path,
+                  associatedWorktreeBranch: workspaceRef,
+                  associatedWorktreeRef: workspaceStatus.revision.commitId,
+                  changesTransferred:
+                    sourceStatus.hasChanges || sourceStatus.hasConflicts,
+                  conflictsDetected: workspaceStatus.hasConflicts,
+                  message:
+                    "The thread moved into a JJ workspace; its current change is preserved as shared revision history.",
+                } satisfies VcsHandoffThreadResult;
+              }
+
+              if (thread.envMode !== "worktree" || !thread.worktreePath) {
+                const status = yield* dependencies.jj.status(primaryProjectCwd);
+                return {
+                  backend: "jj",
+                  epoch: target.epoch,
+                  targetMode: "local",
+                  branch: status.currentBookmark,
+                  worktreePath: null,
+                  associatedWorktreePath: thread.associatedWorktreePath ?? null,
+                  associatedWorktreeBranch:
+                    thread.associatedWorktreeBranch ?? status.currentBookmark,
+                  associatedWorktreeRef:
+                    thread.associatedWorktreeRef ?? status.revision.commitId,
+                  changesTransferred: false,
+                  conflictsDetected: status.hasConflicts,
+                  message: "The thread is already using the local JJ workspace.",
+                } satisfies VcsHandoffThreadResult;
+              }
+
+              const sourceStatus = yield* dependencies.jj.status(thread.worktreePath);
+              const localRevision = yield* dependencies.jj.readRevisionIdentity(
+                primaryProjectCwd,
+              );
+              yield* dependencies.jj.withMutation(
+                target.binding.repoRoot,
+                dependencies.jj
+                  .execute({
+                    operation: "ProjectVcs.handoffThread.mergeIntoLocal",
+                    cwd: primaryProjectCwd,
+                    args: [
+                      "new",
+                      "--message",
+                      "wip: Synara JJ workspace handoff",
+                      sourceStatus.revision.changeId,
+                      localRevision.changeId,
+                    ],
+                  })
+                  .pipe(Effect.asVoid),
+              );
+              const localStatus = yield* dependencies.jj.status(primaryProjectCwd);
+              const localRef = yield* dependencies.jj.resolveNearestBookmark(
+                primaryProjectCwd,
+              );
+              yield* removeWorkspace({
+                projectId: input.projectId,
+                expectedEpoch: input.expectedEpoch,
+                path: thread.worktreePath,
+                force: true,
+              });
+              return {
+                backend: "jj",
+                epoch: target.epoch,
+                targetMode: "local",
+                branch: localRef,
+                worktreePath: null,
+                associatedWorktreePath:
+                  thread.associatedWorktreePath ?? thread.worktreePath,
+                associatedWorktreeBranch:
+                  thread.associatedWorktreeBranch ?? sourceStatus.currentBookmark,
+                associatedWorktreeRef:
+                  thread.associatedWorktreeRef ?? sourceStatus.revision.commitId,
+                changesTransferred:
+                  sourceStatus.hasChanges || sourceStatus.hasConflicts,
+                conflictsDetected: localStatus.hasConflicts,
+                message:
+                  "The JJ workspace revision was merged into the local workspace and the isolated workspace was removed.",
+              } satisfies VcsHandoffThreadResult;
+            }),
+          ),
+        ),
+      ),
+    );
+
   return {
     setBackend,
     resolveTarget,
@@ -931,6 +1138,7 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
     listWorkspaces,
     createWorkspace,
     removeWorkspace,
+    handoffThread,
   };
 }
 

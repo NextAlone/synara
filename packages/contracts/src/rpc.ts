@@ -78,6 +78,8 @@ import {
   VcsCreateReferenceResult,
   VcsCreateWorkspaceInput,
   VcsCreateWorkspaceResult,
+  VcsHandoffThreadInput,
+  VcsHandoffThreadResult,
   VcsListReferencesInput,
   VcsListReferencesResult,
   VcsListWorkspacesInput,
@@ -490,6 +492,12 @@ export const WsVcsCreateWorkspaceRpc = Rpc.make(WS_METHODS.vcsCreateWorkspace, {
 export const WsVcsRemoveWorkspaceRpc = Rpc.make(WS_METHODS.vcsRemoveWorkspace, {
   payload: VcsRemoveWorkspaceInput,
   success: VcsRemoveWorkspaceResult,
+  error: WsRpcError,
+});
+
+export const WsVcsHandoffThreadRpc = Rpc.make(WS_METHODS.vcsHandoffThread, {
+  payload: VcsHandoffThreadInput,
+  success: VcsHandoffThreadResult,
   error: WsRpcError,
 });
 
@@ -1076,6 +1084,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsVcsListWorkspacesRpc,
   WsVcsCreateWorkspaceRpc,
   WsVcsRemoveWorkspaceRpc,
+  WsVcsHandoffThreadRpc,
   WsGitGithubRepositoryRpc,
   WsGitStatusRpc,
   WsGitReadWorkingTreeDiffRpc,

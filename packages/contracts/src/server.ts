@@ -13,6 +13,7 @@ import { ModelSelection, ProviderKind, ProviderStartOptions } from "./orchestrat
 import { ServerSettingsPatch, ServerSettingsView } from "./settings";
 import { ExecutionEnvironmentDescriptor } from "./environment";
 import { AutomationCompletionPolicy, AutomationMode, AutomationSchedule } from "./automation";
+import { VcsBackend } from "./vcs";
 
 export const SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BASE64_CHARS = 14_000_000;
@@ -100,6 +101,9 @@ export const ServerConfig = Schema.Struct({
 export type ServerConfig = typeof ServerConfig.Type;
 
 export const ServerManagedWorktree = Schema.Struct({
+  projectId: ProjectId,
+  backend: VcsBackend,
+  epoch: NonNegativeInt,
   path: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
 });

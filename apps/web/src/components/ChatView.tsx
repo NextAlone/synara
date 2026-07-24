@@ -7395,7 +7395,7 @@ export default function ChatView({
           worktreeSetupStepId: "prepare-thread",
           setupScriptName: worktreeSetupScriptName,
         });
-        nextThreadBranch = result.workspace.branch ?? result.workspace.ref;
+        nextThreadBranch = result.workspace.branch;
         nextThreadWorktreePath = result.workspace.path;
         createdWorktreeForSendPath = result.workspace.path;
         const nextAssociatedWorktree = {
