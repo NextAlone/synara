@@ -15,6 +15,7 @@ import {
   ThreadPinnedMessages,
   ThreadMarkers,
   ProjectScript,
+  ProjectVcsState,
   ProjectId,
   ProjectKind,
   SpaceId,
@@ -86,6 +87,7 @@ const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
     defaultModelSelection: Schema.NullOr(ModelSelectionJsonUnknown),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
     isPinned: Schema.Number,
+    vcs: Schema.fromJsonString(ProjectVcsState),
   }),
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
@@ -422,6 +424,7 @@ function toProjectedProject(row: ProjectionProjectDbRow): OrchestrationProject {
     scripts: row.scripts,
     isPinned: row.isPinned > 0,
     spaceId: row.spaceId,
+    vcs: row.vcs,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     deletedAt: row.deletedAt,
@@ -581,6 +584,7 @@ function toProjectedProjectShell(row: ProjectionProjectDbRow): OrchestrationProj
     scripts: row.scripts,
     isPinned: row.isPinned > 0,
     spaceId: row.spaceId,
+    vcs: row.vcs,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -754,6 +758,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
           space_id AS "spaceId",
+          vcs_state_json AS "vcs",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1214,6 +1219,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
           space_id AS "spaceId",
+          vcs_state_json AS "vcs",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1274,6 +1280,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
           space_id AS "spaceId",
+          vcs_state_json AS "vcs",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -2263,6 +2270,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               scripts: row.scripts,
               isPinned: row.isPinned > 0,
               spaceId: row.spaceId,
+              vcs: row.vcs,
               createdAt: row.createdAt,
               updatedAt: row.updatedAt,
               deletedAt: row.deletedAt,

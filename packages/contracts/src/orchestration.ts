@@ -11,6 +11,7 @@ import {
 } from "./model";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { ProjectKind } from "./project";
+import { ProjectVcsBinding, ProjectVcsState } from "./vcs";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -442,6 +443,9 @@ export const OrchestrationProject = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
+  vcs: Schema.optional(ProjectVcsState).pipe(
+    Schema.withDecodingDefault(() => ({ epoch: 0, binding: null })),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -457,6 +461,9 @@ export const OrchestrationProjectShell = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
+  vcs: Schema.optional(ProjectVcsState).pipe(
+    Schema.withDecodingDefault(() => ({ epoch: 0, binding: null })),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1003,6 +1010,20 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   isPinned: Schema.optional(Schema.Boolean),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)),
 });
+
+/**
+ * Server-only command emitted after the VCS binding coordinator has validated
+ * the repository and drained conflicting project operations.
+ */
+export const ProjectVcsBindingSetCommand = Schema.Struct({
+  type: Schema.Literal("project.vcs-binding.set"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  expectedEpoch: NonNegativeInt,
+  binding: Schema.NullOr(ProjectVcsBinding),
+  updatedAt: IsoDateTime,
+});
+export type ProjectVcsBindingSetCommand = typeof ProjectVcsBindingSetCommand.Type;
 
 const ProjectDeleteCommand = Schema.Struct({
   type: Schema.Literal("project.delete"),
@@ -1571,6 +1592,7 @@ const ThreadConversationRollbackCompleteCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  ProjectVcsBindingSetCommand,
   ThreadSessionSetCommand,
   ThreadMessagesImportCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -1676,6 +1698,9 @@ export const ProjectCreatedPayload = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
+  vcs: Schema.optional(ProjectVcsState).pipe(
+    Schema.withDecodingDefault(() => ({ epoch: 0, binding: null })),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1689,6 +1714,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   isPinned: Schema.optional(Schema.Boolean),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)),
+  vcs: Schema.optional(ProjectVcsState),
   updatedAt: IsoDateTime,
 });
 

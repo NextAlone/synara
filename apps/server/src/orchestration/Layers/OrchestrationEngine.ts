@@ -116,6 +116,7 @@ function commandToAggregateRef(command: OrchestrationCommand): {
       };
     case "project.create":
     case "project.meta.update":
+    case "project.vcs-binding.set":
     case "project.delete":
       return {
         aggregateKind: "project",

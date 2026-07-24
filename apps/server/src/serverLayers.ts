@@ -36,6 +36,7 @@ import { ServerLifecycleEventsLive } from "./serverLifecycleEvents";
 import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
 import { ServerSettingsLive } from "./serverSettings";
 import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
+import { VcsLayerLive } from "./vcs/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
 import { ExternalMcpRepositoryLive } from "./externalMcp/Layers/ExternalMcpRepository";
 import { ExternalMcpServiceLive } from "./externalMcp/Layers/ExternalMcpService";
@@ -211,6 +212,7 @@ export function makeServerRuntimeServicesLayer(
     ServerLifecycleEventsLive,
     ServerRuntimeStartupLive,
     WorkspaceLayerLive,
+    VcsLayerLive,
     ProjectFaviconResolverLive,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 }

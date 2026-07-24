@@ -4,6 +4,7 @@ import type {
   OrchestrationReadModel,
   OrchestrationThread,
   ProjectKind,
+  ProjectVcsBinding,
   ThreadMarker,
 } from "@synara/contracts";
 import {
@@ -64,6 +65,20 @@ const STUDIO_PROJECT_KIND_SET = new Set<ProjectKind>(["studio"]);
 // Kinds that claim exclusive ownership of a workspace root. Chat containers are excluded: they
 // use placeholder roots (e.g. the home dir) that legitimately coexist with real projects.
 const WORKSPACE_OWNING_PROJECT_KIND_SET = new Set<ProjectKind>(["project", "studio"]);
+
+function vcsBindingsEqual(
+  left: ProjectVcsBinding | null,
+  right: ProjectVcsBinding | null,
+): boolean {
+  if (left === null || right === null) {
+    return left === right;
+  }
+  return (
+    left.backend === right.backend &&
+    left.repoRoot === right.repoRoot &&
+    left.projectRelativePath === right.projectRelativePath
+  );
+}
 
 const defaultMetadata: Omit<OrchestrationEvent, "sequence" | "type" | "payload"> = {
   eventId: crypto.randomUUID() as OrchestrationEvent["eventId"],
@@ -681,6 +696,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           scripts: [],
           isPinned: command.isPinned,
           spaceId: creationSpaceId,
+          vcs: { epoch: 0, binding: null },
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -822,6 +838,68 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
           ...(changedSpaceId !== undefined ? { spaceId: changedSpaceId } : {}),
           updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "project.vcs-binding.set": {
+      const existingProject = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      if (existingProject.deletedAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Deleted project '${command.projectId}' cannot change VCS binding.`,
+        });
+      }
+      if ((existingProject.kind ?? "project") !== "project" && command.binding !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Only ordinary projects can bind a VCS repository.",
+        });
+      }
+
+      const currentVcs = existingProject.vcs ?? { epoch: 0, binding: null };
+      if (currentVcs.epoch !== command.expectedEpoch) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Project VCS epoch changed from ${command.expectedEpoch} to ${currentVcs.epoch}. Refresh the project before retrying.`,
+        });
+      }
+      if (vcsBindingsEqual(currentVcs.binding, command.binding)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Project already has this VCS binding.",
+        });
+      }
+
+      const activeThread = listThreadsByProjectId(readModel, command.projectId).find(
+        (thread) => thread.deletedAt === null && threadHasInFlightTurn(thread),
+      );
+      if (activeThread) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${activeThread.id}' has an active turn. Stop it before changing the project VCS binding.`,
+        });
+      }
+
+      return {
+        ...withEventBase({
+          aggregateKind: "project",
+          aggregateId: command.projectId,
+          occurredAt: command.updatedAt,
+          commandId: command.commandId,
+        }),
+        type: "project.meta-updated",
+        payload: {
+          projectId: command.projectId,
+          vcs: {
+            epoch: currentVcs.epoch + 1,
+            binding: command.binding,
+          },
+          updatedAt: command.updatedAt,
         },
       };
     }

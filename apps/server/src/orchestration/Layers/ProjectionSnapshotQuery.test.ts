@@ -354,6 +354,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               runOnWorktreeCreate: false,
             },
           ],
+          vcs: { epoch: 0, binding: null },
           createdAt: "2026-02-24T00:00:00.000Z",
           updatedAt: "2026-02-24T00:00:01.000Z",
           deletedAt: null,
@@ -1334,6 +1335,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(project._tag, "Some");
       if (project._tag === "Some") {
         assert.equal(project.value.id, asProjectId("project-active"));
+        assert.deepEqual(project.value.vcs, { epoch: 0, binding: null });
       }
 
       const missingProject = yield* snapshotQuery.getActiveProjectByWorkspaceRoot("/tmp/missing");

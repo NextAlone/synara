@@ -387,6 +387,7 @@ export function projectEvent(
             scripts: payload.scripts,
             isPinned: payload.isPinned ?? false,
             spaceId: payload.spaceId ?? null,
+            vcs: payload.vcs ?? { epoch: 0, binding: null },
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -422,6 +423,7 @@ export function projectEvent(
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
                   ...(payload.spaceId !== undefined ? { spaceId: payload.spaceId } : {}),
+                  ...(payload.vcs !== undefined ? { vcs: payload.vcs } : {}),
                   updatedAt: payload.updatedAt,
                 }
               : project,

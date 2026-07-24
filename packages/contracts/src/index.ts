@@ -17,6 +17,7 @@ export * from "./server";
 export * from "./stats";
 export * from "./settings";
 export * from "./git";
+export * from "./vcs";
 export * from "./pullRequests";
 export * from "./orchestration";
 export * from "./editor";

@@ -94,6 +94,53 @@ function now() {
 }
 
 describe("OrchestrationEngine", () => {
+  it("round-trips an exclusive project VCS binding through event storage and projections", async () => {
+    const system = await createOrchestrationSystem();
+    const projectId = asProjectId("project-vcs-round-trip");
+    const createdAt = now();
+    try {
+      await system.run(
+        system.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-vcs-round-trip-create"),
+          projectId,
+          title: "VCS round trip",
+          workspaceRoot: "/tmp/project-vcs-round-trip",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "project.vcs-binding.set",
+          commandId: CommandId.makeUnsafe("cmd-vcs-round-trip-bind"),
+          projectId,
+          expectedEpoch: 0,
+          binding: {
+            backend: "jj",
+            repoRoot: "/tmp/project-vcs-round-trip",
+            projectRelativePath: ".",
+          },
+          updatedAt: createdAt,
+        }),
+      );
+
+      const project = (await system.run(system.engine.getReadModel())).projects.find(
+        (candidate) => candidate.id === projectId,
+      );
+      expect(project?.vcs).toEqual({
+        epoch: 1,
+        binding: {
+          backend: "jj",
+          repoRoot: "/tmp/project-vcs-round-trip",
+          projectRelativePath: ".",
+        },
+      });
+    } finally {
+      await system.dispose();
+    }
+  });
+
   it("quiesces normal admission while draining reserved lifecycle commands", async () => {
     const system = await createOrchestrationSystem();
     const createdAt = now();
