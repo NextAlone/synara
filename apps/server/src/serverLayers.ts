@@ -36,7 +36,7 @@ import { ServerLifecycleEventsLive } from "./serverLifecycleEvents";
 import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
 import { ServerSettingsLive } from "./serverSettings";
 import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
-import { VcsLayerLive } from "./vcs/runtimeLayer";
+import { ProjectVcsLayerLive, VcsLayerLive } from "./vcs/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
 import { ExternalMcpRepositoryLive } from "./externalMcp/Layers/ExternalMcpRepository";
 import { ExternalMcpServiceLive } from "./externalMcp/Layers/ExternalMcpService";
@@ -181,6 +181,11 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
   );
+  const projectVcsLayer = ProjectVcsLayerLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(GitLayerLive),
+    Layer.provideMerge(VcsLayerLive),
+  );
 
   return Layer.mergeAll(
     agentGatewayCredentialsLayer,
@@ -213,6 +218,7 @@ export function makeServerRuntimeServicesLayer(
     ServerRuntimeStartupLive,
     WorkspaceLayerLive,
     VcsLayerLive,
+    projectVcsLayer,
     ProjectFaviconResolverLive,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 }

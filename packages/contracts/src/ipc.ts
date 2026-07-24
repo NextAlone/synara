@@ -82,6 +82,18 @@ import type {
   GitUnstageFilesResult,
 } from "./git";
 import type {
+  VcsListReferencesInput,
+  VcsListReferencesResult,
+  VcsListWorkspacesInput,
+  VcsListWorkspacesResult,
+  VcsReadDiffInput,
+  VcsReadDiffResult,
+  VcsSetBackendInput,
+  VcsSetBackendResult,
+  VcsStatusInput,
+  VcsStatusResult,
+} from "./vcs";
+import type {
   PullRequestActionInput,
   PullRequestActionResult,
   PullRequestCommentInput,
@@ -579,6 +591,13 @@ export interface NativeApi {
     openInEditor: (cwd: string, editor: EditorId) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
     showInFolder: (path: string) => Promise<void>;
+  };
+  vcs: {
+    setBackend: (input: VcsSetBackendInput) => Promise<VcsSetBackendResult>;
+    status: (input: VcsStatusInput) => Promise<VcsStatusResult>;
+    readDiff: (input: VcsReadDiffInput) => Promise<VcsReadDiffResult>;
+    listReferences: (input: VcsListReferencesInput) => Promise<VcsListReferencesResult>;
+    listWorkspaces: (input: VcsListWorkspacesInput) => Promise<VcsListWorkspacesResult>;
   };
   git: {
     // Existing branch/worktree API

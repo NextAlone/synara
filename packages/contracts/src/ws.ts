@@ -60,6 +60,13 @@ import {
   GitUnstageFilesInput,
 } from "./git";
 import {
+  VcsListReferencesInput,
+  VcsListWorkspacesInput,
+  VcsReadDiffInput,
+  VcsSetBackendInput,
+  VcsStatusInput,
+} from "./vcs";
+import {
   TerminalAckOutputInput,
   TerminalClearInput,
   TerminalCloseInput,
@@ -149,6 +156,13 @@ export const WS_METHODS = {
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
+
+  // Project-scoped VCS methods
+  vcsSetBackend: "vcs.setBackend",
+  vcsStatus: "vcs.status",
+  vcsReadDiff: "vcs.readDiff",
+  vcsListReferences: "vcs.listReferences",
+  vcsListWorkspaces: "vcs.listWorkspaces",
 
   // Git methods
   gitPull: "git.pull",
@@ -318,6 +332,13 @@ const WebSocketRequestBody = Schema.Union([
 
   // Shell methods
   tagRequestBody(WS_METHODS.shellOpenInEditor, OpenInEditorInput),
+
+  // Project-scoped VCS methods
+  tagRequestBody(WS_METHODS.vcsSetBackend, VcsSetBackendInput),
+  tagRequestBody(WS_METHODS.vcsStatus, VcsStatusInput),
+  tagRequestBody(WS_METHODS.vcsReadDiff, VcsReadDiffInput),
+  tagRequestBody(WS_METHODS.vcsListReferences, VcsListReferencesInput),
+  tagRequestBody(WS_METHODS.vcsListWorkspaces, VcsListWorkspacesInput),
 
   // Git methods
   tagRequestBody(WS_METHODS.gitPull, GitPullInput),

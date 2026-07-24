@@ -74,6 +74,18 @@ import {
   GitUnstageFilesResult,
 } from "./git";
 import {
+  VcsListReferencesInput,
+  VcsListReferencesResult,
+  VcsListWorkspacesInput,
+  VcsListWorkspacesResult,
+  VcsReadDiffInput,
+  VcsReadDiffResult,
+  VcsSetBackendInput,
+  VcsSetBackendResult,
+  VcsStatusInput,
+  VcsStatusResult,
+} from "./vcs";
+import {
   PullRequestActionInput,
   PullRequestCommentInput,
   PullRequestActionResult,
@@ -416,6 +428,36 @@ export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
   payload: OpenInEditorInput,
   success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsVcsSetBackendRpc = Rpc.make(WS_METHODS.vcsSetBackend, {
+  payload: VcsSetBackendInput,
+  success: VcsSetBackendResult,
+  error: WsRpcError,
+});
+
+export const WsVcsStatusRpc = Rpc.make(WS_METHODS.vcsStatus, {
+  payload: VcsStatusInput,
+  success: VcsStatusResult,
+  error: WsRpcError,
+});
+
+export const WsVcsReadDiffRpc = Rpc.make(WS_METHODS.vcsReadDiff, {
+  payload: VcsReadDiffInput,
+  success: VcsReadDiffResult,
+  error: WsRpcError,
+});
+
+export const WsVcsListReferencesRpc = Rpc.make(WS_METHODS.vcsListReferences, {
+  payload: VcsListReferencesInput,
+  success: VcsListReferencesResult,
+  error: WsRpcError,
+});
+
+export const WsVcsListWorkspacesRpc = Rpc.make(WS_METHODS.vcsListWorkspaces, {
+  payload: VcsListWorkspacesInput,
+  success: VcsListWorkspacesResult,
   error: WsRpcError,
 });
 
@@ -993,6 +1035,11 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsStudioListThreadOutputsRpc,
   WsFilesystemBrowseRpc,
   WsShellOpenInEditorRpc,
+  WsVcsSetBackendRpc,
+  WsVcsStatusRpc,
+  WsVcsReadDiffRpc,
+  WsVcsListReferencesRpc,
+  WsVcsListWorkspacesRpc,
   WsGitGithubRepositoryRpc,
   WsGitStatusRpc,
   WsGitReadWorkingTreeDiffRpc,

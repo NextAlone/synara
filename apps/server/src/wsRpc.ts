@@ -121,6 +121,7 @@ import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackp
 import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
+import { ProjectVcs } from "./vcs/Services/ProjectVcs";
 
 export function canManageExternalMcp(role: "owner" | "client"): boolean {
   return role === "owner";
@@ -311,6 +312,7 @@ const makeWsRpcHandlersLayer = () =>
       const pullRequests = yield* PullRequestService;
       const profileStatsQuery = yield* ProfileStatsQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
+      const projectVcs = yield* ProjectVcs;
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
       const providerDiscoveryService = yield* ProviderDiscoveryService;
       const providerHealth = yield* ProviderHealth;
@@ -1069,6 +1071,17 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(workspaceEntries.browse(input), "Failed to browse filesystem"),
         [WS_METHODS.shellOpenInEditor]: (input) =>
           rpcEffect(open.openInEditor(input), "Failed to open editor"),
+
+        [WS_METHODS.vcsSetBackend]: (input) =>
+          rpcEffect(projectVcs.setBackend(input), "Failed to configure project VCS"),
+        [WS_METHODS.vcsStatus]: (input) =>
+          rpcEffect(projectVcs.status(input), "Failed to read project VCS status"),
+        [WS_METHODS.vcsReadDiff]: (input) =>
+          rpcEffect(projectVcs.readDiff(input), "Failed to read project VCS diff"),
+        [WS_METHODS.vcsListReferences]: (input) =>
+          rpcEffect(projectVcs.listReferences(input), "Failed to list project VCS references"),
+        [WS_METHODS.vcsListWorkspaces]: (input) =>
+          rpcEffect(projectVcs.listWorkspaces(input), "Failed to list project VCS workspaces"),
 
         [WS_METHODS.gitGithubRepository]: (input) =>
           rpcEffect(resolveGitHubRepository(git, input.cwd), "Failed to resolve GitHub repository"),

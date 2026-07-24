@@ -223,4 +223,47 @@ describe("project VCS binding decider", () => {
       ),
     ).rejects.toThrow("Only ordinary projects");
   });
+
+  it("invalidates the binding when the project root changes", async () => {
+    const initial = await projectReadModel();
+    const bindingEvent = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "project.vcs-binding.set",
+          commandId: CommandId.makeUnsafe("cmd-bind-before-root-change"),
+          projectId: PROJECT_ID,
+          expectedEpoch: 0,
+          binding: {
+            backend: "jj",
+            repoRoot: "/tmp/vcs-project",
+            projectRelativePath: ".",
+          },
+          updatedAt: NOW,
+        },
+        readModel: initial,
+      }),
+    );
+    if (Array.isArray(bindingEvent)) {
+      throw new Error("Expected one binding event.");
+    }
+    const bound = await Effect.runPromise(
+      projectEvent(initial, { ...bindingEvent, sequence: 2 }),
+    );
+
+    const rootChanged = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "project.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-change-project-root"),
+          projectId: PROJECT_ID,
+          workspaceRoot: "/tmp/vcs-project-moved",
+        },
+        readModel: bound,
+      }),
+    );
+    if (Array.isArray(rootChanged) || rootChanged.type !== "project.meta-updated") {
+      throw new Error("Expected project.meta-updated.");
+    }
+    expect(rootChanged.payload.vcs).toEqual({ epoch: 2, binding: null });
+  });
 });

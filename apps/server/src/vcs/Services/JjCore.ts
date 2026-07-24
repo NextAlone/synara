@@ -41,6 +41,11 @@ export interface JjRepositoryInfo {
 export interface JjWorkingCopyStatus {
   readonly repository: JjRepositoryInfo;
   readonly revision: JjRevisionIdentity;
+  /** Nearest local bookmark at or behind the working-copy change. */
+  readonly currentBookmark: string | null;
+  readonly upstreamBookmark: string | null;
+  readonly aheadCount: number;
+  readonly behindCount: number;
   readonly bookmarks: ReadonlyArray<JjBookmark>;
   readonly files: ReadonlyArray<JjFileChange>;
   readonly hasChanges: boolean;
@@ -80,6 +85,9 @@ export interface JjCoreShape {
     revision?: string,
   ) => Effect.Effect<JjRevisionIdentity, JjCommandError>;
   readonly listBookmarks: (cwd: string) => Effect.Effect<JjBookmark[], JjCommandError>;
+  readonly resolveNearestBookmark: (
+    cwd: string,
+  ) => Effect.Effect<string | null, JjCommandError>;
   readonly status: (cwd: string) => Effect.Effect<JjWorkingCopyStatus, JjCommandError>;
   readonly readRevisionDiff: (
     cwd: string,

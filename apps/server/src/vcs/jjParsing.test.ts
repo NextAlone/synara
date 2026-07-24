@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   findJjWorkspaceRegistration,
+  parseJjBookmarkNames,
   parseJjBookmarks,
   parseJjFileChanges,
   parseJjRevisionIdentity,
@@ -71,6 +72,14 @@ describe("JJ machine output parsing", () => {
         ],
       },
     ]);
+  });
+
+  it("deduplicates and sorts bookmark-name rows", () => {
+    expect(
+      parseJjBookmarkNames(
+        ['{"name":"trunk"}', '{"name":"feature"}', '{"name":"trunk"}'].join("\n"),
+      ),
+    ).toEqual(["feature", "trunk"]);
   });
 
   it("keeps source and target paths for removes and renames", () => {

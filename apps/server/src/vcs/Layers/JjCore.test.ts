@@ -42,6 +42,9 @@ describe("JjCore", () => {
           ),
         );
       }
+      if (input.operation === "JjCore.resolveNearestBookmark") {
+        return Effect.succeed(result('{"name":"feature"}\n'));
+      }
       return Effect.die(new Error(`Unexpected operation ${input.operation}`));
     };
     const core = await Effect.runPromise(makeJjCore({ executeOverride }));
@@ -50,6 +53,10 @@ describe("JjCore", () => {
 
     expect(status).toMatchObject({
       revision: { changeId: "change-1", commitId: "commit-1" },
+      currentBookmark: "feature",
+      upstreamBookmark: null,
+      aheadCount: 0,
+      behindCount: 0,
       hasChanges: true,
       hasConflicts: false,
       bookmarks: [{ name: "feature", current: true }],

@@ -711,6 +711,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         projectId: command.projectId,
       });
       const nextProjectKind = command.kind ?? existingProject.kind ?? "project";
+      const workspaceRootChanged =
+        command.workspaceRoot !== undefined &&
+        !workspaceRootsEqual(command.workspaceRoot, existingProject.workspaceRoot, {
+          platform: process.platform,
+        });
+      const invalidatesVcsBinding =
+        workspaceRootChanged ||
+        (nextProjectKind !== "project" && existingProject.vcs.binding !== null);
       const requestedSpaceId =
         command.spaceId !== undefined
           ? command.spaceId
@@ -837,6 +845,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
           ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
           ...(changedSpaceId !== undefined ? { spaceId: changedSpaceId } : {}),
+          ...(invalidatesVcsBinding
+            ? {
+                vcs: {
+                  epoch: existingProject.vcs.epoch + 1,
+                  binding: null,
+                },
+              }
+            : {}),
           updatedAt: occurredAt,
         },
       };

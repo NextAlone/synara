@@ -6,10 +6,12 @@ import { runProcess } from "../../processRunner.ts";
 import { JjCommandError } from "../Errors.ts";
 import {
   findJjWorkspaceRegistration,
+  JJ_BOOKMARK_NAME_TEMPLATE,
   JJ_BOOKMARK_TEMPLATE,
   JJ_DIFF_ENTRY_TEMPLATE,
   JJ_REVISION_IDENTITY_TEMPLATE,
   JJ_WORKSPACE_TEMPLATE,
+  parseJjBookmarkNames,
   parseJjBookmarks,
   parseJjFileChanges,
   parseJjRevisionIdentity,
@@ -250,6 +252,48 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
         return yield* listBookmarksForChange(cwd, revision.changeId);
       });
 
+    const resolveNearestBookmark: JjCoreShape["resolveNearestBookmark"] = (cwd) => {
+      const input = {
+        operation: "JjCore.resolveNearestBookmark",
+        cwd,
+        args: [
+          "--ignore-working-copy",
+          "bookmark",
+          "list",
+          "-r",
+          "latest(::@ & bookmarks())",
+          "-T",
+          JJ_BOOKMARK_NAME_TEMPLATE,
+        ],
+      } as const;
+      return execute(input).pipe(
+        Effect.flatMap((result) =>
+          parseOutput(input, () => parseJjBookmarkNames(result.stdout)),
+        ),
+        Effect.map((names) => names[0] ?? null),
+      );
+    };
+
+    const countRevisions = (cwd: string, operation: string, revset: string) =>
+      run(
+        operation,
+        cwd,
+        [
+          "--ignore-working-copy",
+          "log",
+          "--no-graph",
+          "-r",
+          revset,
+          "-T",
+          'commit_id ++ "\\n"',
+        ],
+        { maxOutputBytes: 4 * 1024 * 1024 },
+      ).pipe(
+        Effect.map(
+          (result) => result.stdout.split("\n").filter((line) => line.length > 0).length,
+        ),
+      );
+
     const readDiff = (
       operation: string,
       cwd: string,
@@ -298,16 +342,62 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
         const fileResult = yield* execute(fileInput);
         const files = yield* parseOutput(fileInput, () => parseJjFileChanges(fileResult.stdout));
         const revision = yield* readRevisionIdentity(cwd);
-        const [repository, bookmarks] = yield* Effect.all(
-          [detectRepository(cwd), listBookmarksForChange(cwd, revision.changeId)],
+        const [repository, bookmarks, currentBookmark] = yield* Effect.all(
+          [
+            detectRepository(cwd),
+            listBookmarksForChange(cwd, revision.changeId),
+            resolveNearestBookmark(cwd),
+          ],
           { concurrency: 2 },
         );
         if (!repository) {
           return yield* commandError(fileInput, "JJ repository disappeared after status refresh.");
         }
+        const currentBookmarkEntry =
+          currentBookmark === null
+            ? undefined
+            : bookmarks.find((bookmark) => bookmark.name === currentBookmark);
+        const upstreamRemote = currentBookmarkEntry?.remotes
+          .filter((remote) => remote.targetChangeId !== null)
+          .toSorted(
+            (left, right) =>
+              Number(right.tracked) - Number(left.tracked) ||
+              Number(right.name === "origin") - Number(left.name === "origin") ||
+              left.name.localeCompare(right.name),
+          )[0];
+        const upstreamBookmark =
+          currentBookmark && upstreamRemote
+            ? `${currentBookmark}@${upstreamRemote.name}`
+            : null;
+        const [aheadCount, behindCount] =
+          currentBookmark && upstreamRemote
+            ? yield* Effect.all(
+                [
+                  countRevisions(
+                    cwd,
+                    "JjCore.status.ahead",
+                    `remote_bookmarks(exact:${JSON.stringify(currentBookmark)}, exact:${JSON.stringify(
+                      upstreamRemote.name,
+                    )})..@`,
+                  ),
+                  countRevisions(
+                    cwd,
+                    "JjCore.status.behind",
+                    `@..remote_bookmarks(exact:${JSON.stringify(
+                      currentBookmark,
+                    )}, exact:${JSON.stringify(upstreamRemote.name)})`,
+                  ),
+                ],
+                { concurrency: 2 },
+              )
+            : [0, 0];
         return {
           repository,
           revision,
+          currentBookmark,
+          upstreamBookmark,
+          aheadCount,
+          behindCount,
           bookmarks,
           files,
           hasChanges: files.length > 0,
@@ -500,6 +590,7 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
       detectRepository,
       readRevisionIdentity,
       listBookmarks,
+      resolveNearestBookmark,
       status,
       readRevisionDiff,
       readRangeDiff,

@@ -7,6 +7,8 @@ export const JJ_REVISION_IDENTITY_TEMPLATE =
 export const JJ_BOOKMARK_TEMPLATE =
   '"{\\"name\\":" ++ json(self.name()) ++ ",\\"remote\\":" ++ json(self.remote()) ++ ",\\"tracked\\":" ++ json(self.tracked()) ++ ",\\"synced\\":" ++ json(self.synced()) ++ ",\\"conflicted\\":" ++ json(self.conflict()) ++ ",\\"targetChangeId\\":" ++ if(self.normal_target(), json(self.normal_target().change_id()), "null") ++ "}\\n"';
 
+export const JJ_BOOKMARK_NAME_TEMPLATE = '"{\\"name\\":" ++ json(self.name()) ++ "}\\n"';
+
 export const JJ_DIFF_ENTRY_TEMPLATE =
   '"{\\"status\\":" ++ json(status) ++ ",\\"sourcePath\\":" ++ json(source.path()) ++ ",\\"targetPath\\":" ++ json(target.path()) ++ ",\\"conflicted\\":" ++ json(source.conflict() || target.conflict()) ++ "}\\n"';
 
@@ -68,6 +70,10 @@ const RawBookmark = Schema.Struct({
   synced: Schema.Boolean,
   conflicted: Schema.Boolean,
   targetChangeId: Schema.NullOr(TrimmedNonEmptyString),
+});
+
+const RawBookmarkName = Schema.Struct({
+  name: TrimmedNonEmptyString,
 });
 
 const RawDiffEntry = Schema.Struct({
@@ -152,6 +158,12 @@ export function parseJjBookmarks(output: string, currentChangeId: string): JjBoo
       remotes: aggregate.remotes.toSorted((left, right) => left.name.localeCompare(right.name)),
     };
   });
+}
+
+export function parseJjBookmarkNames(output: string): string[] {
+  return [
+    ...new Set(parseJsonLines(output, RawBookmarkName).map((entry) => entry.name)),
+  ].toSorted((left, right) => left.localeCompare(right));
 }
 
 export function parseJjFileChanges(output: string): JjFileChange[] {

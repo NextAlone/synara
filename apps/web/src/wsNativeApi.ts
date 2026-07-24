@@ -515,6 +515,13 @@ export function createWsNativeApi(): NativeApi {
         // No-op in browser - this is a desktop-only feature
       },
     },
+    vcs: {
+      setBackend: (input) => transport.request(WS_METHODS.vcsSetBackend, input),
+      status: (input) => transport.request(WS_METHODS.vcsStatus, input),
+      readDiff: (input) => transport.request(WS_METHODS.vcsReadDiff, input),
+      listReferences: (input) => transport.request(WS_METHODS.vcsListReferences, input),
+      listWorkspaces: (input) => transport.request(WS_METHODS.vcsListWorkspaces, input),
+    },
     git: {
       githubRepository: (input) => transport.request(WS_METHODS.gitGithubRepository, input),
       pull: (input) => transport.request(WS_METHODS.gitPull, input),
