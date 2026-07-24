@@ -1,8 +1,8 @@
 /**
  * CheckpointStoreLive - Filesystem checkpoint store adapter layer.
  *
- * Implements hidden Git-ref checkpoint capture/restore directly with
- * Effect-native child process execution (`effect/unstable/process`).
+ * Implements backend-native checkpoint capture/restore. Git uses hidden refs;
+ * JJ uses Synara-owned local bookmarks that anchor immutable snapshot revisions.
  *
  * This layer owns filesystem/Git interactions only; it does not persist
  * checkpoint metadata and does not coordinate provider rollback semantics.
@@ -16,6 +16,11 @@ import { Cause, Deferred, Effect, Exit, Layer, FileSystem, Option, Path, Semapho
 import { CheckpointInvariantError, type CheckpointStoreError } from "../Errors.ts";
 import { GitCommandError } from "../../git/Errors.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
+import { JjCore } from "../../vcs/Services/JjCore.ts";
+import {
+  exactJjBookmarkRevset,
+  jjCheckpointBookmark,
+} from "../../vcs/checkpointBookmarks.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
 import { CheckpointRef } from "@synara/contracts";
 
@@ -32,13 +37,17 @@ const makeCheckpointStore = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const git = yield* GitCore;
+  const jj = yield* JjCore;
   const captureLock = yield* Semaphore.make(1);
   const inFlightCaptures = new Map<string, Deferred.Deferred<void, CheckpointStoreError>>();
 
   // Normalize the cwd so captures for the same repo reached via differently
   // written paths (trailing slash, relative segments) share one in-flight slot.
-  const captureKey = (input: { readonly cwd: string; readonly checkpointRef: CheckpointRef }) =>
-    `${path.resolve(input.cwd)}\0${input.checkpointRef}`;
+  const captureKey = (input: {
+    readonly cwd: string;
+    readonly backend: "git" | "jj";
+    readonly checkpointRef: CheckpointRef;
+  }) => `${input.backend}\0${path.resolve(input.cwd)}\0${input.checkpointRef}`;
 
   const resolveHeadCommit = (cwd: string): Effect.Effect<string | null, GitCommandError> =>
     git
@@ -89,7 +98,7 @@ const makeCheckpointStore = Effect.gen(function* () {
         }),
       );
 
-  const isGitRepository: CheckpointStoreShape["isGitRepository"] = (cwd) =>
+  const isGitRepository = (cwd: string) =>
     git
       .execute({
         operation: "CheckpointStore.isGitRepository",
@@ -102,7 +111,44 @@ const makeCheckpointStore = Effect.gen(function* () {
         Effect.catch(() => Effect.succeed(false)),
       );
 
-  const captureCheckpointOnce: CheckpointStoreShape["captureCheckpoint"] = (input) =>
+  const isJjRepository = (cwd: string) =>
+    jj.detectRepository(cwd).pipe(
+      Effect.map((repository) => repository !== null),
+      Effect.catch(() => Effect.succeed(false)),
+    );
+
+  const isRepository: CheckpointStoreShape["isRepository"] = (input) =>
+    input.backend === "git" ? isGitRepository(input.cwd) : isJjRepository(input.cwd);
+
+  const resolveJjCheckpointRevision = (cwd: string, checkpointRef: CheckpointRef) => {
+    const bookmark = jjCheckpointBookmark(checkpointRef);
+    return jj
+      .execute({
+        operation: "CheckpointStore.resolveJjCheckpointRevision",
+        cwd,
+        args: [
+          "--ignore-working-copy",
+          "log",
+          "--no-graph",
+          "-r",
+          exactJjBookmarkRevset(bookmark),
+          "-n",
+          "1",
+          "-T",
+          'commit_id ++ "\\n"',
+        ],
+        allowNonZeroExit: true,
+      })
+      .pipe(
+        Effect.map((result) => {
+          if (result.code !== 0) return null;
+          const revision = result.stdout.trim();
+          return revision.length > 0 ? revision : null;
+        }),
+      );
+  };
+
+  const captureGitCheckpointOnce: CheckpointStoreShape["captureCheckpoint"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.captureCheckpoint";
 
@@ -201,6 +247,58 @@ const makeCheckpointStore = Effect.gen(function* () {
       );
     });
 
+  const captureJjCheckpointOnce: CheckpointStoreShape["captureCheckpoint"] = (input) =>
+    jj.withMutation(
+      input.cwd,
+      Effect.gen(function* () {
+        if (input.skipIfExists) {
+          const existingRevision = yield* resolveJjCheckpointRevision(
+            input.cwd,
+            input.checkpointRef,
+          );
+          if (existingRevision !== null) return;
+        }
+
+        // Snapshot the filesystem into @ before reading its immutable commit id.
+        yield* jj.execute({
+          operation: "CheckpointStore.captureCheckpoint.jjSnapshot",
+          cwd: input.cwd,
+          args: ["status"],
+        });
+        const snapshot = yield* jj.readRevisionIdentity(input.cwd);
+
+        // Move the working copy to a fresh child before anchoring the snapshot.
+        // This keeps subsequent agent edits off the checkpoint revision.
+        yield* jj.execute({
+          operation: "CheckpointStore.captureCheckpoint.jjContinue",
+          cwd: input.cwd,
+          args: [
+            "new",
+            "--message",
+            "wip: Synara checkpoint continuation",
+            snapshot.commitId,
+          ],
+        });
+        yield* jj.execute({
+          operation: "CheckpointStore.captureCheckpoint.jjAnchor",
+          cwd: input.cwd,
+          args: [
+            "bookmark",
+            "set",
+            "--allow-backwards",
+            "--revision",
+            snapshot.commitId,
+            jjCheckpointBookmark(input.checkpointRef),
+          ],
+        });
+      }),
+    );
+
+  const captureCheckpointOnce: CheckpointStoreShape["captureCheckpoint"] = (input) =>
+    input.backend === "git"
+      ? captureGitCheckpointOnce(input)
+      : captureJjCheckpointOnce(input);
+
   const captureCheckpoint: CheckpointStoreShape["captureCheckpoint"] = (input) =>
     Effect.gen(function* () {
       const key = captureKey(input);
@@ -263,11 +361,12 @@ const makeCheckpointStore = Effect.gen(function* () {
     });
 
   const hasCheckpointRef: CheckpointStoreShape["hasCheckpointRef"] = (input) =>
-    resolveCheckpointCommit(input.cwd, input.checkpointRef).pipe(
-      Effect.map((commit) => commit !== null),
-    );
+    (input.backend === "git"
+      ? resolveCheckpointCommit(input.cwd, input.checkpointRef)
+      : resolveJjCheckpointRevision(input.cwd, input.checkpointRef)
+    ).pipe(Effect.map((revision) => revision !== null));
 
-  const copyCheckpointRef: CheckpointStoreShape["copyCheckpointRef"] = (input) =>
+  const copyGitCheckpointRef: CheckpointStoreShape["copyCheckpointRef"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.copyCheckpointRef";
       const commitOid = yield* resolveCheckpointCommit(input.cwd, input.fromCheckpointRef);
@@ -283,7 +382,35 @@ const makeCheckpointStore = Effect.gen(function* () {
       return true;
     });
 
-  const restoreCheckpoint: CheckpointStoreShape["restoreCheckpoint"] = (input) =>
+  const copyJjCheckpointRef: CheckpointStoreShape["copyCheckpointRef"] = (input) =>
+    jj.withMutation(
+      input.cwd,
+      Effect.gen(function* () {
+        const revision = yield* resolveJjCheckpointRevision(
+          input.cwd,
+          input.fromCheckpointRef,
+        );
+        if (!revision) return false;
+        yield* jj.execute({
+          operation: "CheckpointStore.copyCheckpointRef.jj",
+          cwd: input.cwd,
+          args: [
+            "bookmark",
+            "set",
+            "--allow-backwards",
+            "--revision",
+            revision,
+            jjCheckpointBookmark(input.toCheckpointRef),
+          ],
+        });
+        return true;
+      }),
+    );
+
+  const copyCheckpointRef: CheckpointStoreShape["copyCheckpointRef"] = (input) =>
+    input.backend === "git" ? copyGitCheckpointRef(input) : copyJjCheckpointRef(input);
+
+  const restoreGitCheckpoint: CheckpointStoreShape["restoreCheckpoint"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.restoreCheckpoint";
 
@@ -320,7 +447,30 @@ const makeCheckpointStore = Effect.gen(function* () {
       return true;
     });
 
-  const diffCheckpoints: CheckpointStoreShape["diffCheckpoints"] = (input) =>
+  const restoreJjCheckpoint: CheckpointStoreShape["restoreCheckpoint"] = (input) =>
+    jj.withMutation(
+      input.cwd,
+      Effect.gen(function* () {
+        const checkpointRevision = yield* resolveJjCheckpointRevision(
+          input.cwd,
+          input.checkpointRef,
+        );
+        const revision =
+          checkpointRevision ?? (input.fallbackToHead === true ? "@-" : null);
+        if (!revision) return false;
+        yield* jj.execute({
+          operation: "CheckpointStore.restoreCheckpoint.jj",
+          cwd: input.cwd,
+          args: ["restore", "--from", revision, "--into", "@", "--", "."],
+        });
+        return true;
+      }),
+    );
+
+  const restoreCheckpoint: CheckpointStoreShape["restoreCheckpoint"] = (input) =>
+    input.backend === "git" ? restoreGitCheckpoint(input) : restoreJjCheckpoint(input);
+
+  const diffGitCheckpoints: CheckpointStoreShape["diffCheckpoints"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.diffCheckpoints";
 
@@ -368,7 +518,48 @@ const makeCheckpointStore = Effect.gen(function* () {
       return result.stdout;
     });
 
-  const reverseCheckpointDiff: CheckpointStoreShape["reverseCheckpointDiff"] = (input) =>
+  const diffJjCheckpoints: CheckpointStoreShape["diffCheckpoints"] = (input) =>
+    Effect.gen(function* () {
+      let [fromRevision, toRevision] = yield* Effect.all(
+        [
+          resolveJjCheckpointRevision(input.cwd, input.fromCheckpointRef),
+          resolveJjCheckpointRevision(input.cwd, input.toCheckpointRef),
+        ],
+        { concurrency: "unbounded" },
+      );
+      if (!fromRevision && input.fallbackFromToHead === true) {
+        fromRevision = "@-";
+      }
+      if (!fromRevision || !toRevision) {
+        return yield* new CheckpointInvariantError({
+          operation: "CheckpointStore.diffCheckpoints.jj",
+          detail: "Checkpoint bookmark is unavailable for diff operation.",
+        });
+      }
+      const result = yield* jj.execute({
+        operation: "CheckpointStore.diffCheckpoints.jj",
+        cwd: input.cwd,
+        args: [
+          "--ignore-working-copy",
+          "diff",
+          "--from",
+          fromRevision,
+          "--to",
+          toRevision,
+          "--git",
+          ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
+          "--",
+          ".",
+        ],
+        maxOutputBytes: input.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+      });
+      return result.stdout;
+    });
+
+  const diffCheckpoints: CheckpointStoreShape["diffCheckpoints"] = (input) =>
+    input.backend === "git" ? diffGitCheckpoints(input) : diffJjCheckpoints(input);
+
+  const reverseGitCheckpointDiff: CheckpointStoreShape["reverseCheckpointDiff"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.reverseCheckpointDiff";
       const [fromCommitOid, toCommitOid] = yield* Effect.all(
@@ -455,7 +646,59 @@ const makeCheckpointStore = Effect.gen(function* () {
       );
     });
 
-  const deleteCheckpointRefs: CheckpointStoreShape["deleteCheckpointRefs"] = (input) =>
+  const reverseJjCheckpointDiff: CheckpointStoreShape["reverseCheckpointDiff"] = (input) =>
+    jj.withMutation(
+      input.cwd,
+      Effect.gen(function* () {
+        const [fromRevision, toRevision] = yield* Effect.all(
+          [
+            resolveJjCheckpointRevision(input.cwd, input.fromCheckpointRef),
+            resolveJjCheckpointRevision(input.cwd, input.toCheckpointRef),
+          ],
+          { concurrency: "unbounded" },
+        );
+        if (!fromRevision || !toRevision) return false;
+
+        // Synara capture makes each turn snapshot a direct child of its start
+        // snapshot. Verify that invariant before applying the native inverse.
+        const parentDelta = yield* jj.execute({
+          operation: "CheckpointStore.reverseCheckpointDiff.jjVerify",
+          cwd: input.cwd,
+          args: [
+            "--ignore-working-copy",
+            "diff",
+            "--from",
+            fromRevision,
+            "--to",
+            `${toRevision}-`,
+            "--summary",
+            "--",
+            ".",
+          ],
+          maxOutputBytes: input.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+        });
+        if (parentDelta.stdout.trim().length > 0) {
+          return yield* new CheckpointInvariantError({
+            operation: "CheckpointStore.reverseCheckpointDiff.jj",
+            detail: "Turn checkpoint is not based on its recorded start snapshot.",
+          });
+        }
+
+        yield* jj.execute({
+          operation: "CheckpointStore.reverseCheckpointDiff.jj",
+          cwd: input.cwd,
+          args: ["restore", "--changes-in", toRevision, "--into", "@", "--", "."],
+        });
+        return true;
+      }),
+    );
+
+  const reverseCheckpointDiff: CheckpointStoreShape["reverseCheckpointDiff"] = (input) =>
+    input.backend === "git"
+      ? reverseGitCheckpointDiff(input)
+      : reverseJjCheckpointDiff(input);
+
+  const deleteGitCheckpointRefs: CheckpointStoreShape["deleteCheckpointRefs"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.deleteCheckpointRefs";
 
@@ -474,8 +717,42 @@ const makeCheckpointStore = Effect.gen(function* () {
       );
     });
 
+  const deleteJjCheckpointRefs: CheckpointStoreShape["deleteCheckpointRefs"] = (input) =>
+    jj.withMutation(
+      input.cwd,
+      Effect.gen(function* () {
+        const resolved = yield* Effect.forEach(
+          input.checkpointRefs,
+          (checkpointRef) =>
+            resolveJjCheckpointRevision(input.cwd, checkpointRef).pipe(
+              Effect.map((revision) => (revision === null ? null : checkpointRef)),
+            ),
+          { concurrency: 4 },
+        );
+        const existing = resolved.filter(
+          (checkpointRef): checkpointRef is CheckpointRef => checkpointRef !== null,
+        );
+        if (existing.length === 0) return;
+        yield* jj.execute({
+          operation: "CheckpointStore.deleteCheckpointRefs.jj",
+          cwd: input.cwd,
+          args: [
+            "--ignore-working-copy",
+            "bookmark",
+            "delete",
+            ...existing.map(jjCheckpointBookmark),
+          ],
+        });
+      }),
+    );
+
+  const deleteCheckpointRefs: CheckpointStoreShape["deleteCheckpointRefs"] = (input) =>
+    input.backend === "git"
+      ? deleteGitCheckpointRefs(input)
+      : deleteJjCheckpointRefs(input);
+
   return {
-    isGitRepository,
+    isRepository,
     captureCheckpoint,
     copyCheckpointRef,
     hasCheckpointRef,

@@ -28,7 +28,6 @@ import {
 import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 
-import { GitCore } from "../../git/Services/GitCore.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -39,6 +38,7 @@ import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionT
 import { runWorktreeSetupScript } from "../../worktreeSetup.ts";
 import type { ProjectionTurn } from "../../persistence/Services/ProjectionTurns.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { ProjectVcs } from "../../vcs/Services/ProjectVcs.ts";
 import { AutomationServiceError } from "../Errors.ts";
 import { AutomationService, type AutomationServiceShape } from "../Services/AutomationService.ts";
 import { buildAutomationProposalActivity } from "../proposalActivity.ts";
@@ -535,7 +535,7 @@ export const AutomationServiceLive = Layer.effect(
       installSalt: scheduleInstallSalt,
       automationId,
     });
-    const git = yield* GitCore;
+    const projectVcs = yield* ProjectVcs;
     const textGeneration = yield* TextGeneration;
     const serverSettings = yield* ServerSettingsService;
     const orchestrationEngine = yield* OrchestrationEngineService;
@@ -596,9 +596,10 @@ export const AutomationServiceLive = Layer.effect(
       if (input.environment.envMode !== "worktree" || !path) {
         return Effect.void;
       }
-      return git
-        .removeWorktree({
-          cwd: input.project.workspaceRoot,
+      return projectVcs
+        .removeWorkspace({
+          projectId: input.project.id,
+          expectedEpoch: input.project.vcs.epoch,
           path,
           force: true,
         })
@@ -790,51 +791,55 @@ export const AutomationServiceLive = Layer.effect(
         return requireLocalCheckoutAcknowledgement().pipe(Effect.as(localThreadEnvironment));
       }
 
-      return git.statusDetails(project.workspaceRoot).pipe(
-        Effect.mapError(toServiceError("Failed to inspect project Git status.")),
-        Effect.flatMap((status) => {
-          if (!status.isRepo) {
-            return definition.worktreeMode === "worktree"
-              ? Effect.fail(
-                  new AutomationServiceError({
-                    message:
-                      "Automation requires a Git worktree, but the project is not a Git repository.",
-                  }),
-                )
-              : requireLocalCheckoutAcknowledgement().pipe(Effect.as(localThreadEnvironment));
-          }
+      const binding = project.vcs.binding;
+      if (!binding) {
+        return definition.worktreeMode === "worktree"
+          ? Effect.fail(
+              new AutomationServiceError({
+                message:
+                  "Automation requires a configured Git or JJ workspace backend for this project.",
+              }),
+            )
+          : requireLocalCheckoutAcknowledgement().pipe(Effect.as(localThreadEnvironment));
+      }
 
-          return beforeWorktreeCreate().pipe(
-            Effect.flatMap(() =>
-              git
-                .createDetachedWorktree({
-                  cwd: project.workspaceRoot,
-                  ref: "HEAD",
-                  path: null,
-                  copyChangesFrom: project.workspaceRoot,
-                })
-                .pipe(
-                  Effect.mapError(toServiceError("Failed to create automation worktree.")),
-                  Effect.map(
-                    (result): ThreadEnvironment => ({
-                      envMode: "worktree",
-                      branch: null,
-                      worktreePath: result.worktree.path,
-                      associatedWorktreePath: result.worktree.path,
-                      associatedWorktreeBranch: null,
-                      associatedWorktreeRef: result.worktree.ref,
-                    }),
-                  ),
+      return projectVcs
+        .resolveTarget({
+          projectId: project.id,
+          expectedEpoch: project.vcs.epoch,
+        })
+        .pipe(
+          Effect.mapError(toServiceError("Failed to inspect project VCS workspace.")),
+          Effect.andThen(beforeWorktreeCreate()),
+          Effect.flatMap(() =>
+            projectVcs
+              .createWorkspace({
+                projectId: project.id,
+                expectedEpoch: project.vcs.epoch,
+                sourceRef: "HEAD",
+                path: null,
+                copyChangesFromCurrent: true,
+              })
+              .pipe(
+                Effect.mapError(toServiceError("Failed to create automation workspace.")),
+                Effect.map(
+                  (result): ThreadEnvironment => ({
+                    envMode: "worktree",
+                    branch: result.workspace.branch,
+                    worktreePath: result.workspace.path,
+                    associatedWorktreePath: result.workspace.path,
+                    associatedWorktreeBranch: result.workspace.branch,
+                    associatedWorktreeRef: result.workspace.ref,
+                  }),
                 ),
-            ),
-          );
-        }),
-        Effect.catch((error) =>
-          definition.worktreeMode === "auto"
-            ? requireLocalCheckoutAcknowledgement().pipe(Effect.as(localThreadEnvironment))
-            : Effect.fail(error),
-        ),
-      );
+              ),
+          ),
+          Effect.catch((error) =>
+            definition.worktreeMode === "auto"
+              ? requireLocalCheckoutAcknowledgement().pipe(Effect.as(localThreadEnvironment))
+              : Effect.fail(error),
+          ),
+        );
     };
 
     // Heartbeat runs reuse busy user threads, so reconcile only against the turn created

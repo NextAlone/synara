@@ -25,6 +25,8 @@ export const ProjectVcsErrorReason = Schema.Literals([
   "repository-not-found",
   "stale-binding",
   "backend-switch-blocked",
+  "workspace-not-found",
+  "workspace-dirty",
   "operation-unsupported",
 ]);
 export type ProjectVcsErrorReason = typeof ProjectVcsErrorReason.Type;

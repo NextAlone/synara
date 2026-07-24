@@ -9,6 +9,7 @@ import {
   type OrchestrationSessionStatus,
   type OrchestrationShellSnapshot,
   type OrchestrationThreadActivity,
+  type ProjectVcsState,
   type ProviderKind,
   ThreadId,
 } from "@synara/contracts";
@@ -49,7 +50,9 @@ export type ProjectNormalizationInput = Pick<
   | "spaceId"
   | "createdAt"
   | "updatedAt"
->;
+> & {
+  vcs?: ProjectVcsState;
+};
 
 export const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_ACTIVITIES = 500;
@@ -320,6 +323,9 @@ export function normalizeProject(
       ? null
       : normalizeModelSelection(incoming.defaultModelSelection, previous?.defaultModelSelection);
   const scripts = normalizeProjectScripts(incoming.scripts, previous?.scripts);
+  const incomingVcs = incoming.vcs ?? previous?.vcs ?? { epoch: 0, binding: null };
+  const vcs =
+    previous && deepEqualJson(previous.vcs, incomingVcs) ? previous.vcs : incomingVcs;
   const expanded =
     previous?.expanded ??
     (rememberedUiState.expandedProjectCount > 0
@@ -341,7 +347,8 @@ export function normalizeProject(
     (previous.spaceId ?? null) === (incoming.spaceId ?? null) &&
     previous.createdAt === incoming.createdAt &&
     previous.updatedAt === incoming.updatedAt &&
-    previous.scripts === scripts
+    previous.scripts === scripts &&
+    previous.vcs === vcs
   ) {
     return previous;
   }
@@ -361,6 +368,7 @@ export function normalizeProject(
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
     scripts,
+    vcs,
   } satisfies Project;
 }
 

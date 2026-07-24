@@ -3,16 +3,24 @@ import type {
   ProjectVcsBinding,
   ThreadId,
   VcsBackend,
+  VcsCreateReferenceInput,
+  VcsCreateReferenceResult,
+  VcsCreateWorkspaceInput,
+  VcsCreateWorkspaceResult,
   VcsListReferencesInput,
   VcsListReferencesResult,
   VcsListWorkspacesInput,
   VcsListWorkspacesResult,
   VcsReadDiffInput,
   VcsReadDiffResult,
+  VcsRemoveWorkspaceInput,
+  VcsRemoveWorkspaceResult,
   VcsSetBackendInput,
   VcsSetBackendResult,
   VcsStatusInput,
   VcsStatusResult,
+  VcsSwitchReferenceInput,
+  VcsSwitchReferenceResult,
 } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
@@ -55,9 +63,21 @@ export interface ProjectVcsShape {
   readonly listReferences: (
     input: VcsListReferencesInput,
   ) => Effect.Effect<VcsListReferencesResult, ProjectVcsServiceError>;
+  readonly createReference: (
+    input: VcsCreateReferenceInput,
+  ) => Effect.Effect<VcsCreateReferenceResult, ProjectVcsServiceError>;
+  readonly switchReference: (
+    input: VcsSwitchReferenceInput,
+  ) => Effect.Effect<VcsSwitchReferenceResult, ProjectVcsServiceError>;
   readonly listWorkspaces: (
     input: VcsListWorkspacesInput,
   ) => Effect.Effect<VcsListWorkspacesResult, ProjectVcsServiceError>;
+  readonly createWorkspace: (
+    input: VcsCreateWorkspaceInput,
+  ) => Effect.Effect<VcsCreateWorkspaceResult, ProjectVcsServiceError>;
+  readonly removeWorkspace: (
+    input: VcsRemoveWorkspaceInput,
+  ) => Effect.Effect<VcsRemoveWorkspaceResult, ProjectVcsServiceError>;
 }
 
 export class ProjectVcs extends ServiceMap.Service<ProjectVcs, ProjectVcsShape>()(

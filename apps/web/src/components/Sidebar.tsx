@@ -83,8 +83,8 @@ import {
   SpaceId,
   type ProviderKind,
   ThreadId,
-  type GitStatusResult,
   type ResolvedKeybindingsConfig,
+  type VcsPullRequestStatus,
 } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { getDefaultModel } from "@synara/shared/model";
@@ -122,7 +122,8 @@ import {
   createSidebarTreeThreadsSelector,
 } from "../storeSelectors";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
-import { gitResolvePullRequestQueryOptions, gitStatusQueryOptions } from "../lib/gitReactQuery";
+import { gitResolvePullRequestQueryOptions } from "../lib/gitReactQuery";
+import { makeVcsQueryTarget, vcsStatusQueryOptions } from "../lib/vcsReactQuery";
 import {
   providerComposerCapabilitiesQueryOptions,
   supportsThreadImport,
@@ -708,7 +709,7 @@ interface PrStatusIndicator {
   url: string;
 }
 
-type ThreadPr = GitStatusResult["pr"];
+type ThreadPr = VcsPullRequestStatus | null;
 
 // Also accepts persisted `lastKnownPr` entries, whose draft/mergeability/diff fields are
 // optional because older rows predate them.
@@ -3719,49 +3720,45 @@ export default function Sidebar() {
     () => sidebarTreeThreads.filter((thread) => visibleSidebarThreadIdSet.has(thread.id)),
     [sidebarTreeThreads, visibleSidebarThreadIdSet],
   );
-  // PR badges only render on visible rows, so keep git/PR query setup off hidden project history.
-  const threadGitTargets = useMemo(
+  // PR badges only render on visible rows, so keep VCS/PR query setup off hidden project history.
+  const threadVcsTargets = useMemo(
     () =>
-      visibleSidebarThreads.map((thread) => ({
-        threadId: thread.id,
-        branch: thread.branch,
-        lastKnownPr: thread.lastKnownPr ?? null,
-        cwd: resolveThreadWorkspaceCwd({
-          projectCwd: projectCwdById.get(thread.projectId) ?? null,
-          envMode: thread.envMode,
-          worktreePath: thread.worktreePath,
-        }),
-      })),
-    [projectCwdById, visibleSidebarThreads],
+      visibleSidebarThreads.map((thread) => {
+        const project = projectById.get(thread.projectId) ?? null;
+        return {
+          threadId: thread.id,
+          branch: thread.branch,
+          lastKnownPr: thread.lastKnownPr ?? null,
+          cwd: resolveThreadWorkspaceCwd({
+            projectCwd: project?.cwd ?? null,
+            envMode: thread.envMode,
+            worktreePath: thread.worktreePath,
+          }),
+          vcsTarget: makeVcsQueryTarget(project, thread.worktreePath ? thread.id : null),
+        };
+      }),
+    [projectById, visibleSidebarThreads],
   );
-  const threadGitStatusCwds = useMemo(
-    () => [
-      ...new Set(
-        threadGitTargets
-          .filter((target) => target.branch !== null)
-          .map((target) => target.cwd)
-          .filter((cwd): cwd is string => cwd !== null),
-      ),
-    ],
-    [threadGitTargets],
-  );
-  const threadGitStatusQueries = useQueries({
-    queries: threadGitStatusCwds.map((cwd) => ({
-      ...gitStatusQueryOptions(cwd),
+  const threadVcsStatusQueries = useQueries({
+    queries: threadVcsTargets.map((target) => ({
+      ...vcsStatusQueryOptions(target.vcsTarget, {
+        enabled: target.branch !== null,
+      }),
       staleTime: 30_000,
       refetchInterval: 60_000,
     })),
   });
   const threadStoredPrTargets = useMemo(
     () =>
-      threadGitTargets.flatMap((target) =>
+      threadVcsTargets.flatMap((target) =>
         target.cwd !== null &&
+        target.vcsTarget.backend === "git" &&
         target.lastKnownPr !== null &&
         target.lastKnownPr.url.trim().length > 0
           ? [{ ...target, cwd: target.cwd, lastKnownPr: target.lastKnownPr }]
           : [],
       ),
-    [threadGitTargets],
+    [threadVcsTargets],
   );
   const threadStoredPrQueries = useQueries({
     queries: threadStoredPrTargets.map((target) => ({
@@ -3774,17 +3771,12 @@ export default function Sidebar() {
     })),
   });
   const prByThreadId = useMemo(() => {
-    const statusByCwd = new Map<string, GitStatusResult>();
-    for (let index = 0; index < threadGitStatusCwds.length; index += 1) {
-      const cwd = threadGitStatusCwds[index];
-      if (!cwd) continue;
-      const status = threadGitStatusQueries[index]?.data;
-      if (status) {
-        statusByCwd.set(cwd, status);
+    const storedPrByThreadId = new Map<ThreadId, ThreadPr>();
+    for (const target of threadVcsTargets) {
+      if (target.lastKnownPr) {
+        storedPrByThreadId.set(target.threadId, toThreadPr(target.lastKnownPr));
       }
     }
-
-    const storedPrByThreadId = new Map<ThreadId, ThreadPr>();
     for (let index = 0; index < threadStoredPrTargets.length; index += 1) {
       const target = threadStoredPrTargets[index];
       if (!target) {
@@ -3799,18 +3791,19 @@ export default function Sidebar() {
     }
 
     const map = new Map<ThreadId, ThreadPr>();
-    for (const target of threadGitTargets) {
-      const status = target.cwd ? statusByCwd.get(target.cwd) : undefined;
+    for (let index = 0; index < threadVcsTargets.length; index += 1) {
+      const target = threadVcsTargets[index];
+      if (!target) continue;
+      const status = threadVcsStatusQueries[index]?.data;
       const branchMatches =
-        target.branch !== null && status?.branch !== null && status?.branch === target.branch;
-      const livePr = branchMatches ? (status?.pr ?? null) : null;
+        target.branch !== null && status?.ref !== null && status?.ref === target.branch;
+      const livePr = branchMatches ? (status?.pullRequest ?? null) : null;
       map.set(target.threadId, livePr ?? storedPrByThreadId.get(target.threadId) ?? null);
     }
     return map;
   }, [
-    threadGitStatusCwds,
-    threadGitStatusQueries,
-    threadGitTargets,
+    threadVcsStatusQueries,
+    threadVcsTargets,
     threadStoredPrQueries,
     threadStoredPrTargets,
   ]);

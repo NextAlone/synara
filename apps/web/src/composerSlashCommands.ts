@@ -1,4 +1,4 @@
-import type { GitBranch, ProviderKind } from "@synara/contracts";
+import type { ProviderKind } from "@synara/contracts";
 import {
   BUILT_IN_COMPOSER_SLASH_COMMANDS,
   isBuiltInComposerSlashCommandName,
@@ -357,7 +357,15 @@ export function parseFastSlashCommandAction(text: string): FastSlashCommandActio
 }
 
 export function resolveComposerSlashRootBranch(input: {
-  branches: ReadonlyArray<GitBranch> | null | undefined;
+  branches:
+    | ReadonlyArray<{
+        name: string;
+        current: boolean;
+        worktreePath?: string | null | undefined;
+        workspacePath?: string | null | undefined;
+      }>
+    | null
+    | undefined;
   activeProjectCwd: string | null | undefined;
   activeThreadBranch: string | null | undefined;
 }): string | null {
@@ -365,9 +373,9 @@ export function resolveComposerSlashRootBranch(input: {
     input.branches?.find(
       (branch) =>
         branch.current === true &&
-        (branch.worktreePath === null ||
-          branch.worktreePath === undefined ||
-          branch.worktreePath === input.activeProjectCwd),
+        ((branch.workspacePath ?? branch.worktreePath) === null ||
+          (branch.workspacePath ?? branch.worktreePath) === undefined ||
+          (branch.workspacePath ?? branch.worktreePath) === input.activeProjectCwd),
     )?.name ??
     input.branches?.find((branch) => branch.current === true)?.name ??
     input.activeThreadBranch ??

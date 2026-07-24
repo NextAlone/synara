@@ -31,6 +31,7 @@ function makeThreadCheckpointContext(input: {
     envMode: input.envMode ?? "local",
     worktreePath: input.worktreePath,
     workingDirectory: null,
+    vcsBackend: "git",
     checkpoints: [
       {
         turnId: TurnId.makeUnsafe("turn-1"),
@@ -64,6 +65,7 @@ function makeFullThreadDiffContext(input: {
     envMode: input.envMode ?? "local",
     worktreePath: input.worktreePath,
     workingDirectory: null,
+    vcsBackend: "git",
     latestCheckpointTurnCount: input.latestCheckpointTurnCount,
     baselineCheckpointRef: input.baselineCheckpointRef ?? input.toCheckpointRef,
     toCheckpointRef: input.toCheckpointRef,
@@ -96,7 +98,7 @@ describe("CheckpointDiffQueryLive", () => {
     });
 
     const checkpointStore: CheckpointStoreShape = {
-      isGitRepository: () => Effect.succeed(true),
+      isRepository: () => Effect.succeed(true),
       captureCheckpoint: () => Effect.void,
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: ({ checkpointRef }) =>
@@ -199,7 +201,7 @@ describe("CheckpointDiffQueryLive", () => {
     });
 
     const checkpointStore: CheckpointStoreShape = {
-      isGitRepository: () => Effect.succeed(true),
+      isRepository: () => Effect.succeed(true),
       captureCheckpoint: () => Effect.void,
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.die("unused"),
@@ -271,7 +273,7 @@ describe("CheckpointDiffQueryLive", () => {
     const threadId = ThreadId.makeUnsafe("thread-missing");
 
     const checkpointStore: CheckpointStoreShape = {
-      isGitRepository: () => Effect.succeed(true),
+      isRepository: () => Effect.succeed(true),
       captureCheckpoint: () => Effect.void,
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(true),
@@ -337,7 +339,7 @@ describe("CheckpointDiffQueryLive", () => {
     });
 
     const checkpointStore: CheckpointStoreShape = {
-      isGitRepository: () => Effect.succeed(true),
+      isRepository: () => Effect.succeed(true),
       captureCheckpoint: () => Effect.void,
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(true),
@@ -404,7 +406,7 @@ describe("CheckpointDiffQueryLive", () => {
     });
 
     const checkpointStore: CheckpointStoreShape = {
-      isGitRepository: () => Effect.succeed(true),
+      isRepository: () => Effect.succeed(true),
       captureCheckpoint: () => Effect.void,
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(true),
@@ -472,7 +474,7 @@ describe("CheckpointDiffQueryLive", () => {
     });
 
     const checkpointStore: CheckpointStoreShape = {
-      isGitRepository: () => Effect.succeed(true),
+      isRepository: () => Effect.succeed(true),
       captureCheckpoint: () => Effect.void,
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(true),
@@ -544,7 +546,7 @@ describe("CheckpointDiffQueryLive", () => {
     });
 
     const checkpointStore: CheckpointStoreShape = {
-      isGitRepository: () => Effect.succeed(true),
+      isRepository: () => Effect.succeed(true),
       captureCheckpoint: () => Effect.void,
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(true),

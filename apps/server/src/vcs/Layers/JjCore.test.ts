@@ -110,4 +110,46 @@ describe("JjCore", () => {
 
     await expect(Effect.runPromise(core.detectRepository("/not-a-repo"))).resolves.toBeNull();
   });
+
+  it("starts a described change at a bookmark and returns its identity", async () => {
+    const repositoryRoot = nodePath.resolve(import.meta.dirname, "../../../../..");
+    const calls: ExecuteJjInput[] = [];
+    const executeOverride: JjCoreShape["execute"] = (input) => {
+      calls.push(input);
+      if (input.operation === "JjCore.detectRepository.root") {
+        return Effect.succeed(result(repositoryRoot));
+      }
+      if (input.operation === "JjCore.detectRepository.gitRoot") {
+        return Effect.succeed(result(repositoryRoot));
+      }
+      if (input.operation === "JjCore.startNewChange") {
+        return Effect.succeed(result());
+      }
+      if (input.operation === "JjCore.readRevisionIdentity") {
+        return Effect.succeed(
+          result(
+            '{"changeId":"change-next","commitId":"commit-next","description":"wip: Synara on feature"}\n',
+          ),
+        );
+      }
+      return Effect.die(new Error(`Unexpected operation ${input.operation}`));
+    };
+    const core = await Effect.runPromise(makeJjCore({ executeOverride }));
+
+    const revision = await Effect.runPromise(
+      core.startNewChange(repositoryRoot, "feature", "wip: Synara on feature"),
+    );
+
+    expect(revision).toEqual({
+      changeId: "change-next",
+      commitId: "commit-next",
+      description: "wip: Synara on feature",
+    });
+    expect(calls.find((call) => call.operation === "JjCore.startNewChange")?.args).toEqual([
+      "new",
+      "--message",
+      "wip: Synara on feature",
+      "feature",
+    ]);
+  });
 });

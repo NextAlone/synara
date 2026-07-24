@@ -2,12 +2,15 @@
 // Purpose: Resolve the working-tree diff totals (+additions / -deletions) for the
 //          currently selected repo diff scope. Shared by the chat-header diff toggle
 //          badge and the Environment panel "Changes" row so both read the same numbers.
-// Layer: Chat git data hook
+// Layer: Chat VCS data hook
 
 import { useQuery } from "@tanstack/react-query";
 
 import { summarizePatchTotals } from "~/lib/diffRendering";
-import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
+import {
+  vcsDiffQueryOptions,
+  type VcsQueryTarget,
+} from "~/lib/vcsReactQuery";
 import { useRepoDiffScopeStore } from "~/repoDiffScopeStore";
 
 export interface RepoDiffTotals {
@@ -20,21 +23,21 @@ export interface RepoDiffTotals {
 }
 
 export function useRepoDiffTotals({
-  gitCwd,
-  isGitRepo,
+  target,
+  isVcsRepo,
   refetchInterval = false,
 }: {
-  gitCwd: string | null;
-  isGitRepo: boolean;
+  target: VcsQueryTarget;
+  isVcsRepo: boolean;
   refetchInterval?: number | false;
 }): RepoDiffTotals {
   // Match the Diff panel source selector so every surface shows the selected scope.
   const repoDiffScope = useRepoDiffScopeStore((store) => store.scope);
   const { data: selectedRepoDiff = null } = useQuery(
-    gitWorkingTreeDiffQueryOptions({
-      cwd: gitCwd,
+    vcsDiffQueryOptions({
+      target,
       scope: repoDiffScope,
-      enabled: isGitRepo,
+      enabled: isVcsRepo,
       refetchInterval,
     }),
   );

@@ -3,7 +3,7 @@
 // Layer: Web orchestration helper
 // Exports: deleteActiveThreadFromClient
 
-import type { ThreadId } from "@synara/contracts";
+import type { ThreadId, VcsRemoveWorkspaceInput } from "@synara/contracts";
 
 import { terminalRuntimeRegistry } from "../components/terminal/terminalRuntimeRegistry";
 import { toastManager } from "../components/ui/toast";
@@ -25,11 +25,7 @@ export async function deleteActiveThreadFromClient<TPrepared = undefined>(input:
     thread: Thread;
     prepared: TPrepared | undefined;
   }) => void | Promise<void>;
-  readonly removeWorktree: (input: {
-    cwd: string;
-    path: string;
-    force: boolean;
-  }) => Promise<unknown>;
+  readonly removeWorktree: (input: VcsRemoveWorkspaceInput) => Promise<unknown>;
   readonly unknownWorktreeErrorMessage?: string;
 }): Promise<void> {
   const api = readNativeApi();
@@ -84,7 +80,8 @@ export async function deleteActiveThreadFromClient<TPrepared = undefined>(input:
   if (!shouldDeleteWorktree || !orphanedWorktreePath || !project) return;
   try {
     await input.removeWorktree({
-      cwd: project.cwd,
+      projectId: project.id,
+      expectedEpoch: project.vcs?.epoch ?? 0,
       path: orphanedWorktreePath,
       force: true,
     });

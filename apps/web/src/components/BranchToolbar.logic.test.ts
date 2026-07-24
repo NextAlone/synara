@@ -302,6 +302,29 @@ describe("dedupeRemoteBranchesWithLocalMatches", () => {
     ]);
   });
 
+  it("hides JJ remote bookmarks when the matching local bookmark exists", () => {
+    const input: GitBranch[] = [
+      {
+        name: "feature/demo",
+        current: true,
+        isDefault: false,
+        worktreePath: null,
+      },
+      {
+        name: "feature/demo@origin",
+        isRemote: true,
+        remoteName: "origin",
+        current: false,
+        isDefault: false,
+        worktreePath: null,
+      },
+    ];
+
+    expect(dedupeRemoteBranchesWithLocalMatches(input).map((branch) => branch.name)).toEqual([
+      "feature/demo",
+    ]);
+  });
+
   it("keeps all entries when no local match exists for a remote ref", () => {
     const input: GitBranch[] = [
       {

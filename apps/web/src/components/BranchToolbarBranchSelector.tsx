@@ -1,9 +1,17 @@
 // Purpose: Branch/worktree picker for the chat toolbar.
-// Coordinates branch checkout/create actions and decorates rows with git metadata.
-// Depends on: git React Query helpers, native API mutations, and toolbar selection rules.
+// Coordinates reference switch/create actions and decorates rows with VCS metadata.
+// Depends on: project-scoped VCS queries, native API mutations, and toolbar selection rules.
 // Note: the "Create branch" footer row uses raw <button> because it is a
 // menu-item-style affordance inside a ComboboxPopup, not a generic action.
-import type { GitBranch, GitStashInfoResult, GitStatusResult, NativeApi } from "@synara/contracts";
+import type {
+  GitBranch,
+  GitStashInfoResult,
+  NativeApi,
+  ProjectId,
+  ProjectVcsState,
+  ThreadId,
+  VcsStatusResult,
+} from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -22,11 +30,15 @@ import {
 } from "react";
 
 import {
-  gitBranchesQueryOptions,
-  gitQueryKeys,
-  gitStatusQueryOptions,
   invalidateGitQueries,
 } from "../lib/gitReactQuery";
+import {
+  invalidateVcsQueries,
+  makeVcsQueryTarget,
+  vcsQueryKeys,
+  vcsReferencesQueryOptions,
+  vcsStatusQueryOptions,
+} from "../lib/vcsReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { parsePullRequestReference } from "../pullRequestReference";
 import {
@@ -75,6 +87,9 @@ import type { ThreadWorkspacePatch } from "../types";
 export type BranchSelectorVariant = "toolbar" | "panel";
 
 interface BranchToolbarBranchSelectorProps {
+  projectId: ProjectId;
+  projectVcs: ProjectVcsState;
+  activeThreadId: ThreadId | null;
   activeProjectCwd: string;
   activeThreadBranch: string | null;
   activeWorktreePath: string | null;
@@ -328,10 +343,11 @@ function getBranchTriggerLabel(input: {
   activeWorktreePath: string | null;
   effectiveEnvMode: EnvMode;
   resolvedActiveBranch: string | null;
+  isJjBackend: boolean;
 }): string {
-  const { activeWorktreePath, effectiveEnvMode, resolvedActiveBranch } = input;
+  const { activeWorktreePath, effectiveEnvMode, resolvedActiveBranch, isJjBackend } = input;
   if (!resolvedActiveBranch) {
-    return "Select branch";
+    return isJjBackend ? "Select bookmark" : "Select branch";
   }
   if (effectiveEnvMode === "worktree" && !activeWorktreePath) {
     return `From ${resolvedActiveBranch}`;
@@ -339,32 +355,38 @@ function getBranchTriggerLabel(input: {
   return resolvedActiveBranch;
 }
 
-function getCreateBranchActionLabel(trimmedBranchQuery: string): string {
+function getCreateBranchActionLabel(
+  trimmedBranchQuery: string,
+  isJjBackend: boolean,
+): string {
   return trimmedBranchQuery.length > 0
-    ? `Create and checkout "${trimmedBranchQuery}"`
-    : "Create and checkout new branch...";
+    ? `Create and switch to "${trimmedBranchQuery}"`
+    : `Create and switch to a new ${isJjBackend ? "bookmark" : "branch"}...`;
 }
 
 function getCurrentBranchChangeSummary(
   branch: GitBranch,
-  branchStatus: GitStatusResult | null | undefined,
+  branchStatus: VcsStatusResult | null | undefined,
 ): {
   fileCount: number;
   insertions: number;
   deletions: number;
 } | null {
-  if (!branch.current || !branchStatus?.hasWorkingTreeChanges) {
+  if (!branch.current || !branchStatus?.hasChanges) {
     return null;
   }
 
   return {
-    fileCount: branchStatus.workingTree.files.length,
-    insertions: branchStatus.workingTree.insertions,
-    deletions: branchStatus.workingTree.deletions,
+    fileCount: branchStatus.files.length,
+    insertions: branchStatus.insertions,
+    deletions: branchStatus.deletions,
   };
 }
 
 export function BranchToolbarBranchSelector({
+  projectId,
+  projectVcs,
+  activeThreadId,
   activeProjectCwd,
   activeThreadBranch,
   activeWorktreePath,
@@ -378,6 +400,7 @@ export function BranchToolbarBranchSelector({
   variant = "toolbar",
 }: BranchToolbarBranchSelectorProps) {
   const isPanel = variant === "panel";
+  const isJjBackend = projectVcs.binding?.backend === "jj";
   const queryClient = useQueryClient();
   const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false);
   const [isCreateBranchDialogOpen, setIsCreateBranchDialogOpen] = useState(false);
@@ -385,15 +408,31 @@ export function BranchToolbarBranchSelector({
   const [branchQuery, setBranchQuery] = useState("");
   const deferredBranchQuery = useDeferredValue(branchQuery);
 
-  const branchesQuery = useQuery(gitBranchesQueryOptions(branchCwd));
-  const branchStatusQuery = useQuery(gitStatusQueryOptions(branchCwd));
+  const vcsTarget = makeVcsQueryTarget(
+    { id: projectId, vcs: projectVcs },
+    hasServerThread && activeWorktreePath ? activeThreadId : null,
+  );
+  const branchesQuery = useQuery(vcsReferencesQueryOptions(vcsTarget));
+  const branchStatusQuery = useQuery(vcsStatusQueryOptions(vcsTarget));
   const branches = useMemo(
-    () => dedupeRemoteBranchesWithLocalMatches(branchesQuery.data?.branches ?? []),
-    [branchesQuery.data?.branches],
+    () =>
+      dedupeRemoteBranchesWithLocalMatches(
+        (branchesQuery.data?.references ?? []).map(
+          (reference): GitBranch => ({
+            name: reference.name,
+            current: reference.current,
+            isDefault: reference.isDefault,
+            worktreePath: reference.workspacePath,
+            ...(reference.isRemote ? { isRemote: true } : {}),
+            ...(reference.remoteName ? { remoteName: reference.remoteName } : {}),
+          }),
+        ),
+      ),
+    [branchesQuery.data?.references],
   );
   const hasOriginRemote = branchesQuery.data?.hasOriginRemote ?? false;
   const currentGitBranch =
-    branchStatusQuery.data?.branch ?? branches.find((branch) => branch.current)?.name ?? null;
+    branchStatusQuery.data?.ref ?? branches.find((branch) => branch.current)?.name ?? null;
   const canonicalActiveBranch = resolveBranchToolbarValue({
     envMode: effectiveEnvMode,
     activeWorktreePath,
@@ -412,7 +451,9 @@ export function BranchToolbarBranchSelector({
   const isSelectingWorktreeBase =
     effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath;
   const checkoutPullRequestItemValue =
-    prReference && onCheckoutPullRequestRequest ? `__checkout_pull_request__:${prReference}` : null;
+    projectVcs.binding?.backend === "git" && prReference && onCheckoutPullRequestRequest
+      ? `__checkout_pull_request__:${prReference}`
+      : null;
   const canPrefillCreateBranch = !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
   const hasExactBranchMatch = branchByName.has(trimmedBranchQuery);
   const branchPickerItems = useMemo(() => {
@@ -470,7 +511,7 @@ export function BranchToolbarBranchSelector({
   const runBranchAction = (action: () => Promise<void>) => {
     startBranchActionTransition(async () => {
       await action().catch(() => undefined);
-      await invalidateGitQueries(queryClient).catch(() => undefined);
+      await invalidateVcsQueries(queryClient).catch(() => undefined);
     });
   };
 
@@ -528,7 +569,7 @@ export function BranchToolbarBranchSelector({
 
   const selectBranch = (branch: GitBranch) => {
     const api = readNativeApi();
-    if (!api || !branchCwd || isBranchActionPending) return;
+    if (!api || !branchCwd || isBranchActionPending || !projectVcs.binding) return;
 
     // In new-worktree mode, selecting a branch sets the base branch.
     if (isSelectingWorktreeBase) {
@@ -556,8 +597,14 @@ export function BranchToolbarBranchSelector({
     }
 
     const selectedBranchName = branch.isRemote
-      ? deriveLocalBranchNameFromRemoteRef(branch.name)
+      ? projectVcs.binding.backend === "jj"
+        ? branch.name.replace(/@[^@]+$/u, "")
+        : deriveLocalBranchNameFromRemoteRef(branch.name)
       : branch.name;
+    const switchTarget = makeVcsQueryTarget(
+      { id: projectId, vcs: projectVcs },
+      selectionTarget.nextWorktreePath && hasServerThread ? activeThreadId : null,
+    );
 
     setIsBranchMenuOpen(false);
     onComposerFocusRequest?.();
@@ -565,48 +612,53 @@ export function BranchToolbarBranchSelector({
     runBranchAction(async () => {
       setOptimisticBranch(selectedBranchName);
       try {
-        await api.git.checkout({ cwd: selectionTarget.checkoutCwd, branch: branch.name });
-        await invalidateGitQueries(queryClient);
-      } catch (error) {
-        handleCheckoutError(error, {
-          api,
-          branch: branch.name,
-          cwd: selectionTarget.checkoutCwd,
-          fallbackTitle: "Failed to checkout branch.",
-          onSuccess: () => {
-            setOptimisticBranch(selectedBranchName);
-            onSetThreadWorkspace({
-              branch: selectedBranchName,
-              worktreePath: selectionTarget.nextWorktreePath,
-            });
-          },
-          queryClient,
-          runBranchAction,
-          onRequestDiscardStash: openStashDiscardDialog,
+        const switched = await api.vcs.switchReference({
+          projectId,
+          ...(switchTarget.threadId ? { threadId: switchTarget.threadId } : {}),
+          expectedEpoch: switchTarget.epoch,
+          ref: branch.name,
         });
+        const nextBranchName = switched.ref ?? selectedBranchName;
+        setOptimisticBranch(nextBranchName);
+        onSetThreadWorkspace({
+          branch: nextBranchName,
+          worktreePath: selectionTarget.nextWorktreePath,
+        });
+        await invalidateVcsQueries(queryClient);
+      } catch (error) {
+        if (projectVcs.binding.backend === "git") {
+          handleCheckoutError(error, {
+            api,
+            branch: branch.name,
+            cwd: selectionTarget.checkoutCwd,
+            fallbackTitle: "Failed to checkout branch.",
+            onSuccess: () => {
+              setOptimisticBranch(selectedBranchName);
+              onSetThreadWorkspace({
+                branch: selectedBranchName,
+                worktreePath: selectionTarget.nextWorktreePath,
+              });
+            },
+            queryClient,
+            runBranchAction,
+            onRequestDiscardStash: openStashDiscardDialog,
+          });
+        } else {
+          toastManager.add({
+            type: "error",
+            title: "Failed to switch bookmark.",
+            description: toBranchActionErrorMessage(error),
+          });
+        }
         return;
       }
-
-      let nextBranchName = selectedBranchName;
-      if (branch.isRemote) {
-        const status = await api.git.status({ cwd: branchCwd }).catch(() => null);
-        if (status?.branch) {
-          nextBranchName = status.branch;
-        }
-      }
-
-      setOptimisticBranch(nextBranchName);
-      onSetThreadWorkspace({
-        branch: nextBranchName,
-        worktreePath: selectionTarget.nextWorktreePath,
-      });
     });
   };
 
   const createBranch = (rawName: string) => {
     const name = rawName.trim();
     const api = readNativeApi();
-    if (!api || !branchCwd || !name || isBranchActionPending) return;
+    if (!api || !branchCwd || !name || isBranchActionPending || !projectVcs.binding) return;
 
     setIsBranchMenuOpen(false);
     onComposerFocusRequest?.();
@@ -615,34 +667,56 @@ export function BranchToolbarBranchSelector({
       setOptimisticBranch(name);
 
       try {
-        await api.git.createBranch({ cwd: branchCwd, branch: name, publish: hasOriginRemote });
+        await api.vcs.createReference({
+          projectId,
+          ...(vcsTarget.threadId ? { threadId: vcsTarget.threadId } : {}),
+          expectedEpoch: vcsTarget.epoch,
+          name,
+          publish: projectVcs.binding.backend === "git" && hasOriginRemote,
+        });
         try {
-          await api.git.checkout({ cwd: branchCwd, branch: name });
-        } catch (error) {
-          handleCheckoutError(error, {
-            api,
-            branch: name,
-            cwd: branchCwd,
-            fallbackTitle: "Failed to checkout branch.",
-            onSuccess: () => {
-              setOptimisticBranch(name);
-              onSetThreadWorkspace({
-                branch: name,
-                worktreePath: activeWorktreePath,
-              });
-              setBranchQuery("");
-              setCreateBranchName("");
-            },
-            queryClient,
-            runBranchAction,
-            onRequestDiscardStash: openStashDiscardDialog,
+          await api.vcs.switchReference({
+            projectId,
+            ...(vcsTarget.threadId ? { threadId: vcsTarget.threadId } : {}),
+            expectedEpoch: vcsTarget.epoch,
+            ref: name,
           });
+        } catch (error) {
+          if (projectVcs.binding.backend === "git") {
+            handleCheckoutError(error, {
+              api,
+              branch: name,
+              cwd: branchCwd,
+              fallbackTitle: "Failed to checkout branch.",
+              onSuccess: () => {
+                setOptimisticBranch(name);
+                onSetThreadWorkspace({
+                  branch: name,
+                  worktreePath: activeWorktreePath,
+                });
+                setBranchQuery("");
+                setCreateBranchName("");
+              },
+              queryClient,
+              runBranchAction,
+              onRequestDiscardStash: openStashDiscardDialog,
+            });
+          } else {
+            toastManager.add({
+              type: "error",
+              title: "Bookmark was created, but switching failed.",
+              description: toBranchActionErrorMessage(error),
+            });
+          }
           return;
         }
       } catch (error) {
         toastManager.add({
           type: "error",
-          title: "Failed to create branch.",
+          title:
+            projectVcs.binding.backend === "jj"
+              ? "Failed to create bookmark."
+              : "Failed to create branch.",
           description: toBranchActionErrorMessage(error),
         });
         return;
@@ -684,10 +758,10 @@ export function BranchToolbarBranchSelector({
         return;
       }
       void queryClient.invalidateQueries({
-        queryKey: gitQueryKeys.branches(branchCwd),
+        queryKey: vcsQueryKeys.referencesFor(vcsTarget),
       });
     },
-    [branchCwd, queryClient],
+    [queryClient, vcsTarget],
   );
 
   const branchListScrollElementRef = useRef<HTMLDivElement | null>(null);
@@ -737,6 +811,7 @@ export function BranchToolbarBranchSelector({
     activeWorktreePath,
     effectiveEnvMode,
     resolvedActiveBranch,
+    isJjBackend,
   });
 
   function renderPickerItem(itemValue: string, index: number, style?: CSSProperties) {
@@ -866,14 +941,16 @@ export function BranchToolbarBranchSelector({
           <ComboboxInput
             className="rounded-xl border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] shadow-none before:hidden has-focus-visible:border-[color:var(--color-border-focus)] has-focus-visible:ring-0 [&_input]:font-sans"
             inputClassName="ring-0"
-            placeholder="Search branches..."
+            placeholder={isJjBackend ? "Search bookmarks..." : "Search branches..."}
             showTrigger={false}
             size="sm"
             value={branchQuery}
             onChange={(event) => setBranchQuery(event.target.value)}
           />
         </div>
-        <ComboboxEmpty>No branches found.</ComboboxEmpty>
+        <ComboboxEmpty>
+          {isJjBackend ? "No bookmarks found." : "No branches found."}
+        </ComboboxEmpty>
 
         <ComboboxList ref={setBranchListRef} className="max-h-56">
           {shouldVirtualizeBranchList ? (
@@ -908,7 +985,9 @@ export function BranchToolbarBranchSelector({
               onClick={openCreateBranchDialog}
             >
               <PlusIcon className="size-3.5 shrink-0" />
-              <span className="truncate">{getCreateBranchActionLabel(trimmedBranchQuery)}</span>
+              <span className="truncate">
+                {getCreateBranchActionLabel(trimmedBranchQuery, isJjBackend)}
+              </span>
             </button>
           </div>
         ) : null}
@@ -924,9 +1003,9 @@ export function BranchToolbarBranchSelector({
       >
         <DialogPopup className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Create Branch</DialogTitle>
+            <DialogTitle>{isJjBackend ? "Create Bookmark" : "Create Branch"}</DialogTitle>
             <DialogDescription>
-              {`Create and switch to a new branch from ${resolvedActiveBranch ?? currentGitBranch ?? "the current HEAD"}.`}
+              {`Create and switch to a new ${isJjBackend ? "bookmark" : "branch"} from ${resolvedActiveBranch ?? currentGitBranch ?? (isJjBackend ? "the current change" : "the current HEAD")}.`}
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-3">
@@ -944,7 +1023,7 @@ export function BranchToolbarBranchSelector({
             >
               <div className="space-y-1.5">
                 <label className="block font-medium text-sm" htmlFor="branch-create-name">
-                  Branch name
+                  {isJjBackend ? "Bookmark name" : "Branch name"}
                 </label>
                 <Input
                   autoFocus
@@ -955,7 +1034,9 @@ export function BranchToolbarBranchSelector({
                 />
               </div>
               {branchByName.has(createBranchName.trim()) ? (
-                <p className="text-destructive text-sm">A branch with this name already exists.</p>
+                <p className="text-destructive text-sm">
+                  {`A ${isJjBackend ? "bookmark" : "branch"} with this name already exists.`}
+                </p>
               ) : null}
               <DialogFooter variant="bare">
                 <Button

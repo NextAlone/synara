@@ -320,12 +320,12 @@ describe("ProviderCommandReactor", () => {
     const restoreCheckpoint = vi.fn<CheckpointStoreShape["restoreCheckpoint"]>(() =>
       Effect.succeed(true),
     );
-    const isGitRepository = vi.fn<CheckpointStoreShape["isGitRepository"]>(() =>
+    const isRepository = vi.fn<CheckpointStoreShape["isRepository"]>(() =>
       Effect.succeed(false),
     );
     const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(() => Effect.void);
     const checkpointStore: CheckpointStoreShape = {
-      isGitRepository,
+      isRepository,
       captureCheckpoint,
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(false),
@@ -541,6 +541,20 @@ describe("ProviderCommandReactor", () => {
     );
     await Effect.runPromise(
       engine.dispatch({
+        type: "project.vcs-binding.set",
+        commandId: CommandId.makeUnsafe("cmd-project-vcs"),
+        projectId: asProjectId("project-1"),
+        expectedEpoch: 0,
+        binding: {
+          backend: "git",
+          repoRoot: "/tmp/provider-project",
+          projectRelativePath: ".",
+        },
+        updatedAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      engine.dispatch({
         type: "thread.create",
         commandId: CommandId.makeUnsafe("cmd-thread-create"),
         threadId: ThreadId.makeUnsafe("thread-1"),
@@ -571,7 +585,7 @@ describe("ProviderCommandReactor", () => {
       respondToRequest,
       respondToUserInput,
       rollbackConversation,
-      isGitRepository,
+      isRepository,
       captureCheckpoint,
       restoreCheckpoint,
       stopSession,
@@ -2815,7 +2829,7 @@ describe("ProviderCommandReactor", () => {
   it("restores the previous filesystem checkpoint before resending a completed edit", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
-    harness.isGitRepository.mockImplementationOnce(() => Effect.succeed(true));
+    harness.isRepository.mockImplementationOnce(() => Effect.succeed(true));
 
     await seedRollbackTarget(harness, {
       messageId: asMessageId("user-message-checkpoint-edit"),
@@ -2854,6 +2868,7 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     expect(harness.restoreCheckpoint).toHaveBeenCalledWith({
       cwd: "/tmp/provider-project",
+      backend: "git",
       checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
       fallbackToHead: true,
     });
@@ -3423,7 +3438,7 @@ describe("ProviderCommandReactor", () => {
     );
     const harness = await createHarness({
       checkpointStore: {
-        isGitRepository: vi.fn<CheckpointStoreShape["isGitRepository"]>(() => Effect.succeed(true)),
+        isRepository: vi.fn<CheckpointStoreShape["isRepository"]>(() => Effect.succeed(true)),
         captureCheckpoint,
       },
     });

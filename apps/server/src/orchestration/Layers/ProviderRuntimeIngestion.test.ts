@@ -49,6 +49,10 @@ import {
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ServerConfig } from "../../config.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import {
+  CheckpointStore,
+  type CheckpointStoreShape,
+} from "../../checkpointing/Services/CheckpointStore.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asItemId = (value: string): RuntimeItemId => RuntimeItemId.makeUnsafe(value);
@@ -221,12 +225,23 @@ describe("ProviderRuntimeIngestion", () => {
     const runtimeEventRepositoryLayer = ProviderRuntimeEventRepositoryLive.pipe(
       Layer.provideMerge(SqlitePersistenceMemory),
     );
+    const checkpointStore = {
+      isRepository: () => Effect.succeed(true),
+      captureCheckpoint: () => Effect.void,
+      copyCheckpointRef: () => Effect.succeed(false),
+      hasCheckpointRef: () => Effect.succeed(false),
+      restoreCheckpoint: () => Effect.succeed(false),
+      reverseCheckpointDiff: () => Effect.succeed(false),
+      diffCheckpoints: () => Effect.succeed(""),
+      deleteCheckpointRefs: () => Effect.void,
+    } satisfies CheckpointStoreShape;
     const layer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(runtimeEventRepositoryLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
+      Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -261,6 +276,20 @@ describe("ProviderRuntimeIngestion", () => {
           model: "gpt-5-codex",
         },
         createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      engine.dispatch({
+        type: "project.vcs-binding.set",
+        commandId: CommandId.makeUnsafe("cmd-provider-project-vcs"),
+        projectId: asProjectId("project-1"),
+        expectedEpoch: 0,
+        binding: {
+          backend: "git",
+          repoRoot: workspaceRoot,
+          projectRelativePath: ".",
+        },
+        updatedAt: createdAt,
       }),
     );
     await Effect.runPromise(

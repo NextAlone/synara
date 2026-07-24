@@ -11,6 +11,7 @@ import {
   ThreadId,
   TurnId,
   type ThreadEnvironmentMode,
+  type VcsBackend,
 } from "@synara/contracts";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { Cause, Effect, Layer, ServiceMap } from "effect";
@@ -38,6 +39,7 @@ interface PurgeThreadRow {
   readonly workingDirectory: string | null;
   readonly projectKind: string | null;
   readonly workspaceRoot: string | null;
+  readonly vcsBackend: VcsBackend | null;
 }
 
 interface TurnEventRow {
@@ -77,6 +79,7 @@ interface CheckpointMessageRow {
 
 interface ThreadCheckpointCleanup {
   readonly cwd: string | null;
+  readonly backend: VcsBackend | null;
   readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
 }
 
@@ -450,7 +453,8 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           t.worktree_path AS worktreePath,
           t.working_directory AS workingDirectory,
           p.kind AS projectKind,
-          p.workspace_root AS workspaceRoot
+          p.workspace_root AS workspaceRoot,
+          json_extract(p.vcs_state_json, '$.binding.backend') AS vcsBackend
         FROM projection_threads t
         LEFT JOIN projection_projects p ON p.project_id = t.project_id
         WHERE t.thread_id = ${threadId}
@@ -495,6 +499,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
 
       return {
         cwd,
+        backend: thread.vcsBackend,
         checkpointRefs,
       } satisfies ThreadCheckpointCleanup;
     });
@@ -504,21 +509,23 @@ const makeProfileStatsArchive = Effect.gen(function* () {
   const deleteCheckpointRefsForPurge = (input: {
     readonly threadId: string;
     readonly cwd: string | null;
+    readonly backend: VcsBackend | null;
     readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
   }) => {
     if (input.checkpointRefs.length === 0) {
       return Effect.void;
     }
     const cwd = input.cwd;
-    if (cwd === null) {
+    const backend = input.backend;
+    if (cwd === null || backend === null) {
       return Effect.logWarning(
-        "profile stats archive skipped checkpoint ref cleanup because workspace is unavailable",
+        "profile stats archive skipped checkpoint ref cleanup because VCS workspace is unavailable",
         { threadId: input.threadId, checkpointRefCount: input.checkpointRefs.length },
       );
     }
 
     return Effect.gen(function* () {
-      const isGitRepository = yield* checkpointStore.isGitRepository(cwd).pipe(
+      const isRepository = yield* checkpointStore.isRepository({ cwd, backend }).pipe(
         Effect.catchCause((cause) => {
           if (Cause.hasInterruptsOnly(cause)) {
             return Effect.failCause(cause);
@@ -533,16 +540,17 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           ).pipe(Effect.as(false));
         }),
       );
-      if (!isGitRepository) {
+      if (!isRepository) {
         yield* Effect.logWarning(
-          "profile stats archive skipped checkpoint ref cleanup because workspace is not a git repository",
-          { threadId: input.threadId, cwd },
+          "profile stats archive skipped checkpoint ref cleanup because configured VCS is unavailable",
+          { threadId: input.threadId, cwd, backend },
         );
         return;
       }
 
       yield* checkpointStore.deleteCheckpointRefs({
         cwd,
+        backend,
         checkpointRefs: input.checkpointRefs,
       });
     });
@@ -551,6 +559,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
   const deleteCheckpointRefsAfterCommittedPurge = (input: {
     readonly threadId: string;
     readonly cwd: string | null;
+    readonly backend: VcsBackend | null;
     readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
   }) =>
     deleteCheckpointRefsForPurge(input).pipe(
@@ -580,7 +589,8 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           t.worktree_path AS worktreePath,
           t.working_directory AS workingDirectory,
           p.kind AS projectKind,
-          p.workspace_root AS workspaceRoot
+          p.workspace_root AS workspaceRoot,
+          json_extract(p.vcs_state_json, '$.binding.backend') AS vcsBackend
         FROM projection_threads t
         LEFT JOIN projection_projects p ON p.project_id = t.project_id
         WHERE t.thread_id = ${threadId}
@@ -835,6 +845,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         yield* deleteCheckpointRefsAfterCommittedPurge({
           threadId: input.threadId,
           cwd: checkpointCleanup.cwd,
+          backend: checkpointCleanup.backend,
           checkpointRefs: checkpointCleanup.checkpointRefs,
         });
       }

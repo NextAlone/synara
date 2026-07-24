@@ -36,7 +36,7 @@ vi.mock("../nativeApi", () => ({
 vi.mock("../store", () => ({
   useStore: {
     getState: () => ({
-      projects: [{ id: PROJECT_ID, cwd: "/repo" }],
+      projects: [{ id: PROJECT_ID, cwd: "/repo", vcs: { epoch: 4, binding: null } }],
       removeDeletedThreadFromClientState: harness.removeDeletedThreadFromClientState,
     }),
   },
@@ -143,7 +143,8 @@ describe("deleteActiveThreadFromClient", () => {
 
     expect(onDeleted).toHaveBeenCalledOnce();
     expect(removeWorktree).toHaveBeenCalledWith({
-      cwd: "/repo",
+      projectId: PROJECT_ID,
+      expectedEpoch: 4,
       path: "/repo-worktree",
       force: true,
     });

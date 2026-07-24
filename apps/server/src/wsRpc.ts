@@ -1080,8 +1080,16 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(projectVcs.readDiff(input), "Failed to read project VCS diff"),
         [WS_METHODS.vcsListReferences]: (input) =>
           rpcEffect(projectVcs.listReferences(input), "Failed to list project VCS references"),
+        [WS_METHODS.vcsCreateReference]: (input) =>
+          rpcEffect(projectVcs.createReference(input), "Failed to create project VCS reference"),
+        [WS_METHODS.vcsSwitchReference]: (input) =>
+          rpcEffect(projectVcs.switchReference(input), "Failed to switch project VCS reference"),
         [WS_METHODS.vcsListWorkspaces]: (input) =>
           rpcEffect(projectVcs.listWorkspaces(input), "Failed to list project VCS workspaces"),
+        [WS_METHODS.vcsCreateWorkspace]: (input) =>
+          rpcEffect(projectVcs.createWorkspace(input), "Failed to create project VCS workspace"),
+        [WS_METHODS.vcsRemoveWorkspace]: (input) =>
+          rpcEffect(projectVcs.removeWorkspace(input), "Failed to remove project VCS workspace"),
 
         [WS_METHODS.gitGithubRepository]: (input) =>
           rpcEffect(resolveGitHubRepository(git, input.cwd), "Failed to resolve GitHub repository"),

@@ -18,6 +18,10 @@ import {
   parseJjWorkspaces,
 } from "../jjParsing.ts";
 import {
+  isSynaraJjCheckpointBookmark,
+  SYNARA_JJ_CHECKPOINT_BOOKMARK_PREFIX,
+} from "../checkpointBookmarks.ts";
+import {
   JjCore,
   type ExecuteJjInput,
   type ExecuteJjResult,
@@ -243,6 +247,9 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
         Effect.flatMap((result) =>
           parseOutput(input, () => parseJjBookmarks(result.stdout, currentChangeId)),
         ),
+        Effect.map((bookmarks) =>
+          bookmarks.filter((bookmark) => !isSynaraJjCheckpointBookmark(bookmark.name)),
+        ),
       );
     };
 
@@ -261,7 +268,9 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
           "bookmark",
           "list",
           "-r",
-          "latest(::@ & bookmarks())",
+          `latest(::@ & (bookmarks() ~ bookmarks(glob:${JSON.stringify(
+            `${SYNARA_JJ_CHECKPOINT_BOOKMARK_PREFIX}*`,
+          )})))`,
           "-T",
           JJ_BOOKMARK_NAME_TEMPLATE,
         ],
@@ -567,6 +576,20 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
         ]).pipe(Effect.asVoid),
       );
 
+    const startNewChange: JjCoreShape["startNewChange"] = (cwd, revision, message) =>
+      withMutation(
+        cwd,
+        Effect.gen(function* () {
+          yield* run("JjCore.startNewChange", cwd, [
+            "new",
+            "--message",
+            message,
+            revision,
+          ]);
+          return yield* readRevisionIdentity(cwd);
+        }),
+      );
+
     const describeRevision: JjCoreShape["describeRevision"] = (cwd, revision, message) =>
       withMutation(
         cwd,
@@ -599,6 +622,7 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
       createWorkspace,
       forgetWorkspace,
       createBookmark,
+      startNewChange,
       describeRevision,
       commitWorkingCopy,
     } satisfies JjCoreShape;

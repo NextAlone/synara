@@ -105,6 +105,14 @@ const make = Effect.gen(function* () {
           detail: `Workspace path missing for thread '${input.threadId}' when computing turn diff.`,
         });
       }
+      const backend = threadContext.value.vcsBackend;
+      if (!backend || !(yield* checkpointStore.isRepository({ cwd: workspaceCwd, backend }))) {
+        return yield* new CheckpointInvariantError({
+          operation,
+          detail: `Configured VCS backend is unavailable for thread '${input.threadId}'.`,
+        });
+      }
+      const checkpointWorkspace = { cwd: workspaceCwd, backend };
 
       const toCheckpoint = threadContext.value.checkpoints.find(
         (checkpoint) => checkpoint.checkpointTurnCount === input.toTurnCount,
@@ -165,7 +173,7 @@ const make = Effect.gen(function* () {
             toCheckpoint.turnId,
           ) ?? checkpointRefForThreadTurnStart(input.threadId, toCheckpoint.turnId);
         const turnStartExists = yield* checkpointStore.hasCheckpointRef({
-          cwd: workspaceCwd,
+          ...checkpointWorkspace,
           checkpointRef: turnStartCheckpointRef,
         });
         if (turnStartExists) {
@@ -174,7 +182,7 @@ const make = Effect.gen(function* () {
       }
 
       const diff = yield* checkpointStore.diffCheckpoints({
-        cwd: workspaceCwd,
+        ...checkpointWorkspace,
         fromCheckpointRef,
         toCheckpointRef,
         fallbackFromToHead: false,
@@ -260,6 +268,14 @@ const make = Effect.gen(function* () {
           detail: `Workspace path missing for thread '${input.threadId}' when computing full thread diff.`,
         });
       }
+      const backend = threadContext.value.vcsBackend;
+      if (!backend || !(yield* checkpointStore.isRepository({ cwd: workspaceCwd, backend }))) {
+        return yield* new CheckpointInvariantError({
+          operation,
+          detail: `Configured VCS backend is unavailable for thread '${input.threadId}'.`,
+        });
+      }
+      const checkpointWorkspace = { cwd: workspaceCwd, backend };
 
       if (!threadContext.value.toCheckpointRef) {
         return yield* new CheckpointUnavailableError({
@@ -270,7 +286,7 @@ const make = Effect.gen(function* () {
       }
 
       const diff = yield* checkpointStore.diffCheckpoints({
-        cwd: workspaceCwd,
+        ...checkpointWorkspace,
         fromCheckpointRef:
           (threadContext.value.baselineCheckpointRef
             ? checkpointRefForThreadTurnInManagedFamily(

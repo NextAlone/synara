@@ -115,6 +115,11 @@ export interface JjCoreShape {
     name: string,
     revision: string,
   ) => Effect.Effect<void, JjCommandError>;
+  readonly startNewChange: (
+    cwd: string,
+    revision: string,
+    message: string,
+  ) => Effect.Effect<JjRevisionIdentity, JjCommandError>;
   readonly describeRevision: (
     cwd: string,
     revision: string,

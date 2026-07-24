@@ -763,6 +763,36 @@ describe("wsNativeApi", () => {
     );
   });
 
+  it("forwards project-scoped VCS reference mutations", async () => {
+    requestMock.mockResolvedValue({ backend: "jj", epoch: 3, ref: "feature" });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+
+    await api.vcs.createReference({
+      projectId: ProjectId.makeUnsafe("project-1"),
+      expectedEpoch: 3,
+      name: "feature",
+      publish: false,
+    });
+    await api.vcs.switchReference({
+      projectId: ProjectId.makeUnsafe("project-1"),
+      expectedEpoch: 3,
+      ref: "feature",
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.vcsCreateReference, {
+      projectId: "project-1",
+      expectedEpoch: 3,
+      name: "feature",
+      publish: false,
+    });
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.vcsSwitchReference, {
+      projectId: "project-1",
+      expectedEpoch: 3,
+      ref: "feature",
+    });
+  });
+
   it("forwards full-thread diff requests to the orchestration websocket method", async () => {
     requestMock.mockResolvedValue({ diff: "patch" });
     const { createWsNativeApi } = await import("./wsNativeApi");

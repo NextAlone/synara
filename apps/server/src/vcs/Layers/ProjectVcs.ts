@@ -14,6 +14,7 @@ import {
 } from "@synara/contracts";
 import { Effect, Layer, Option } from "effect";
 
+import { ServerConfig } from "../../config.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
 import { GitManager, type GitManagerShape } from "../../git/Services/GitManager.ts";
 import {
@@ -41,6 +42,11 @@ export interface ProjectVcsDependencies {
   readonly canonicalizePath: (path: string) => Promise<string>;
   readonly now: () => string;
   readonly makeCommandId: () => CommandId;
+  readonly worktreesDir: string;
+  readonly pathExists: (path: string) => Promise<boolean>;
+  readonly makeDirectory: (path: string) => Promise<void>;
+  readonly removeDirectory: (path: string) => Promise<void>;
+  readonly randomToken: () => string;
 }
 
 const DEFAULT_REFERENCE_NAMES = ["main", "master", "trunk", "develop", "default"] as const;
@@ -48,7 +54,7 @@ const DEFAULT_REFERENCE_NAMES = ["main", "master", "trunk", "develop", "default"
 const capabilitiesFor = (backend: VcsBackend) => ({
   staging: backend === "git",
   stash: backend === "git",
-  checkout: backend === "git",
+  checkout: true,
   workspaces: true,
 });
 
@@ -86,6 +92,20 @@ function workspaceProjectPath(
   return binding.projectRelativePath === "."
     ? workspaceRoot
     : nodePath.join(workspaceRoot, binding.projectRelativePath);
+}
+
+function workspaceRootForProjectPath(
+  projectPath: string,
+  binding: ProjectVcsBinding,
+): string | null {
+  if (binding.projectRelativePath === ".") {
+    return projectPath;
+  }
+  const depth = binding.projectRelativePath.split(/[\\/]/u).filter(Boolean).length;
+  const workspaceRoot = nodePath.resolve(projectPath, ...Array.from({ length: depth }, () => ".."));
+  return nodePath.resolve(workspaceProjectPath(workspaceRoot, binding)) === nodePath.resolve(projectPath)
+    ? workspaceRoot
+    : null;
 }
 
 function chooseDefaultReference(names: ReadonlyArray<string>): string | null {
@@ -368,6 +388,7 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                           behindCount: result.behindCount,
                         }
                       : null,
+                  pullRequest: result.pr,
                   capabilities: capabilitiesFor("git"),
                 }),
               ),
@@ -400,6 +421,7 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                         behindCount: result.behindCount,
                       }
                     : null,
+                  pullRequest: null,
                   capabilities: capabilitiesFor("jj"),
                 }),
               ),
@@ -615,13 +637,300 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
       }),
     );
 
+  const createReference: ProjectVcsShape["createReference"] = (input) =>
+    resolveTarget(input).pipe(
+      Effect.flatMap((target) => {
+        if (target.backend === "git") {
+          return dependencies.git
+            .createBranch({
+              cwd: target.cwd,
+              branch: input.name,
+              ...(input.publish !== undefined ? { publish: input.publish } : {}),
+            })
+            .pipe(
+              Effect.as({
+                backend: "git" as const,
+                epoch: target.epoch,
+                ref: input.name,
+              }),
+            );
+        }
+        if (input.publish === true) {
+          return Effect.fail(
+            projectError(
+              "ProjectVcs.createReference",
+              "operation-unsupported",
+              "Publishing a JJ bookmark is a remote operation and is not enabled yet.",
+            ),
+          );
+        }
+        return dependencies.jj.createBookmark(target.cwd, input.name, "@").pipe(
+          Effect.as({
+            backend: "jj" as const,
+            epoch: target.epoch,
+            ref: input.name,
+          }),
+        );
+      }),
+    );
+
+  const switchReference: ProjectVcsShape["switchReference"] = (input) =>
+    resolveTarget(input).pipe(
+      Effect.flatMap((target) => {
+        if (target.backend === "git") {
+          return dependencies.git.checkout({ cwd: target.cwd, branch: input.ref }).pipe(
+            Effect.andThen(
+              dependencies.git.execute({
+                operation: "ProjectVcs.switchReference.currentBranch",
+                cwd: target.cwd,
+                args: ["branch", "--show-current"],
+              }),
+            ),
+            Effect.map((result) => ({
+              backend: "git" as const,
+              epoch: target.epoch,
+              ref: result.stdout.trim() || null,
+              revision: null,
+            })),
+          );
+        }
+        return dependencies.jj
+          .startNewChange(target.cwd, input.ref, `wip: Synara on ${input.ref}`)
+          .pipe(
+            Effect.flatMap((revision) =>
+              dependencies.jj.resolveNearestBookmark(target.cwd).pipe(
+                Effect.map((ref) => ({
+                  backend: "jj" as const,
+                  epoch: target.epoch,
+                  ref,
+                  revision,
+                })),
+              ),
+            ),
+          );
+      }),
+    );
+
+  const prepareGeneratedWorkspace = (operation: string) =>
+    Effect.tryPromise({
+      try: async () => {
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const token = dependencies.randomToken();
+          const parent = nodePath.join(dependencies.worktreesDir, token);
+          const root = nodePath.join(parent, "synara");
+          if (await dependencies.pathExists(root)) {
+            continue;
+          }
+          await dependencies.makeDirectory(parent);
+          return { root, name: `synara-${token}` };
+        }
+        const token = dependencies.randomToken();
+        const parent = nodePath.join(dependencies.worktreesDir, token);
+        await dependencies.makeDirectory(parent);
+        return { root: nodePath.join(parent, "synara"), name: `synara-${token}` };
+      },
+      catch: () =>
+        projectError(
+          operation,
+          "workspace-not-found",
+          "Failed to prepare a managed workspace path.",
+        ),
+    });
+
+  const createWorkspace: ProjectVcsShape["createWorkspace"] = (input) =>
+    resolveTarget({
+      projectId: input.projectId,
+      expectedEpoch: input.expectedEpoch,
+    }).pipe(
+      Effect.flatMap((target) =>
+        Effect.gen(function* () {
+          const operation = "ProjectVcs.createWorkspace";
+          const generated =
+            input.path === null ? yield* prepareGeneratedWorkspace(operation) : null;
+          const requestedProjectPath = input.path;
+          const requestedWorkspaceRoot =
+            requestedProjectPath === null
+              ? generated!.root
+              : workspaceRootForProjectPath(requestedProjectPath, target.binding);
+          if (!requestedWorkspaceRoot) {
+            return yield* projectError(
+              operation,
+              "workspace-not-found",
+              "The requested workspace path does not match the project's repository-relative path.",
+            );
+          }
+          if (yield* Effect.promise(() => dependencies.pathExists(requestedWorkspaceRoot))) {
+            return yield* projectError(
+              operation,
+              "workspace-not-found",
+              "The requested workspace path already exists.",
+            );
+          }
+
+          if (target.backend === "git") {
+            const created = yield* dependencies.git.withMutation(
+              target.cwd,
+              dependencies.git.createDetachedWorktree({
+                cwd: target.cwd,
+                ref: input.sourceRef,
+                path: requestedWorkspaceRoot,
+                ...(input.copyChangesFromCurrent ? { copyChangesFrom: target.cwd } : {}),
+              }),
+            );
+            const projectPath = workspaceProjectPath(created.worktree.path, target.binding);
+            return {
+              backend: "git",
+              epoch: target.epoch,
+              workspace: {
+                name: created.worktree.branch ?? nodePath.basename(created.worktree.path),
+                path: projectPath,
+                ref: created.worktree.ref,
+                branch: created.worktree.branch,
+              },
+            };
+          }
+
+          const workspaceName = generated?.name ?? `synara-${dependencies.randomToken()}`;
+          const create = dependencies.jj
+            .createWorkspace({
+              repositoryPath: target.binding.repoRoot,
+              workspacePath: requestedWorkspaceRoot,
+              workspaceName,
+              revision: input.copyChangesFromCurrent ? "@" : input.sourceRef,
+              message: `wip: Synara workspace ${workspaceName}`,
+            })
+            .pipe(
+              Effect.onError(() =>
+                dependencies.jj
+                  .getWorkspaceRegistration(target.binding.repoRoot, workspaceName)
+                  .pipe(
+                    Effect.flatMap((registration) =>
+                      registration.kind === "absent"
+                        ? Effect.void
+                        : dependencies.jj.forgetWorkspace(
+                            target.binding.repoRoot,
+                            workspaceName,
+                          ),
+                    ),
+                    Effect.andThen(
+                      Effect.promise(() =>
+                        dependencies.removeDirectory(requestedWorkspaceRoot),
+                      ),
+                    ),
+                    Effect.ignore,
+                  ),
+              ),
+            );
+          const created = yield* create;
+          return {
+            backend: "jj",
+            epoch: target.epoch,
+            workspace: {
+              name: created.name,
+              path: workspaceProjectPath(created.path, target.binding),
+              ref: input.sourceRef,
+              branch: null,
+            },
+          };
+        }),
+      ),
+    );
+
+  const removeWorkspace: ProjectVcsShape["removeWorkspace"] = (input) =>
+    resolveTarget({
+      projectId: input.projectId,
+      expectedEpoch: input.expectedEpoch,
+    }).pipe(
+      Effect.flatMap((target) =>
+        Effect.gen(function* () {
+          const operation = "ProjectVcs.removeWorkspace";
+          const requestedProjectPath = yield* canonicalize(operation, input.path);
+          const requestedWorkspaceRoot = workspaceRootForProjectPath(
+            requestedProjectPath,
+            target.binding,
+          );
+          if (!requestedWorkspaceRoot) {
+            return yield* projectError(
+              operation,
+              "workspace-not-found",
+              "The requested path is not a workspace for this project.",
+            );
+          }
+
+          if (target.backend === "git") {
+            yield* dependencies.git.withMutation(
+              target.cwd,
+              dependencies.git.removeWorktree({
+                cwd: target.cwd,
+                path: requestedWorkspaceRoot,
+                ...(input.force !== undefined ? { force: input.force } : {}),
+              }),
+            );
+            return { backend: "git", epoch: target.epoch, removed: true };
+          }
+
+          const registrations = yield* dependencies.jj.listWorkspaces(
+            target.binding.repoRoot,
+          );
+          const presentRegistrations = yield* Effect.forEach(
+            registrations,
+            (workspace) =>
+              workspace.registration.kind !== "present"
+                ? Effect.succeed(null)
+                : canonicalize(operation, workspace.registration.root).pipe(
+                    Effect.map((root) => ({ name: workspace.name, root })),
+                  ),
+            { concurrency: 4 },
+          );
+          const registered = presentRegistrations.find(
+            (workspace) => workspace?.root === requestedWorkspaceRoot,
+          );
+          if (!registered || registered.root === target.binding.repoRoot) {
+            return yield* projectError(
+              operation,
+              "workspace-not-found",
+              "The requested path is not a removable JJ workspace for this project.",
+            );
+          }
+          if (input.force !== true) {
+            const workspaceStatus = yield* dependencies.jj.status(requestedProjectPath);
+            if (workspaceStatus.hasChanges || workspaceStatus.hasConflicts) {
+              return yield* projectError(
+                operation,
+                "workspace-dirty",
+                "The JJ workspace has changes or conflicts; resolve them or request a forced removal.",
+              );
+            }
+          }
+          yield* dependencies.jj.forgetWorkspace(
+            target.binding.repoRoot,
+            registered.name,
+          );
+          yield* Effect.tryPromise({
+            try: () => dependencies.removeDirectory(registered.root),
+            catch: () =>
+              projectError(
+                operation,
+                "workspace-not-found",
+                "The JJ workspace was forgotten, but its directory could not be removed.",
+              ),
+          });
+          return { backend: "jj", epoch: target.epoch, removed: true };
+        }),
+      ),
+    );
+
   return {
     setBackend,
     resolveTarget,
     status,
     readDiff,
     listReferences,
+    createReference,
+    switchReference,
     listWorkspaces,
+    createWorkspace,
+    removeWorkspace,
   };
 }
 
@@ -631,6 +940,7 @@ export const makeProjectVcs = Effect.gen(function* () {
   const jj = yield* JjCore;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projection = yield* ProjectionSnapshotQuery;
+  const config = yield* ServerConfig;
   return makeProjectVcsWith({
     git,
     gitManager,
@@ -641,6 +951,16 @@ export const makeProjectVcs = Effect.gen(function* () {
     now: () => new Date().toISOString(),
     makeCommandId: () =>
       CommandId.makeUnsafe(`server:vcs-binding:${Crypto.randomUUID()}`),
+    worktreesDir: config.worktreesDir,
+    pathExists: (path) =>
+      nodeFs
+        .access(path)
+        .then(() => true)
+        .catch(() => false),
+    makeDirectory: (path) => nodeFs.mkdir(path, { recursive: true }).then(() => undefined),
+    removeDirectory: (path) =>
+      nodeFs.rm(path, { recursive: true, force: true }).then(() => undefined),
+    randomToken: () => Crypto.randomUUID().replaceAll("-", "").slice(0, 12),
   });
 });
 

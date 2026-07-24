@@ -63,7 +63,10 @@ export function makeServerRuntimeServicesLayer(
   const agentGatewayCredentialsLayer =
     options.agentGatewayCredentialsLayer ?? AgentGatewayCredentialsWithSecretsLive;
   const providerHealthLayer = ProviderHealthLive.pipe(Layer.provideMerge(ServerSettingsLive));
-  const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));
+  const checkpointStoreLayer = CheckpointStoreLive.pipe(
+    Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(VcsLayerLive),
+  );
 
   const checkpointDiffQueryLayer = CheckpointDiffQueryLive.pipe(
     Layer.provideMerge(OrchestrationLayerLive),
@@ -134,10 +137,15 @@ export function makeServerRuntimeServicesLayer(
     authControlPlaneLayer,
     serverAuthLayer,
   );
+  const projectVcsLayer = ProjectVcsLayerLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(GitLayerLive),
+    Layer.provideMerge(VcsLayerLive),
+  );
   const automationServiceLayer = AutomationServiceLive.pipe(
     Layer.provideMerge(AutomationRepositoryLive),
     Layer.provideMerge(ProjectionTurnRepositoryLive),
-    Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(projectVcsLayer),
     Layer.provideMerge(TextGenerationLayerLive),
     Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(runtimeServicesLayer),
@@ -180,11 +188,6 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
-  );
-  const projectVcsLayer = ProjectVcsLayerLive.pipe(
-    Layer.provideMerge(runtimeServicesLayer),
-    Layer.provideMerge(GitLayerLive),
-    Layer.provideMerge(VcsLayerLive),
   );
 
   return Layer.mergeAll(

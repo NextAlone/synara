@@ -82,16 +82,24 @@ import type {
   GitUnstageFilesResult,
 } from "./git";
 import type {
+  VcsCreateReferenceInput,
+  VcsCreateReferenceResult,
+  VcsCreateWorkspaceInput,
+  VcsCreateWorkspaceResult,
   VcsListReferencesInput,
   VcsListReferencesResult,
   VcsListWorkspacesInput,
   VcsListWorkspacesResult,
   VcsReadDiffInput,
   VcsReadDiffResult,
+  VcsRemoveWorkspaceInput,
+  VcsRemoveWorkspaceResult,
   VcsSetBackendInput,
   VcsSetBackendResult,
   VcsStatusInput,
   VcsStatusResult,
+  VcsSwitchReferenceInput,
+  VcsSwitchReferenceResult,
 } from "./vcs";
 import type {
   PullRequestActionInput,
@@ -597,7 +605,11 @@ export interface NativeApi {
     status: (input: VcsStatusInput) => Promise<VcsStatusResult>;
     readDiff: (input: VcsReadDiffInput) => Promise<VcsReadDiffResult>;
     listReferences: (input: VcsListReferencesInput) => Promise<VcsListReferencesResult>;
+    createReference: (input: VcsCreateReferenceInput) => Promise<VcsCreateReferenceResult>;
+    switchReference: (input: VcsSwitchReferenceInput) => Promise<VcsSwitchReferenceResult>;
     listWorkspaces: (input: VcsListWorkspacesInput) => Promise<VcsListWorkspacesResult>;
+    createWorkspace: (input: VcsCreateWorkspaceInput) => Promise<VcsCreateWorkspaceResult>;
+    removeWorkspace: (input: VcsRemoveWorkspaceInput) => Promise<VcsRemoveWorkspaceResult>;
   };
   git: {
     // Existing branch/worktree API

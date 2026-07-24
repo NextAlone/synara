@@ -1,8 +1,15 @@
 // FILE: BranchToolbar.tsx
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
-import type { ThreadId, RuntimeMode } from "@synara/contracts";
-import { CheckIcon, ChevronDownIcon, HandoffIcon, WorktreeIcon } from "~/lib/icons";
+import type { ThreadId, RuntimeMode, VcsBackend } from "@synara/contracts";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  GitBranchIcon,
+  HandoffIcon,
+  WorktreeIcon,
+} from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
@@ -13,6 +20,7 @@ import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useProviderUsageSummary } from "../hooks/useProviderUsageSummary";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
+import { invalidateVcsQueries } from "../lib/vcsReactQuery";
 import { useStore } from "../store";
 import {
   createAllThreadsSelector,
@@ -47,6 +55,7 @@ import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { Button } from "./ui/button";
 import { Collapsible, CollapsiblePanel } from "./ui/collapsible";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
+import { toastManager } from "./ui/toast";
 import {
   Menu,
   MenuGroup,
@@ -234,6 +243,7 @@ export default function BranchToolbar({
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
+  const queryClient = useQueryClient();
   const [allThreadsSelector] = useState(() => createAllThreadsSelector());
   const threads = useStore(allThreadsSelector);
   const { settings } = useAppSettings();
@@ -423,6 +433,39 @@ export default function BranchToolbar({
   });
   const [rateLimitsOpen, setRateLimitsOpen] = useState(true);
   const [envPickerOpen, setEnvPickerOpen] = useState(false);
+  const [vcsPickerOpen, setVcsPickerOpen] = useState(false);
+  const [switchingVcsBackend, setSwitchingVcsBackend] = useState(false);
+  const vcsState = activeProject?.vcs ?? { epoch: 0, binding: null };
+  const vcsBackend = vcsState.binding?.backend ?? null;
+  const selectVcsBackend = useCallback(
+    (backend: VcsBackend) => {
+      const api = readNativeApi();
+      if (!api || !activeProject || switchingVcsBackend || backend === vcsBackend) {
+        setVcsPickerOpen(false);
+        return;
+      }
+      setVcsPickerOpen(false);
+      setSwitchingVcsBackend(true);
+      void api.vcs
+        .setBackend({
+          projectId: activeProject.id,
+          expectedEpoch: vcsState.epoch,
+          backend,
+        })
+        .then(() => invalidateVcsQueries(queryClient))
+        .catch((error: unknown) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not change source control backend.",
+            description: error instanceof Error ? error.message : "An unknown error occurred.",
+          });
+        })
+        .finally(() => {
+          setSwitchingVcsBackend(false);
+        });
+    },
+    [activeProject, queryClient, switchingVcsBackend, vcsBackend, vcsState.epoch],
+  );
 
   if (!activeThreadId || !activeProject) return null;
 
@@ -443,6 +486,64 @@ export default function BranchToolbar({
       )}
     >
       <div className={isPanel ? "flex flex-col gap-0.5" : "flex items-center gap-2"}>
+        {activeProject.kind === "project" ? (
+          <Menu open={vcsPickerOpen} onOpenChange={setVcsPickerOpen}>
+            <MenuTrigger
+              render={
+                <button
+                  type="button"
+                  disabled={switchingVcsBackend}
+                  className={
+                    isPanel
+                      ? ENVIRONMENT_ROW_CLASS_NAME
+                      : COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME
+                  }
+                />
+              }
+            >
+              {isPanel ? (
+                <EnvironmentRowBody
+                  icon={<GitBranchIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+                  label="Source control"
+                  trailing={
+                    <span className="flex items-center gap-1.5">
+                      <span>{vcsBackend === "jj" ? "JJ" : vcsBackend === "git" ? "Git" : "Choose"}</span>
+                      <EnvironmentRowChevron />
+                    </span>
+                  }
+                />
+              ) : (
+                <>
+                  <GitBranchIcon className="size-3.5" />
+                  {vcsBackend === "jj" ? "JJ" : vcsBackend === "git" ? "Git" : "VCS"}
+                  <ChevronDownIcon className="size-3 opacity-60" />
+                </>
+              )}
+            </MenuTrigger>
+            <ComposerPickerMenuPopup
+              align="start"
+              side={isPanel ? "bottom" : "top"}
+              sideOffset={6}
+              className="w-56 min-w-56"
+            >
+              <MenuGroup>
+                <MenuGroupLabel>Source control backend</MenuGroupLabel>
+                <MenuRadioGroup
+                  value={vcsBackend ?? ""}
+                  onValueChange={(value) => {
+                    if (value === "git" || value === "jj") {
+                      selectVcsBackend(value);
+                    }
+                  }}
+                >
+                  <MenuRadioItem value="git">Git</MenuRadioItem>
+                  <MenuRadioItem value="jj">Jujutsu (JJ)</MenuRadioItem>
+                </MenuRadioGroup>
+              </MenuGroup>
+            </ComposerPickerMenuPopup>
+          </Menu>
+        ) : null}
+
         {showEnvPicker ? (
           <Menu open={envPickerOpen} onOpenChange={setEnvPickerOpen}>
             <MenuTrigger
@@ -567,6 +668,9 @@ export default function BranchToolbar({
 
         {showBranchSelector ? (
           <BranchToolbarBranchSelector
+            projectId={activeProject.id}
+            projectVcs={vcsState}
+            activeThreadId={hasServerThread ? activeThreadId : null}
             activeProjectCwd={branchProjectCwd ?? activeProject.cwd}
             activeThreadBranch={activeThreadBranch}
             activeWorktreePath={activeWorktreePath}

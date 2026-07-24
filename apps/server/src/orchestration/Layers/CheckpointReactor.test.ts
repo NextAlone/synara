@@ -24,6 +24,7 @@ import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effe
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CheckpointStoreLive } from "../../checkpointing/Layers/CheckpointStore.ts";
+import { JjCoreLive } from "../../vcs/Layers/JjCore.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { GitCoreLive } from "../../git/Layers/GitCore.ts";
 import { CheckpointReactorLive } from "./CheckpointReactor.ts";
@@ -304,7 +305,12 @@ describe("CheckpointReactor", () => {
       Layer.provideMerge(RuntimeReceiptBusLive),
       Layer.provideMerge(TurnCheckpointCoordinatorLive),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
-      Layer.provideMerge(CheckpointStoreLive.pipe(Layer.provide(GitCoreLive))),
+      Layer.provideMerge(
+        CheckpointStoreLive.pipe(
+          Layer.provide(GitCoreLive),
+          Layer.provide(JjCoreLive),
+        ),
+      ),
       Layer.provideMerge(ServerConfigLayer),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(SqlitePersistenceMemory),
@@ -344,6 +350,20 @@ describe("CheckpointReactor", () => {
     );
     await Effect.runPromise(
       engine.dispatch({
+        type: "project.vcs-binding.set",
+        commandId: CommandId.makeUnsafe("cmd-project-vcs"),
+        projectId: asProjectId("project-1"),
+        expectedEpoch: 0,
+        binding: {
+          backend: "git",
+          repoRoot: cwd,
+          projectRelativePath: ".",
+        },
+        updatedAt: createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      engine.dispatch({
         type: "thread.create",
         commandId: CommandId.makeUnsafe("cmd-thread-create"),
         threadId: ThreadId.makeUnsafe("thread-1"),
@@ -365,6 +385,7 @@ describe("CheckpointReactor", () => {
       await runtime.runPromise(
         checkpointStore.captureCheckpoint({
           cwd,
+          backend: "git",
           checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
         }),
       );
@@ -372,6 +393,7 @@ describe("CheckpointReactor", () => {
       await runtime.runPromise(
         checkpointStore.captureCheckpoint({
           cwd,
+          backend: "git",
           checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1),
         }),
       );
@@ -379,6 +401,7 @@ describe("CheckpointReactor", () => {
       await runtime.runPromise(
         checkpointStore.captureCheckpoint({
           cwd,
+          backend: "git",
           checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2),
         }),
       );
@@ -1381,6 +1404,7 @@ describe("CheckpointReactor", () => {
     await runtime!.runPromise(
       harness.checkpointStore.captureCheckpoint({
         cwd: harness.cwd,
+        backend: "git",
         checkpointRef: checkpointRefForThreadTurn(threadId, 0),
       }),
     );
@@ -1389,12 +1413,14 @@ describe("CheckpointReactor", () => {
     await runtime!.runPromise(
       harness.checkpointStore.captureCheckpoint({
         cwd: harness.cwd,
+        backend: "git",
         checkpointRef: checkpointRefForThreadTurn(threadId, 1),
       }),
     );
     await runtime!.runPromise(
       harness.checkpointStore.copyCheckpointRef({
         cwd: harness.cwd,
+        backend: "git",
         fromCheckpointRef: checkpointRefForThreadTurn(threadId, 1),
         toCheckpointRef: checkpointRefForThreadTurnStart(threadId, turnTwoId),
       }),
@@ -1404,6 +1430,7 @@ describe("CheckpointReactor", () => {
     await runtime!.runPromise(
       harness.checkpointStore.captureCheckpoint({
         cwd: harness.cwd,
+        backend: "git",
         checkpointRef: checkpointRefForThreadTurn(threadId, 2),
       }),
     );
@@ -1611,6 +1638,7 @@ describe("CheckpointReactor", () => {
     await runtime!.runPromise(
       harness.checkpointStore.captureCheckpoint({
         cwd: harness.cwd,
+        backend: "git",
         checkpointRef: checkpointRefForThreadTurn(threadId, 0),
       }),
     );
@@ -1619,6 +1647,7 @@ describe("CheckpointReactor", () => {
     await runtime!.runPromise(
       harness.checkpointStore.captureCheckpoint({
         cwd: harness.cwd,
+        backend: "git",
         checkpointRef: checkpointRefForThreadTurn(threadId, 1),
       }),
     );
@@ -1626,6 +1655,7 @@ describe("CheckpointReactor", () => {
     await runtime!.runPromise(
       harness.checkpointStore.captureCheckpoint({
         cwd: harness.cwd,
+        backend: "git",
         checkpointRef: checkpointRefForThreadTurn(threadId, 2),
       }),
     );
@@ -1691,6 +1721,7 @@ describe("CheckpointReactor", () => {
     await runtime!.runPromise(
       harness.checkpointStore.captureCheckpoint({
         cwd: harness.cwd,
+        backend: "git",
         checkpointRef: checkpointRefForThreadTurn(threadId, 1),
       }),
     );

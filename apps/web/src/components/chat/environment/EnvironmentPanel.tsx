@@ -357,7 +357,13 @@ export function EnvironmentPanel({
         />
       ) : null}
 
-      {isGitRepo ? <BranchToolbar {...branchToolbar} variant="panel" /> : null}
+      {activeProjectId && !isStudioChat ? (
+        <BranchToolbar
+          {...branchToolbar}
+          variant="panel"
+          showBranchSelector={isGitRepo}
+        />
+      ) : null}
 
       {showGitActions ? (
         <GitActionsControl
@@ -391,7 +397,7 @@ export function EnvironmentPanel({
         </EnvironmentLabeledSection>
       ) : null}
 
-      {settings.showEnvironmentPullRequest && isGitRepo && onOpenGithubRepository ? (
+      {settings.showEnvironmentPullRequest && showGitActions && onOpenGithubRepository ? (
         <EnvironmentPullRequestSection
           gitCwd={gitCwd}
           enabled={open}

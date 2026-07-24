@@ -155,6 +155,10 @@ function deriveLocalBranchNameCandidatesFromRemoteRef(
     if (branchName.startsWith(remotePrefix) && branchName.length > remotePrefix.length) {
       candidates.add(branchName.slice(remotePrefix.length));
     }
+    const remoteSuffix = `@${remoteName}`;
+    if (branchName.endsWith(remoteSuffix) && branchName.length > remoteSuffix.length) {
+      candidates.add(branchName.slice(0, -remoteSuffix.length));
+    }
   }
 
   return [...candidates];

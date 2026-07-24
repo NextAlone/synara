@@ -48,6 +48,7 @@ function dependencies(input: {
   git?: Partial<GitCoreShape>;
   gitManager?: Partial<GitManagerShape>;
   jj?: Partial<JjCoreShape>;
+  removeDirectory?: (path: string) => Promise<void>;
 }) {
   const dispatched: unknown[] = [];
   const projection = {
@@ -80,6 +81,11 @@ function dependencies(input: {
       canonicalizePath: async (path: string) => path,
       now: () => NOW,
       makeCommandId: () => CommandId.makeUnsafe("cmd-project-vcs-service"),
+      worktreesDir: "/managed",
+      pathExists: async () => false,
+      makeDirectory: async () => undefined,
+      removeDirectory: input.removeDirectory ?? (async () => undefined),
+      randomToken: () => "abc123",
     } as ProjectVcsDependencies,
   };
 }
@@ -229,7 +235,7 @@ describe("ProjectVcs", () => {
       hasConflicts: true,
       files: [{ path: "new.ts", sourcePath: "old.ts", conflicted: true }],
       remote: { ref: "feature@origin", aheadCount: 2, behindCount: 1 },
-      capabilities: { staging: false, stash: false, checkout: false, workspaces: true },
+      capabilities: { staging: false, stash: false, checkout: true, workspaces: true },
     });
   });
 
@@ -357,5 +363,179 @@ describe("ProjectVcs", () => {
         ref: null,
       },
     ]);
+  });
+
+  it("creates a JJ workspace from the current change without invoking Git", async () => {
+    const createJjWorkspace = vi.fn((input: Parameters<JjCoreShape["createWorkspace"]>[0]) =>
+      Effect.succeed({
+        name: input.workspaceName,
+        path: input.workspacePath,
+        revision: {
+          changeId: "workspace-change",
+          commitId: "workspace-commit",
+          description: input.message,
+        },
+      }),
+    );
+    const createGitWorktree = vi.fn();
+    const deps = dependencies({
+      project: project({ epoch: 5, binding: jjBinding }),
+      git: { createDetachedWorktree: createGitWorktree },
+      jj: {
+        createWorkspace: createJjWorkspace,
+        getWorkspaceRegistration: () => Effect.succeed({ kind: "absent" as const }),
+        forgetWorkspace: () => Effect.void,
+      },
+    });
+    const service = makeProjectVcsWith(deps.value);
+
+    const result = await Effect.runPromise(
+      service.createWorkspace({
+        projectId: PROJECT_ID,
+        expectedEpoch: 5,
+        sourceRef: "main",
+        path: null,
+        copyChangesFromCurrent: true,
+      }),
+    );
+
+    expect(createJjWorkspace).toHaveBeenCalledWith({
+      repositoryPath: "/repo",
+      workspacePath: "/managed/abc123/synara",
+      workspaceName: "synara-abc123",
+      revision: "@",
+      message: "wip: Synara workspace synara-abc123",
+    });
+    expect(createGitWorktree).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      backend: "jj",
+      epoch: 5,
+      workspace: {
+        name: "synara-abc123",
+        path: "/managed/abc123/synara/app",
+        ref: "main",
+        branch: null,
+      },
+    });
+  });
+
+  it("creates and switches JJ bookmarks without invoking Git", async () => {
+    const createBookmark = vi.fn(() => Effect.void);
+    const startNewChange = vi.fn(() =>
+      Effect.succeed({
+        changeId: "next-change",
+        commitId: "next-commit",
+        description: "wip: Synara on feature",
+      }),
+    );
+    const gitCreateBranch = vi.fn();
+    const gitCheckout = vi.fn();
+    const deps = dependencies({
+      project: project({ epoch: 7, binding: jjBinding }),
+      git: {
+        createBranch: gitCreateBranch,
+        checkout: gitCheckout,
+      },
+      jj: {
+        createBookmark,
+        startNewChange,
+        resolveNearestBookmark: () => Effect.succeed("feature"),
+      },
+    });
+    const service = makeProjectVcsWith(deps.value);
+
+    await expect(
+      Effect.runPromise(
+        service.createReference({
+          projectId: PROJECT_ID,
+          expectedEpoch: 7,
+          name: "feature",
+          publish: false,
+        }),
+      ),
+    ).resolves.toEqual({ backend: "jj", epoch: 7, ref: "feature" });
+    await expect(
+      Effect.runPromise(
+        service.switchReference({
+          projectId: PROJECT_ID,
+          expectedEpoch: 7,
+          ref: "feature",
+        }),
+      ),
+    ).resolves.toEqual({
+      backend: "jj",
+      epoch: 7,
+      ref: "feature",
+      revision: {
+        changeId: "next-change",
+        commitId: "next-commit",
+        description: "wip: Synara on feature",
+      },
+    });
+
+    expect(createBookmark).toHaveBeenCalledWith("/repo/app", "feature", "@");
+    expect(startNewChange).toHaveBeenCalledWith(
+      "/repo/app",
+      "feature",
+      "wip: Synara on feature",
+    );
+    expect(gitCreateBranch).not.toHaveBeenCalled();
+    expect(gitCheckout).not.toHaveBeenCalled();
+  });
+
+  it("refuses to remove a dirty JJ workspace unless force is explicit", async () => {
+    const forgetWorkspace = vi.fn();
+    const removeDirectory = vi.fn(async () => undefined);
+    const deps = dependencies({
+      project: project({ epoch: 6, binding: jjBinding }),
+      jj: {
+        listWorkspaces: () =>
+          Effect.succeed([
+            {
+              name: "feature",
+              registration: {
+                kind: "present" as const,
+                root: "/workspaces/feature",
+              },
+            },
+          ]),
+        status: () =>
+          Effect.succeed({
+            repository: {
+              workspaceRoot: "/workspaces/feature",
+              repositoryStorePath: "/store",
+              gitStorePath: "/repo",
+            },
+            revision: {
+              changeId: "change",
+              commitId: "commit",
+              description: "",
+            },
+            currentBookmark: "feature",
+            upstreamBookmark: null,
+            aheadCount: 0,
+            behindCount: 0,
+            bookmarks: [],
+            files: [],
+            hasChanges: true,
+            hasConflicts: false,
+          }),
+        forgetWorkspace,
+      },
+      removeDirectory,
+    });
+    const service = makeProjectVcsWith(deps.value);
+
+    await expect(
+      Effect.runPromise(
+        service.removeWorkspace({
+          projectId: PROJECT_ID,
+          expectedEpoch: 6,
+          path: "/workspaces/feature/app",
+        }),
+      ),
+    ).rejects.toThrow("has changes or conflicts");
+    expect(forgetWorkspace).not.toHaveBeenCalled();
+    expect(removeDirectory).not.toHaveBeenCalled();
   });
 });

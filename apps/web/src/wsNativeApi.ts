@@ -520,7 +520,11 @@ export function createWsNativeApi(): NativeApi {
       status: (input) => transport.request(WS_METHODS.vcsStatus, input),
       readDiff: (input) => transport.request(WS_METHODS.vcsReadDiff, input),
       listReferences: (input) => transport.request(WS_METHODS.vcsListReferences, input),
+      createReference: (input) => transport.request(WS_METHODS.vcsCreateReference, input),
+      switchReference: (input) => transport.request(WS_METHODS.vcsSwitchReference, input),
       listWorkspaces: (input) => transport.request(WS_METHODS.vcsListWorkspaces, input),
+      createWorkspace: (input) => transport.request(WS_METHODS.vcsCreateWorkspace, input),
+      removeWorkspace: (input) => transport.request(WS_METHODS.vcsRemoveWorkspace, input),
     },
     git: {
       githubRepository: (input) => transport.request(WS_METHODS.gitGithubRepository, input),

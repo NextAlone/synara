@@ -29,6 +29,10 @@ import {
 } from "../Services/ProjectionSnapshotQuery.ts";
 import { StudioOutputReactor } from "../Services/StudioOutputReactor.ts";
 import { StudioOutputReactorLive } from "./StudioOutputReactor.ts";
+import {
+  CheckpointStore,
+  type CheckpointStoreShape,
+} from "../../checkpointing/Services/CheckpointStore.ts";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -104,6 +108,18 @@ describe("StudioOutputReactor", () => {
       Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
       Layer.provideMerge(Layer.succeed(OrchestrationEngineService, orchestrationEngine)),
       Layer.provideMerge(Layer.succeed(ProjectionSnapshotQuery, projectionSnapshotQuery)),
+      Layer.provideMerge(
+        Layer.succeed(CheckpointStore, {
+          isRepository: () => Effect.succeed(false),
+          captureCheckpoint: () => Effect.void,
+          copyCheckpointRef: () => Effect.succeed(false),
+          hasCheckpointRef: () => Effect.succeed(false),
+          restoreCheckpoint: () => Effect.succeed(false),
+          reverseCheckpointDiff: () => Effect.succeed(false),
+          diffCheckpoints: () => Effect.succeed(""),
+          deleteCheckpointRefs: () => Effect.void,
+        } satisfies CheckpointStoreShape),
+      ),
       Layer.provideMerge(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);

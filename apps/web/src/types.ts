@@ -29,6 +29,7 @@ import type {
   CheckpointRef,
   ProviderInteractionMode,
   ProjectKind,
+  ProjectVcsState,
   RuntimeMode,
   ThreadCreationSource,
   ThreadEnvironmentMode,
@@ -182,6 +183,8 @@ export interface Project {
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
   scripts: ProjectScript[];
+  /** Missing only in pre-migration persisted/test state; normalized server state always sets it. */
+  vcs?: ProjectVcsState;
 }
 
 export interface Space {

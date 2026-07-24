@@ -20,7 +20,7 @@ import {
 import { toastManager } from "../components/ui/toast";
 import { deleteActiveThreadFromClient } from "../lib/activeThreadDelete";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
-import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
+import { vcsRemoveWorkspaceMutationOptions } from "../lib/vcsReactQuery";
 import {
   archiveThreadFromClient,
   isThreadAlreadyUnarchivedError,
@@ -82,7 +82,9 @@ export function useSidebarThreadActions(input: {
   } = input;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
+  const removeWorktreeMutation = useMutation(
+    vcsRemoveWorkspaceMutationOptions({ queryClient }),
+  );
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clearProjectDraftThreadById = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadById,

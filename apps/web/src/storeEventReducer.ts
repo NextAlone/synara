@@ -778,6 +778,7 @@ function applyOrchestrationEvent(
           scripts: event.payload.scripts,
           isPinned: event.payload.isPinned ?? false,
           spaceId: event.payload.spaceId ?? null,
+          vcs: event.payload.vcs,
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
         },
@@ -808,6 +809,7 @@ function applyOrchestrationEvent(
             event.payload.spaceId !== undefined
               ? event.payload.spaceId
               : (existingProject.spaceId ?? null),
+          vcs: event.payload.vcs ?? existingProject.vcs ?? { epoch: 0, binding: null },
           createdAt: existingProject.createdAt ?? event.payload.updatedAt,
           updatedAt: event.payload.updatedAt,
         },

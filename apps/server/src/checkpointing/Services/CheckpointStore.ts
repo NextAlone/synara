@@ -14,10 +14,14 @@ import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
 import type { CheckpointStoreError } from "../Errors.ts";
-import { CheckpointRef } from "@synara/contracts";
+import { CheckpointRef, type VcsBackend } from "@synara/contracts";
 
-export interface CaptureCheckpointInput {
+export interface CheckpointWorkspaceInput {
   readonly cwd: string;
+  readonly backend: VcsBackend;
+}
+
+export interface CaptureCheckpointInput extends CheckpointWorkspaceInput {
   readonly checkpointRef: CheckpointRef;
   /**
    * Treat an already-existing ref as success and skip the capture.
@@ -29,20 +33,17 @@ export interface CaptureCheckpointInput {
   readonly skipIfExists?: boolean;
 }
 
-export interface CopyCheckpointRefInput {
-  readonly cwd: string;
+export interface CopyCheckpointRefInput extends CheckpointWorkspaceInput {
   readonly fromCheckpointRef: CheckpointRef;
   readonly toCheckpointRef: CheckpointRef;
 }
 
-export interface RestoreCheckpointInput {
-  readonly cwd: string;
+export interface RestoreCheckpointInput extends CheckpointWorkspaceInput {
   readonly checkpointRef: CheckpointRef;
   readonly fallbackToHead?: boolean;
 }
 
-export interface DiffCheckpointsInput {
-  readonly cwd: string;
+export interface DiffCheckpointsInput extends CheckpointWorkspaceInput {
   readonly fromCheckpointRef: CheckpointRef;
   readonly toCheckpointRef: CheckpointRef;
   readonly fallbackFromToHead?: boolean;
@@ -50,15 +51,13 @@ export interface DiffCheckpointsInput {
   readonly maxOutputBytes?: number;
 }
 
-export interface ReverseCheckpointDiffInput {
-  readonly cwd: string;
+export interface ReverseCheckpointDiffInput extends CheckpointWorkspaceInput {
   readonly fromCheckpointRef: CheckpointRef;
   readonly toCheckpointRef: CheckpointRef;
   readonly maxOutputBytes?: number;
 }
 
-export interface DeleteCheckpointRefsInput {
-  readonly cwd: string;
+export interface DeleteCheckpointRefsInput extends CheckpointWorkspaceInput {
   readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
 }
 
@@ -67,9 +66,11 @@ export interface DeleteCheckpointRefsInput {
  */
 export interface CheckpointStoreShape {
   /**
-   * Check whether cwd is inside a Git worktree.
+   * Check whether cwd belongs to the explicitly selected backend.
    */
-  readonly isGitRepository: (cwd: string) => Effect.Effect<boolean, CheckpointStoreError>;
+  readonly isRepository: (
+    input: CheckpointWorkspaceInput,
+  ) => Effect.Effect<boolean, CheckpointStoreError>;
 
   /**
    * Capture a checkpoint commit and store it at the provided checkpoint ref.

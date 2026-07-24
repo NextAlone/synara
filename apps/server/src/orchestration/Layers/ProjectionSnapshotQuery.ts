@@ -23,6 +23,7 @@ import {
   ThreadId,
   ThreadEnvironmentMode,
   TurnId,
+  VcsBackend,
   type OrchestrationCheckpointSummary,
   type OrchestrationLatestTurn,
   type OrchestrationMessage,
@@ -196,6 +197,7 @@ const ProjectionThreadCheckpointContextThreadRowSchema = Schema.Struct({
   envMode: ThreadEnvironmentMode,
   worktreePath: Schema.NullOr(Schema.String),
   workingDirectory: Schema.NullOr(Schema.String),
+  vcsBackend: Schema.NullOr(VcsBackend),
 });
 const ProjectionFullThreadDiffContextRowSchema = Schema.Struct({
   threadId: ThreadId,
@@ -205,6 +207,7 @@ const ProjectionFullThreadDiffContextRowSchema = Schema.Struct({
   envMode: ThreadEnvironmentMode,
   worktreePath: Schema.NullOr(Schema.String),
   workingDirectory: Schema.NullOr(Schema.String),
+  vcsBackend: Schema.NullOr(VcsBackend),
   latestCheckpointTurnCount: Schema.NullOr(NonNegativeInt),
   baselineCheckpointRef: Schema.NullOr(CheckpointRef),
   toCheckpointRef: Schema.NullOr(CheckpointRef),
@@ -1640,6 +1643,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           threads.project_id AS "projectId",
           projects.kind AS "projectKind",
           projects.workspace_root AS "workspaceRoot",
+          json_extract(projects.vcs_state_json, '$.binding.backend') AS "vcsBackend",
           threads.env_mode AS "envMode",
           threads.worktree_path AS "worktreePath",
           threads.working_directory AS "workingDirectory"
@@ -1733,6 +1737,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           threads.project_id AS "projectId",
           projects.kind AS "projectKind",
           projects.workspace_root AS "workspaceRoot",
+          json_extract(projects.vcs_state_json, '$.binding.backend') AS "vcsBackend",
           threads.env_mode AS "envMode",
           threads.worktree_path AS "worktreePath",
           threads.working_directory AS "workingDirectory",
@@ -2364,6 +2369,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         envMode: threadRow.value.envMode,
         worktreePath: threadRow.value.worktreePath,
         workingDirectory: threadRow.value.workingDirectory,
+        vcsBackend: threadRow.value.vcsBackend,
         checkpoints: checkpointRows.map(
           (row): OrchestrationCheckpointSummary => ({
             turnId: row.turnId,
@@ -2422,6 +2428,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         envMode: row.value.envMode,
         worktreePath: row.value.worktreePath,
         workingDirectory: row.value.workingDirectory,
+        vcsBackend: row.value.vcsBackend,
         latestCheckpointTurnCount: row.value.latestCheckpointTurnCount ?? 0,
         baselineCheckpointRef: row.value.baselineCheckpointRef,
         toCheckpointRef: row.value.toCheckpointRef,

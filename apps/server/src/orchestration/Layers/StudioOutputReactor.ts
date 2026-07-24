@@ -29,7 +29,7 @@ import { Cause, Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
-import { isGitRepository } from "../../git/isRepo.ts";
+import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import {
   scanStudioWorkspaceFiles,
   studioOutputsCapturedActivityPayload,
@@ -70,6 +70,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const checkpointStore = yield* CheckpointStore;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const scanWorkspaceFiles = (workspaceRoot: string) =>
@@ -103,7 +104,11 @@ const make = Effect.gen(function* () {
       return null;
     }
     const cwd = resolveThreadWorkspaceCwd({ thread, projects: [project] });
-    if (!cwd || isGitRepository(cwd)) {
+    if (!cwd) {
+      return null;
+    }
+    const backend = project.vcs?.binding?.backend;
+    if (backend && (yield* checkpointStore.isRepository({ cwd, backend }))) {
       return null;
     }
     return cwd;

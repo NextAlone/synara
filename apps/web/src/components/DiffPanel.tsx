@@ -9,10 +9,11 @@ import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { Columns2Icon, CopyIcon, EllipsisIcon, FolderIcon, Rows3Icon, XIcon } from "~/lib/icons";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  gitBranchesQueryOptions,
-  gitStatusQueryOptions,
-  gitWorkingTreeDiffQueryOptions,
-} from "~/lib/gitReactQuery";
+  makeVcsQueryTarget,
+  vcsDiffQueryOptions,
+  vcsReferencesQueryOptions,
+  vcsStatusQueryOptions,
+} from "~/lib/vcsReactQuery";
 import {
   checkpointDiffQueryOptions,
   resolveCheckpointDiffQueryDisplayState,
@@ -96,6 +97,7 @@ import { formatShortTimestamp } from "../timestampFormat";
 import type { TurnDiffSummary } from "../types";
 
 const EDITOR_DIFF_OPTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
+const JJ_DIFF_SCOPE_OPTIONS: ReadonlyArray<RepoDiffScope> = ["workingTree", "branch"];
 
 function EditorDiffOptionsCountBadge(props: { count: number | undefined }) {
   if (typeof props.count !== "number" || props.count <= 0) {
@@ -110,6 +112,7 @@ function EditorDiffOptionsCountBadge(props: { count: number | undefined }) {
 
 function EditorDiffOptionsMenu(props: {
   scopePickerValue: string | null;
+  repoScopeOptions: ReadonlyArray<RepoDiffScope>;
   scopeFileCounts: Partial<Record<RepoDiffScope, number>>;
   selectedTurnId: TurnId | null;
   orderedTurnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
@@ -184,7 +187,7 @@ function EditorDiffOptionsMenu(props: {
               }
             }}
           >
-            {DIFF_PANEL_PICKER_SCOPE_OPTIONS.map((scope) => (
+            {props.repoScopeOptions.map((scope) => (
               <MenuRadioItem key={scope} value={scope}>
                 <span className="min-w-0 flex-1 truncate">{REPO_DIFF_SCOPE_LABELS[scope]}</span>
                 <EditorDiffOptionsCountBadge count={props.scopeFileCounts[scope]} />
@@ -294,6 +297,7 @@ function EditorDiffOptionsMenu(props: {
 
 function EditorDiffControls(props: {
   scopePickerValue: string | null;
+  repoScopeOptions: ReadonlyArray<RepoDiffScope>;
   scopeFileCounts: Partial<Record<RepoDiffScope, number>>;
   selectedTurnId: TurnId | null;
   orderedTurnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
@@ -320,6 +324,7 @@ function EditorDiffControls(props: {
     <div className="flex items-center gap-1">
       <EditorDiffOptionsMenu
         scopePickerValue={props.scopePickerValue}
+        repoScopeOptions={props.repoScopeOptions}
         scopeFileCounts={props.scopeFileCounts}
         selectedTurnId={props.selectedTurnId}
         orderedTurnDiffSummaries={props.orderedTurnDiffSummaries}
@@ -481,6 +486,17 @@ export default function DiffPanel({
   });
   const diffEnvironmentPending = diffEnvironmentState.pending;
   const activeCwd = diffEnvironmentState.cwd;
+  const vcsTarget = makeVcsQueryTarget(
+    activeProject,
+    serverThreadCatalog && resolvedThreadWorktreePath ? activeThreadId : null,
+  );
+  const repoScopeOptions =
+    vcsTarget.backend === "jj" ? JJ_DIFF_SCOPE_OPTIONS : DIFF_PANEL_PICKER_SCOPE_OPTIONS;
+  useEffect(() => {
+    if (!repoScopeOptions.includes(repoDiffScope)) {
+      setRepoDiffScope("workingTree");
+    }
+  }, [repoDiffScope, repoScopeOptions, setRepoDiffScope]);
   const selectedTurnId = panelState
     ? (panelState.diffTurnId ?? null)
     : (diffSearch.diffTurnId ?? null);
@@ -500,19 +516,26 @@ export default function DiffPanel({
     [activeCwd, diffQueriesEnabled, diffViewKind],
   );
   const gitBranchesQuery = useQuery({
-    ...gitBranchesQueryOptions(activeCwd ?? null),
+    ...vcsReferencesQueryOptions(vcsTarget),
     enabled: diffQueriesEnabled && activeCwd !== null,
   });
   const gitStatusQuery = useQuery({
-    ...gitStatusQueryOptions(activeCwd ?? null),
+    ...vcsStatusQueryOptions(vcsTarget),
     enabled: gitStatusQueriesEnabled,
   });
-  const gitRepoStatus = gitBranchesQuery.isSuccess ? gitBranchesQuery.data.isRepo : undefined;
+  const gitRepoStatus =
+    vcsTarget.backend === null
+      ? false
+      : gitBranchesQuery.isSuccess
+        ? true
+        : gitBranchesQuery.isError
+          ? false
+          : undefined;
   const gitRepoStatusError =
     gitBranchesQuery.error instanceof Error
       ? gitBranchesQuery.error.message
       : gitBranchesQuery.error
-        ? "Failed to check git repository."
+        ? "Failed to check source control repository."
         : null;
   const isGitRepo = gitRepoStatus === true;
   const turnDiffSummaries = activeThreadContext?.turnDiffSummaries ?? [];
@@ -608,7 +631,11 @@ export default function DiffPanel({
       ignoreWhitespace: diffIgnoreWhitespace,
       cacheScope: selectedTurn ? `turn:${selectedTurn.turnId}` : conversationCacheScope,
       enabled:
-        diffQueriesEnabled && isGitRepo && !diffEnvironmentPending && diffViewKind === "turn",
+        diffQueriesEnabled &&
+        vcsTarget.backend === "git" &&
+        isGitRepo &&
+        !diffEnvironmentPending &&
+        diffViewKind === "turn",
     }),
   );
   const selectedTurnCheckpointDiff = selectedTurn
@@ -630,29 +657,29 @@ export default function DiffPanel({
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
   const unstagedDiffQuery = useQuery(
-    gitWorkingTreeDiffQueryOptions({
-      cwd: activeCwd ?? null,
+    vcsDiffQueryOptions({
+      target: vcsTarget,
       scope: "unstaged",
       enabled: scopeCountQueriesEnabled && !diffEnvironmentPending,
     }),
   );
   const stagedDiffQuery = useQuery(
-    gitWorkingTreeDiffQueryOptions({
-      cwd: activeCwd ?? null,
+    vcsDiffQueryOptions({
+      target: vcsTarget,
       scope: "staged",
       enabled: scopeCountQueriesEnabled && !diffEnvironmentPending,
     }),
   );
   const branchDiffQuery = useQuery(
-    gitWorkingTreeDiffQueryOptions({
-      cwd: activeCwd ?? null,
+    vcsDiffQueryOptions({
+      target: vcsTarget,
       scope: "branch",
       enabled: scopeCountQueriesEnabled && !diffEnvironmentPending,
     }),
   );
   const repoDiffQuery = useQuery(
-    gitWorkingTreeDiffQueryOptions({
-      cwd: activeCwd ?? null,
+    vcsDiffQueryOptions({
+      target: vcsTarget,
       scope: repoDiffScope,
       enabled: diffQueriesEnabled && !diffEnvironmentPending && diffViewKind === "repo",
       refetchInterval: repoDiffLiveRefreshIntervalMs,
@@ -667,7 +694,7 @@ export default function DiffPanel({
       : repoDiffQuery.error
         ? "Failed to load repo diff."
         : null;
-  const branchHasCommittedChanges = (gitStatusQuery.data?.aheadCount ?? 0) > 0;
+  const branchHasCommittedChanges = (gitStatusQuery.data?.remote?.aheadCount ?? 0) > 0;
 
   useEffect(() => {
     if (
@@ -790,8 +817,8 @@ export default function DiffPanel({
     [renderablePatch],
   );
   const workingTreeDiffQuery = useQuery(
-    gitWorkingTreeDiffQueryOptions({
-      cwd: activeCwd ?? null,
+    vcsDiffQueryOptions({
+      target: vcsTarget,
       scope: "workingTree",
       enabled: scopeCountQueriesEnabled && !diffEnvironmentPending,
     }),
@@ -1041,6 +1068,7 @@ export default function DiffPanel({
       hideHeader ? (
         <EditorDiffControls
           scopePickerValue={scopePickerValue}
+          repoScopeOptions={repoScopeOptions}
           scopeFileCounts={scopeFileCounts}
           selectedTurnId={selectedTurnId}
           orderedTurnDiffSummaries={orderedTurnDiffSummaries}
@@ -1076,6 +1104,7 @@ export default function DiffPanel({
       isDiffCopied,
       orderedTurnDiffSummaries,
       renderableFiles,
+      repoScopeOptions,
       scopeFileCounts,
       scopePickerValue,
       selectAllTurns,
@@ -1108,6 +1137,7 @@ export default function DiffPanel({
           activeThreadId={activeThreadId}
           viewSource={viewSource}
           turnScopeIntent={turnScopeIntent}
+          repoScopeOptions={repoScopeOptions}
           scopeFileCounts={scopeFileCounts}
           activeStats={
             activePatchStat
@@ -1179,6 +1209,7 @@ export default function DiffPanel({
       handleScopePickerOpenChange,
       onClosePanel,
       orderedTurnDiffSummaries,
+      repoScopeOptions,
       scopePickerOpen,
       renderableFiles,
       resolvedTheme,
@@ -1207,14 +1238,14 @@ export default function DiffPanel({
         </PanelStateMessage>
       ) : gitRepoStatus === false ? (
         <PanelStateMessage density="compact" fill="flex">
-          Turn diffs are unavailable because this project is not a git repository.
+          Choose a source control backend for this project to inspect diffs.
         </PanelStateMessage>
       ) : gitRepoStatusError ? (
         <PanelStateMessage density="compact" fill="flex">
           {gitRepoStatusError}
         </PanelStateMessage>
       ) : gitRepoStatus === undefined && diffQueriesEnabled && activeCwd ? (
-        <DiffPanelLoadingState label="Checking git repository..." />
+        <DiffPanelLoadingState label="Checking source control repository..." />
       ) : diffEnvironmentPending ? (
         <PanelStateMessage density="compact" fill="flex">
           This chat environment is still being prepared. Diffs will be available once the worktree

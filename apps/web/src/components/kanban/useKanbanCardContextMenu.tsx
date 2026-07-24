@@ -15,7 +15,7 @@ import { useAppSettings } from "~/appSettings";
 import { RenameThreadDialog } from "~/components/RenameThreadDialog";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
-import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
+import { vcsRemoveWorkspaceMutationOptions } from "~/lib/vcsReactQuery";
 import { pinActionLabel } from "~/lib/pin";
 import { archiveThreadFromClient } from "~/lib/threadArchive";
 import { dispatchThreadRename } from "~/lib/threadRename";
@@ -76,7 +76,9 @@ async function setThreadPinned(threadId: ThreadId, isPinned: boolean) {
 export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
   const { settings } = useAppSettings();
   const queryClient = useQueryClient();
-  const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
+  const removeWorktreeMutation = useMutation(
+    vcsRemoveWorkspaceMutationOptions({ queryClient }),
+  );
   const clearComposerContent = useComposerDraftStore((store) => store.clearComposerContent);
   const clearDraftThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clearProjectDraftThreadById = useComposerDraftStore(

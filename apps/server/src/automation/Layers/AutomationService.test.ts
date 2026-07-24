@@ -11,16 +11,15 @@ import {
   TurnId,
   type AutomationCreateInput,
   type AutomationRun,
-  type GitCreateDetachedWorktreeInput,
-  type GitRemoveWorktreeInput,
   type OrchestrationCommand,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
+  type VcsCreateWorkspaceInput,
+  type VcsRemoveWorkspaceInput,
 } from "@synara/contracts";
 import { Duration, Effect, Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
-import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationCommandInternalError } from "../../orchestration/Errors.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -33,6 +32,7 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { AutomationRepository } from "../../persistence/Services/AutomationRepository.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { ProjectVcs, type ProjectVcsShape } from "../../vcs/Services/ProjectVcs.ts";
 import { automationProposalActivityId } from "../proposalActivity.ts";
 import { AutomationService, type AutomationServiceShape } from "../Services/AutomationService.ts";
 import { AutomationServiceLive } from "./AutomationService.ts";
@@ -50,19 +50,27 @@ const project: OrchestrationProjectShell = {
   },
   scripts: [],
   isPinned: false,
+  vcs: {
+    epoch: 1,
+    binding: {
+      backend: "git",
+      repoRoot: "/tmp/automation-project",
+      projectRelativePath: ".",
+    },
+  },
   createdAt: now,
   updatedAt: now,
 };
 
 const dispatchedCommands: OrchestrationCommand[] = [];
-const createdWorktrees: GitCreateDetachedWorktreeInput[] = [];
-const removedWorktrees: GitRemoveWorktreeInput[] = [];
+const createdWorktrees: VcsCreateWorkspaceInput[] = [];
+const removedWorktrees: VcsRemoveWorkspaceInput[] = [];
 type CompletionEvaluationInputForTest = Parameters<
   TextGenerationShape["evaluateAutomationCompletion"]
 >[0];
 let gitMode: "nonRepo" | "worktree" = "nonRepo";
 let gitStatusHook: ((cwd: string) => Effect.Effect<void>) | null = null;
-let createWorktreeHook: ((input: GitCreateDetachedWorktreeInput) => Effect.Effect<void>) | null =
+let createWorktreeHook: ((input: VcsCreateWorkspaceInput) => Effect.Effect<void>) | null =
   null;
 // Configurable thread shell returned by the ProjectionSnapshotQuery mock; reconcile
 // tests set it to drive the run's latest-turn outcome.
@@ -458,46 +466,54 @@ const textGeneration = {
   },
 } as unknown as TextGenerationShape;
 
-const gitCore = {
-  statusDetails: (cwd: string) =>
+const projectVcs = {
+  resolveTarget: () =>
     Effect.gen(function* () {
       if (gitStatusHook) {
-        yield* gitStatusHook(cwd);
+        yield* gitStatusHook(project.workspaceRoot);
+      }
+      if (gitMode !== "worktree") {
+        return yield* Effect.fail(new Error("configured repository is unavailable"));
       }
       return {
-        isRepo: gitMode === "worktree",
-        hasOriginRemote: false,
-        isDefaultBranch: true,
-        branch: gitMode === "worktree" ? "main" : null,
-        upstreamRef: null,
-        upstreamBranch: null,
-        hasWorkingTreeChanges: false,
-        workingTree: { files: [], insertions: 0, deletions: 0 },
-        hasUpstream: false,
-        aheadCount: 0,
-        behindCount: 0,
-        cwd,
+        projectId,
+        threadId: null,
+        backend: "git" as const,
+        epoch: project.vcs.epoch,
+        binding: project.vcs.binding!,
+        cwd: project.workspaceRoot,
       };
     }),
-  createDetachedWorktree: (input: GitCreateDetachedWorktreeInput) =>
+  createWorkspace: (input: VcsCreateWorkspaceInput) =>
     Effect.gen(function* () {
       createdWorktrees.push(input);
       if (createWorktreeHook) {
         yield* createWorktreeHook(input);
       }
       return {
-        worktree: {
+        backend: "git" as const,
+        epoch: project.vcs.epoch,
+        workspace: {
+          name: "automation-worktree",
           path: "/tmp/automation-worktree",
           ref: "0123456789abcdef0123456789abcdef01234567",
           branch: null,
         },
       };
     }),
-  removeWorktree: (input: GitRemoveWorktreeInput) =>
+  removeWorkspace: (input: VcsRemoveWorkspaceInput) =>
     Effect.sync(() => {
       removedWorktrees.push(input);
+      return { backend: "git" as const, epoch: project.vcs.epoch, removed: true };
     }),
-} as unknown as GitCoreShape;
+  setBackend: () => Effect.die("unused"),
+  status: () => Effect.die("unused"),
+  readDiff: () => Effect.die("unused"),
+  listReferences: () => Effect.die("unused"),
+  createReference: () => Effect.die("unused"),
+  switchReference: () => Effect.die("unused"),
+  listWorkspaces: () => Effect.die("unused"),
+} as unknown as ProjectVcsShape;
 
 const layer = it.layer(
   AutomationServiceLive.pipe(
@@ -508,7 +524,7 @@ const layer = it.layer(
     Layer.provideMerge(Layer.succeed(ProjectionSnapshotQuery, projectionSnapshotQuery)),
     Layer.provideMerge(Layer.succeed(TextGeneration, textGeneration)),
     Layer.provideMerge(ServerSettingsService.layerTest()),
-    Layer.provideMerge(Layer.succeed(GitCore, gitCore)),
+    Layer.provideMerge(Layer.succeed(ProjectVcs, projectVcs)),
   ),
 );
 
@@ -835,8 +851,8 @@ layer("AutomationService", (it) => {
       assert.strictEqual(createdWorktrees.length, 1);
       const createdWorktree = createdWorktrees[0];
       assert.ok(createdWorktree);
-      assert.strictEqual(createdWorktree.ref, "HEAD");
-      assert.strictEqual(createdWorktree.copyChangesFrom, project.workspaceRoot);
+      assert.strictEqual(createdWorktree.sourceRef, "HEAD");
+      assert.strictEqual(createdWorktree.copyChangesFromCurrent, true);
       assert.strictEqual(threadCreate?.type, "thread.create");
       if (threadCreate?.type !== "thread.create") {
         assert.fail("Expected thread.create command.");
@@ -866,7 +882,8 @@ layer("AutomationService", (it) => {
       assert.strictEqual(createdWorktrees.length, 1);
       assert.deepStrictEqual(removedWorktrees, [
         {
-          cwd: project.workspaceRoot,
+          projectId,
+          expectedEpoch: project.vcs.epoch,
           path: "/tmp/automation-worktree",
           force: true,
         },
@@ -921,7 +938,8 @@ layer("AutomationService", (it) => {
       assert.strictEqual(createdWorktrees.length, 1);
       assert.deepStrictEqual(removedWorktrees, [
         {
-          cwd: project.workspaceRoot,
+          projectId,
+          expectedEpoch: project.vcs.epoch,
           path: "/tmp/automation-worktree",
           force: true,
         },

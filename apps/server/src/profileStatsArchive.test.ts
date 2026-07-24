@@ -30,6 +30,7 @@ import {
 
 interface DeletedCheckpointRefCall {
   readonly cwd: string;
+  readonly backend: "git" | "jj";
   readonly checkpointRefs: ReadonlyArray<string>;
 }
 
@@ -40,16 +41,17 @@ function recordDeletedCheckpointRefs(
 ) {
   deletedCheckpointRefCalls.push({
     cwd: input.cwd,
+    backend: input.backend,
     checkpointRefs: input.checkpointRefs.map((checkpointRef) => String(checkpointRef)),
   });
 }
 
-let isGitRepositoryImpl: CheckpointStoreShape["isGitRepository"] = () => Effect.succeed(true);
+let isRepositoryImpl: CheckpointStoreShape["isRepository"] = () => Effect.succeed(true);
 let deleteCheckpointRefsImpl: CheckpointStoreShape["deleteCheckpointRefs"] = (input) =>
   Effect.sync(() => recordDeletedCheckpointRefs(input));
 
 const checkpointStoreTestLayer = Layer.succeed(CheckpointStore, {
-  isGitRepository: (cwd) => isGitRepositoryImpl(cwd),
+  isRepository: (input) => isRepositoryImpl(input),
   captureCheckpoint: () => Effect.die("unused checkpoint store test method"),
   copyCheckpointRef: () => Effect.die("unused checkpoint store test method"),
   hasCheckpointRef: () => Effect.die("unused checkpoint store test method"),
@@ -81,13 +83,15 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
 
   yield* sql`
     INSERT INTO projection_projects (
-      project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+      project_id, title, workspace_root, scripts_json, vcs_state_json,
+      created_at, updated_at, deleted_at
     )
     VALUES (
       'project-archive',
       'Archive',
       '/work/archive',
       '{}',
+      '{"epoch":1,"binding":{"backend":"git","repoRoot":"/work/archive","projectRelativePath":"."}}',
       '2026-06-12T09:00:00.000Z',
       '2026-06-12T09:00:00.000Z',
       NULL
@@ -266,7 +270,7 @@ const acknowledgeProviderCommandJournal = (sql: SqlClient.SqlClient) =>
 describe("ProfileStatsArchive", () => {
   beforeEach(() => {
     deletedCheckpointRefCalls.length = 0;
-    isGitRepositoryImpl = () => Effect.succeed(true);
+    isRepositoryImpl = () => Effect.succeed(true);
     deleteCheckpointRefsImpl = (input) => Effect.sync(() => recordDeletedCheckpointRefs(input));
   });
 
@@ -480,6 +484,7 @@ describe("ProfileStatsArchive", () => {
         expect(deletedCheckpointRefCalls).toEqual([
           {
             cwd: "/work/archive",
+            backend: "git",
             checkpointRefs: [
               "refs/historical/checkpoints/dGhyZWFkLXB1cmdl/turn/1",
               String(
@@ -860,13 +865,15 @@ describe("ProfileStatsArchive", () => {
 
         yield* sql`
           INSERT INTO projection_projects (
-            project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+            project_id, title, workspace_root, scripts_json, vcs_state_json,
+            created_at, updated_at, deleted_at
           )
           VALUES (
             'project-message-checkpoint',
             'Message Checkpoint',
             '/work/message-checkpoint',
             '{}',
+            '{"epoch":1,"binding":{"backend":"git","repoRoot":"/work/message-checkpoint","projectRelativePath":"."}}',
             '2026-06-12T09:00:00.000Z',
             '2026-06-12T09:00:00.000Z',
             NULL
@@ -926,6 +933,7 @@ describe("ProfileStatsArchive", () => {
         expect(deletedCheckpointRefCalls).toEqual([
           {
             cwd: "/work/message-checkpoint",
+            backend: "git",
             checkpointRefs: [
               String(
                 checkpointRefForThreadMessageStart(
@@ -959,7 +967,7 @@ describe("ProfileStatsArchive", () => {
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const archive = yield* ProfileStatsArchive;
-        isGitRepositoryImpl = () => Effect.succeed(false);
+        isRepositoryImpl = () => Effect.succeed(false);
 
         yield* sql`
           INSERT INTO projection_projects (

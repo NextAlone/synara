@@ -2,6 +2,7 @@ import { Schema } from "effect";
 
 import {
   NonNegativeInt,
+  PositiveInt,
   ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -101,6 +102,21 @@ export const VcsCapabilities = Schema.Struct({
 });
 export type VcsCapabilities = typeof VcsCapabilities.Type;
 
+export const VcsPullRequestStatus = Schema.Struct({
+  number: PositiveInt,
+  title: TrimmedNonEmptyString,
+  url: Schema.String,
+  baseBranch: TrimmedNonEmptyString,
+  headBranch: TrimmedNonEmptyString,
+  state: Schema.Literals(["open", "closed", "merged"]),
+  isDraft: Schema.Boolean,
+  mergeability: Schema.Literals(["mergeable", "conflicting", "unknown"]),
+  additions: Schema.NullOr(NonNegativeInt),
+  deletions: Schema.NullOr(NonNegativeInt),
+  changedFiles: Schema.NullOr(NonNegativeInt),
+});
+export type VcsPullRequestStatus = typeof VcsPullRequestStatus.Type;
+
 export const VcsStatusInput = VcsProjectTarget;
 export type VcsStatusInput = typeof VcsStatusInput.Type;
 
@@ -115,6 +131,7 @@ export const VcsStatusResult = Schema.Struct({
   insertions: NonNegativeInt,
   deletions: NonNegativeInt,
   remote: Schema.NullOr(VcsRemoteStatus),
+  pullRequest: Schema.NullOr(VcsPullRequestStatus),
   capabilities: VcsCapabilities,
 });
 export type VcsStatusResult = typeof VcsStatusResult.Type;
@@ -165,6 +182,34 @@ export const VcsListReferencesResult = Schema.Struct({
 });
 export type VcsListReferencesResult = typeof VcsListReferencesResult.Type;
 
+export const VcsCreateReferenceInput = Schema.Struct({
+  ...VcsProjectTarget.fields,
+  name: TrimmedNonEmptyString,
+  publish: Schema.optional(Schema.Boolean),
+});
+export type VcsCreateReferenceInput = typeof VcsCreateReferenceInput.Type;
+
+export const VcsCreateReferenceResult = Schema.Struct({
+  backend: VcsBackend,
+  epoch: NonNegativeInt,
+  ref: TrimmedNonEmptyString,
+});
+export type VcsCreateReferenceResult = typeof VcsCreateReferenceResult.Type;
+
+export const VcsSwitchReferenceInput = Schema.Struct({
+  ...VcsProjectTarget.fields,
+  ref: TrimmedNonEmptyString,
+});
+export type VcsSwitchReferenceInput = typeof VcsSwitchReferenceInput.Type;
+
+export const VcsSwitchReferenceResult = Schema.Struct({
+  backend: VcsBackend,
+  epoch: NonNegativeInt,
+  ref: Schema.NullOr(TrimmedNonEmptyString),
+  revision: Schema.NullOr(VcsRevision),
+});
+export type VcsSwitchReferenceResult = typeof VcsSwitchReferenceResult.Type;
+
 export const VcsWorkspace = Schema.Struct({
   name: TrimmedNonEmptyString,
   path: Schema.NullOr(TrimmedNonEmptyString),
@@ -183,3 +228,42 @@ export const VcsListWorkspacesResult = Schema.Struct({
   workspaces: Schema.Array(VcsWorkspace),
 });
 export type VcsListWorkspacesResult = typeof VcsListWorkspacesResult.Type;
+
+export const VcsCreateWorkspaceInput = Schema.Struct({
+  projectId: ProjectId,
+  expectedEpoch: NonNegativeInt,
+  sourceRef: TrimmedNonEmptyString,
+  path: Schema.NullOr(TrimmedNonEmptyString),
+  copyChangesFromCurrent: Schema.Boolean,
+});
+export type VcsCreateWorkspaceInput = typeof VcsCreateWorkspaceInput.Type;
+
+export const VcsCreatedWorkspace = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  ref: TrimmedNonEmptyString,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type VcsCreatedWorkspace = typeof VcsCreatedWorkspace.Type;
+
+export const VcsCreateWorkspaceResult = Schema.Struct({
+  backend: VcsBackend,
+  epoch: NonNegativeInt,
+  workspace: VcsCreatedWorkspace,
+});
+export type VcsCreateWorkspaceResult = typeof VcsCreateWorkspaceResult.Type;
+
+export const VcsRemoveWorkspaceInput = Schema.Struct({
+  projectId: ProjectId,
+  expectedEpoch: NonNegativeInt,
+  path: TrimmedNonEmptyString,
+  force: Schema.optional(Schema.Boolean),
+});
+export type VcsRemoveWorkspaceInput = typeof VcsRemoveWorkspaceInput.Type;
+
+export const VcsRemoveWorkspaceResult = Schema.Struct({
+  backend: VcsBackend,
+  epoch: NonNegativeInt,
+  removed: Schema.Boolean,
+});
+export type VcsRemoveWorkspaceResult = typeof VcsRemoveWorkspaceResult.Type;

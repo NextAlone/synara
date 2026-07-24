@@ -69,11 +69,14 @@ import { Debouncer, useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate } from "@tanstack/react-router";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
-  GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
-  gitCreateDetachedWorktreeMutationOptions,
   gitGithubRepositoryQueryOptions,
-  gitBranchesQueryOptions,
 } from "~/lib/gitReactQuery";
+import {
+  makeVcsQueryTarget,
+  VCS_DIFF_LIVE_REFETCH_INTERVAL_MS,
+  vcsCreateWorkspaceMutationOptions,
+  vcsReferencesQueryOptions,
+} from "~/lib/vcsReactQuery";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
   providerComposerCapabilitiesQueryOptions,
@@ -1111,8 +1114,8 @@ export default function ChatView({
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
   const { resolvedTheme } = useTheme();
   const queryClient = useQueryClient();
-  const createWorktreeMutation = useMutation(
-    gitCreateDetachedWorktreeMutationOptions({ queryClient }),
+  const createWorkspaceMutation = useMutation(
+    vcsCreateWorkspaceMutationOptions({ queryClient }),
   );
   const isEditorRail = presentationMode === "editor";
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
@@ -1889,7 +1892,7 @@ export default function ChatView({
   const diffDisabledReason = diffEnvironmentState.disabledReason;
   const repoDiffBadgeRefreshIntervalMs =
     isFocusedPane && latestTurnLive && !diffEnvironmentPending && !resolvedDiffOpen
-      ? GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS
+      ? VCS_DIFF_LIVE_REFETCH_INTERVAL_MS
       : false;
   const activeThreadAssociatedWorktree = useMemo(
     () =>
@@ -3201,11 +3204,15 @@ export default function ChatView({
           worktreePath: resolvedThreadWorktreePath,
         })
       : null;
+  const vcsReferenceTarget = makeVcsQueryTarget(
+    activeProject,
+    isServerThread && resolvedThreadWorktreePath ? activeThread?.id ?? null : null,
+  );
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const mentionTriggerQuery = composerTrigger?.kind === "mention" ? composerTrigger.query : "";
   const isMentionTrigger = composerTriggerKind === "mention";
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
-  const branchesQuery = useQuery(gitBranchesQueryOptions(gitBranchSourceCwd));
+  const branchesQuery = useQuery(vcsReferencesQueryOptions(vcsReferenceTarget));
   const localFolderBrowseRootPath = getLocalFolderBrowseRootPath(
     serverConfigQuery.data?.homeDir ?? null,
     isMacPlatform(platform),
@@ -3289,11 +3296,11 @@ export default function ChatView({
   const activeRootBranch = useMemo(
     () =>
       resolveComposerSlashRootBranch({
-        branches: branchesQuery.data?.branches,
+        branches: branchesQuery.data?.references,
         activeProjectCwd: activeProject?.cwd,
         activeThreadBranch: activeThread?.branch,
       }),
-    [activeProject?.cwd, activeThread?.branch, branchesQuery.data?.branches],
+    [activeProject?.cwd, activeThread?.branch, branchesQuery.data?.references],
   );
   // Keep plugin suggestions referentially stable so prompt-sync effects do not loop on rerender.
   const providerPlugins = useMemo(
@@ -3348,7 +3355,7 @@ export default function ChatView({
       ? stripComposerTriggerText(prompt, composerTrigger)
       : prompt;
   const canOfferReviewCommand =
-    (branchesQuery.data?.isRepo ?? true) &&
+    vcsReferenceTarget.backend !== null &&
     canOfferReviewSlashCommand({
       prompt: composerPromptWithoutActiveSlashTrigger,
       imageCount: composerImages.length,
@@ -3623,16 +3630,24 @@ export default function ChatView({
   }, [activeProjectCwd, activeThreadWorktreePath, isStudioContainer, threadWorkspaceCwd]);
   const isGitRepo = resolveGitRepoUiState({
     isStudioContainer,
-    queriedIsRepo: branchesQuery.data?.isRepo,
+    queriedIsRepo:
+      vcsReferenceTarget.backend === null
+        ? false
+        : branchesQuery.isSuccess
+          ? true
+          : branchesQuery.isError
+            ? false
+            : undefined,
   });
   // Studio never offers "Initialize Git": its reference folder is ordinary cwd context,
   // so Git actions appear only when that selected folder is already a repository.
   const showGitActions = isStudioContainer
-    ? Boolean(resolvedThreadWorkingDirectory) && isGitRepo
-    : !isContainerLandingProject || Boolean(resolvedThreadWorktreePath);
+    ? vcsReferenceTarget.backend === "git" && Boolean(resolvedThreadWorkingDirectory) && isGitRepo
+    : vcsReferenceTarget.backend === "git" &&
+      (!isContainerLandingProject || Boolean(resolvedThreadWorktreePath));
   const repoDiffTotals = useRepoDiffTotals({
-    gitCwd: threadWorkspaceCwd,
-    isGitRepo,
+    target: vcsReferenceTarget,
+    isVcsRepo: isGitRepo,
     refetchInterval: repoDiffBadgeRefreshIntervalMs,
   });
   // The composer live strip is turn-scoped; repoDiffTotals can include unrelated
@@ -4044,7 +4059,10 @@ export default function ChatView({
     environmentPanelOpen,
   });
   const githubRepositoryQuery = useQuery(
-    gitGithubRepositoryQueryOptions(gitBranchSourceCwd, environmentPanelVisible),
+    gitGithubRepositoryQueryOptions(
+      gitBranchSourceCwd,
+      environmentPanelVisible && vcsReferenceTarget.backend === "git",
+    ),
   );
   const threadRecap = useThreadRecap({
     thread: activeThread,
@@ -7084,6 +7102,12 @@ export default function ChatView({
           targetProjectDefaultModelSelection: activeProject.defaultModelSelection ?? null,
         }
       : firstSendTarget.target;
+    let targetProjectVcsForSend =
+      currentStoreState.projects.find((project) => project.id === targetProjectIdForSend)?.vcs ??
+      (activeProject?.id === targetProjectIdForSend ? activeProject.vcs : undefined) ?? {
+        epoch: 0,
+        binding: null,
+      };
     let nextRuntimeModeForSend = runtimeModeForSend;
     let nextThreadEnvMode = envModeForSend;
     let nextThreadBranch = isStudioContainer ? null : activeThread.branch;
@@ -7128,6 +7152,7 @@ export default function ChatView({
           targetProjectScriptsForSend = [];
           targetProjectDefaultModelSelectionForSend =
             firstSendTarget.creation.defaultModelSelection;
+          targetProjectVcsForSend = { epoch: 0, binding: null };
         } catch (error) {
           const description =
             error instanceof Error ? error.message : "Failed to create the selected project.";
@@ -7157,6 +7182,7 @@ export default function ChatView({
           targetProjectDefaultModelSelectionForSend =
             recoveredProject.defaultModelSelection ??
             firstSendTarget.creation.defaultModelSelection;
+          targetProjectVcsForSend = recoveredProject.vcs;
         }
       }
 
@@ -7201,6 +7227,13 @@ export default function ChatView({
       setStoreThreadError(
         threadIdForSend,
         "Select a base branch before sending in New worktree mode.",
+      );
+      return false;
+    }
+    if (shouldCreateWorktree && !targetProjectVcsForSend.binding) {
+      setStoreThreadError(
+        threadIdForSend,
+        "Choose Git or JJ for this project before creating a workspace.",
       );
       return false;
     }
@@ -7351,24 +7384,24 @@ export default function ChatView({
     await (async () => {
       // On first message: lock in branch + create worktree if needed.
       if (baseBranchForWorktree) {
-        const result = await createWorktreeMutation.mutateAsync({
-          cwd: targetProjectCwdForSend,
-          ref: baseBranchForWorktree,
-          ...(baseBranchForWorktree === activeRootBranch
-            ? { copyChangesFrom: targetProjectCwdForSend }
-            : {}),
+        const result = await createWorkspaceMutation.mutateAsync({
+          projectId: targetProjectIdForSend,
+          expectedEpoch: targetProjectVcsForSend.epoch,
+          sourceRef: baseBranchForWorktree,
+          path: null,
+          copyChangesFromCurrent: baseBranchForWorktree === activeRootBranch,
         });
         beginLocalDispatch({
           worktreeSetupStepId: "prepare-thread",
           setupScriptName: worktreeSetupScriptName,
         });
-        nextThreadBranch = result.worktree.branch;
-        nextThreadWorktreePath = result.worktree.path;
-        createdWorktreeForSendPath = result.worktree.path;
+        nextThreadBranch = result.workspace.branch ?? result.workspace.ref;
+        nextThreadWorktreePath = result.workspace.path;
+        createdWorktreeForSendPath = result.workspace.path;
         const nextAssociatedWorktree = {
-          associatedWorktreePath: result.worktree.path,
-          associatedWorktreeBranch: null,
-          associatedWorktreeRef: result.worktree.ref,
+          associatedWorktreePath: result.workspace.path,
+          associatedWorktreeBranch: result.workspace.branch,
+          associatedWorktreeRef: result.workspace.ref,
         };
         nextAssociatedWorktreePath = nextAssociatedWorktree.associatedWorktreePath;
         nextAssociatedWorktreeBranch = nextAssociatedWorktree.associatedWorktreeBranch;
@@ -7379,8 +7412,8 @@ export default function ChatView({
             commandId: newCommandId(),
             threadId: threadIdForSend,
             envMode: "worktree",
-            branch: result.worktree.branch,
-            worktreePath: result.worktree.path,
+            branch: nextThreadBranch,
+            worktreePath: result.workspace.path,
             associatedWorktreePath: nextAssociatedWorktree.associatedWorktreePath,
             associatedWorktreeBranch: nextAssociatedWorktree.associatedWorktreeBranch,
             associatedWorktreeRef: nextAssociatedWorktree.associatedWorktreeRef,
@@ -7388,8 +7421,8 @@ export default function ChatView({
           // Keep local thread state in sync immediately so terminal drawer opens
           // with the worktree cwd/env instead of briefly using the project root.
           setStoreThreadWorkspace(threadIdForSend, {
-            branch: result.worktree.branch,
-            worktreePath: result.worktree.path,
+            branch: nextThreadBranch,
+            worktreePath: result.workspace.path,
             ...nextAssociatedWorktree,
           });
         }
@@ -7579,9 +7612,10 @@ export default function ChatView({
           .catch(() => undefined);
       }
       if (createdWorktreeForSendPath && !turnStartSucceeded) {
-        const removed = await api.git
-          .removeWorktree({
-            cwd: targetProjectCwdForSend,
+        const removed = await api.vcs
+          .removeWorkspace({
+            projectId: targetProjectIdForSend,
+            expectedEpoch: targetProjectVcsForSend.epoch,
             path: createdWorktreeForSendPath,
             force: true,
           })

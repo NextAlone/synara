@@ -1,7 +1,7 @@
 // FILE: GitPanel.tsx
-// Purpose: Source-control staging pane for the right dock (staged/unstaged lists + per-file diff).
+// Purpose: Source-control pane for the right dock (backend-aware change lists + per-file diff).
 // Layer: Chat right-dock UI
-// Depends on: gitReactQuery (diff queries + stage/unstage mutations), diffRendering (patch parsing),
+// Depends on: project-scoped VCS diff queries, Git-only staging mutations, diffRendering,
 //             @pierre/diffs FileDiff for the per-file viewer.
 //
 // The pane derives its cwd like DockTerminalPane (thread worktree or project cwd) and reads the
@@ -23,11 +23,14 @@ import {
   summarizeFileDiffStats,
 } from "~/lib/diffRendering";
 import {
-  gitQueryKeys,
   gitStageFilesMutationOptions,
   gitUnstageFilesMutationOptions,
-  gitWorkingTreeDiffQueryOptions,
 } from "~/lib/gitReactQuery";
+import {
+  invalidateVcsQueries,
+  makeVcsQueryTarget,
+  vcsDiffQueryOptions,
+} from "~/lib/vcsReactQuery";
 import { PlusIcon, RefreshCwIcon, RotateCcwIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
@@ -64,11 +67,11 @@ function GitFileRow(props: {
   fileDiff: FileDiffMetadata;
   theme: "light" | "dark";
   isSelected: boolean;
-  actionLabel: string;
-  actionIcon: "stage" | "unstage";
+  actionLabel?: string;
+  actionIcon?: "stage" | "unstage";
   actionDisabled: boolean;
   onSelect: (file: FileDiffMetadata) => void;
-  onAction: (paths: string[]) => void;
+  onAction?: (paths: string[]) => void;
 }) {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const { dir, name } = splitRepoRelativePath(filePath);
@@ -97,21 +100,23 @@ function GitFileRow(props: {
         deletions={stat.deletions}
         className="shrink-0 text-[11px]"
       />
-      <IconButton
-        size="icon-xs"
-        variant="ghost"
-        className="shrink-0 opacity-0 group-hover:opacity-100 data-[disabled]:opacity-40"
-        label={props.actionLabel}
-        tooltip={props.actionLabel}
-        disabled={props.actionDisabled}
-        onClick={() => props.onAction([filePath])}
-      >
-        {props.actionIcon === "stage" ? (
-          <PlusIcon className="size-3.5" />
-        ) : (
-          <RotateCcwIcon className="size-3.5" />
-        )}
-      </IconButton>
+      {props.onAction && props.actionLabel && props.actionIcon ? (
+        <IconButton
+          size="icon-xs"
+          variant="ghost"
+          className="shrink-0 opacity-0 group-hover:opacity-100 data-[disabled]:opacity-40"
+          label={props.actionLabel}
+          tooltip={props.actionLabel}
+          disabled={props.actionDisabled}
+          onClick={() => props.onAction?.([filePath])}
+        >
+          {props.actionIcon === "stage" ? (
+            <PlusIcon className="size-3.5" />
+          ) : (
+            <RotateCcwIcon className="size-3.5" />
+          )}
+        </IconButton>
+      ) : null}
     </div>
   );
 }
@@ -123,12 +128,12 @@ function GitFileSection(props: {
   theme: "light" | "dark";
   section: GitPanelSection;
   selectedPath: string | null;
-  actionLabel: string;
-  actionAllLabel: string;
-  actionIcon: "stage" | "unstage";
+  actionLabel?: string;
+  actionAllLabel?: string;
+  actionIcon?: "stage" | "unstage";
   actionDisabled: boolean;
   onSelect: (file: FileDiffMetadata) => void;
-  onAction: (paths: string[]) => void;
+  onAction?: (paths: string[]) => void;
 }) {
   const stat = summarizeFileDiffStats(props.files);
   const allPaths = props.files.map((file) => resolveFileDiffPath(file));
@@ -140,14 +145,14 @@ function GitFileSection(props: {
           {props.files.length}
         </span>
         <DiffStat additions={stat.additions} deletions={stat.deletions} className="text-[10px]" />
-        {props.files.length > 0 ? (
+        {props.files.length > 0 && props.onAction && props.actionAllLabel ? (
           <Button
             type="button"
             variant="ghost"
             size="xs"
             className="ml-auto shrink-0"
             disabled={props.actionDisabled}
-            onClick={() => props.onAction(allPaths)}
+            onClick={() => props.onAction?.(allPaths)}
           >
             {props.actionAllLabel}
           </Button>
@@ -166,11 +171,11 @@ function GitFileSection(props: {
                 fileDiff={file}
                 theme={props.theme}
                 isSelected={props.selectedPath === filePath}
-                actionLabel={props.actionLabel}
-                actionIcon={props.actionIcon}
+                {...(props.actionLabel ? { actionLabel: props.actionLabel } : {})}
+                {...(props.actionIcon ? { actionIcon: props.actionIcon } : {})}
                 actionDisabled={props.actionDisabled}
                 onSelect={props.onSelect}
-                onAction={props.onAction}
+                {...(props.onAction ? { onAction: props.onAction } : {})}
               />
             );
           })}
@@ -205,19 +210,38 @@ export function GitPanel(props: {
     useMemo(() => createProjectSelector(props.projectId), [props.projectId]),
   );
   const cwd = thread?.worktreePath ?? project?.cwd ?? null;
+  const vcsTarget = makeVcsQueryTarget(
+    project,
+    thread?.worktreePath ? thread.id : null,
+  );
+  const isGitBackend = vcsTarget.backend === "git";
 
   const [selected, setSelected] = useState<SelectedFile | null>(null);
 
   // No fixed polling: turn-driven file changes already push-invalidate the
   // working-tree-diff cache (see __root.tsx), and focus + the Refresh button +
   // post-mutation invalidation cover the rest. This keeps the pane cheap.
-  const stagedQuery = useQuery(gitWorkingTreeDiffQueryOptions({ cwd, scope: "staged" }));
-  const unstagedQuery = useQuery(gitWorkingTreeDiffQueryOptions({ cwd, scope: "unstaged" }));
+  const stagedQuery = useQuery(
+    vcsDiffQueryOptions({
+      target: vcsTarget,
+      scope: "staged",
+      enabled: isGitBackend,
+    }),
+  );
+  const unstagedQuery = useQuery(
+    vcsDiffQueryOptions({
+      target: vcsTarget,
+      scope: isGitBackend ? "unstaged" : "workingTree",
+    }),
+  );
 
-  const stagedFiles = parsePatchToSortedFiles(stagedQuery.data?.patch, `git-pane:staged:${theme}`);
+  const stagedFiles = parsePatchToSortedFiles(
+    stagedQuery.data?.patch,
+    `source-control:${vcsTarget.backend}:staged:${theme}`,
+  );
   const unstagedFiles = parsePatchToSortedFiles(
     unstagedQuery.data?.patch,
-    `git-pane:unstaged:${theme}`,
+    `source-control:${vcsTarget.backend}:changes:${theme}`,
   );
 
   const stageMutation = useMutation(gitStageFilesMutationOptions({ cwd, queryClient }));
@@ -225,11 +249,11 @@ export function GitPanel(props: {
   const mutating = stageMutation.isPending || unstageMutation.isPending;
 
   const stage = (paths: string[]) => {
-    if (!cwd || paths.length === 0) return;
+    if (!isGitBackend || !cwd || paths.length === 0) return;
     stageMutation.mutate(paths);
   };
   const unstage = (paths: string[]) => {
-    if (!cwd || paths.length === 0) return;
+    if (!isGitBackend || !cwd || paths.length === 0) return;
     unstageMutation.mutate(paths);
   };
 
@@ -241,11 +265,8 @@ export function GitPanel(props: {
   };
 
   const refresh = () => {
-    if (!cwd) return;
-    void queryClient.invalidateQueries({ queryKey: gitQueryKeys.workingTreeDiff(cwd, "staged") });
-    void queryClient.invalidateQueries({
-      queryKey: gitQueryKeys.workingTreeDiff(cwd, "unstaged"),
-    });
+    if (!cwd || !vcsTarget.backend) return;
+    void invalidateVcsQueries(queryClient);
   };
 
   // Resolve the selected file by path, preferring its stored section but falling
@@ -269,16 +290,16 @@ export function GitPanel(props: {
   const selectedFileDiff = selectedResolved?.file ?? null;
   const selectedPath = selected?.path ?? null;
 
-  const isLoading = stagedQuery.isLoading || unstagedQuery.isLoading;
+  const isLoading = (isGitBackend && stagedQuery.isLoading) || unstagedQuery.isLoading;
   const error =
-    stagedQuery.error instanceof Error
+    isGitBackend && stagedQuery.error instanceof Error
       ? stagedQuery.error.message
       : unstagedQuery.error instanceof Error
         ? unstagedQuery.error.message
         : null;
   const hasChanges = stagedFiles.length > 0 || unstagedFiles.length > 0;
 
-  if (!cwd) {
+  if (!cwd || !vcsTarget.backend) {
     return <PanelStateMessage>Source control is unavailable for this thread.</PanelStateMessage>;
   }
 
@@ -318,33 +339,39 @@ export function GitPanel(props: {
         ) : null}
         {hasChanges ? (
           <>
-            <GitFileSection
-              title="Staged"
-              emptyLabel="No staged changes."
-              files={stagedFiles}
-              theme={theme}
-              section="staged"
-              selectedPath={selectedResolved?.section === "staged" ? selectedPath : null}
-              actionLabel="Unstage file"
-              actionAllLabel="Unstage all"
-              actionIcon="unstage"
-              actionDisabled={mutating}
-              onSelect={selectStaged}
-              onAction={unstage}
-            />
+            {isGitBackend ? (
+              <GitFileSection
+                title="Staged"
+                emptyLabel="No staged changes."
+                files={stagedFiles}
+                theme={theme}
+                section="staged"
+                selectedPath={selectedResolved?.section === "staged" ? selectedPath : null}
+                actionLabel="Unstage file"
+                actionAllLabel="Unstage all"
+                actionIcon="unstage"
+                actionDisabled={mutating}
+                onSelect={selectStaged}
+                onAction={unstage}
+              />
+            ) : null}
             <GitFileSection
               title="Changes"
-              emptyLabel="No unstaged changes."
+              emptyLabel={isGitBackend ? "No unstaged changes." : "No working-copy changes."}
               files={unstagedFiles}
               theme={theme}
               section="unstaged"
               selectedPath={selectedResolved?.section === "unstaged" ? selectedPath : null}
-              actionLabel="Stage file"
-              actionAllLabel="Stage all"
-              actionIcon="stage"
               actionDisabled={mutating}
               onSelect={selectUnstaged}
-              onAction={stage}
+              {...(isGitBackend
+                ? {
+                    actionLabel: "Stage file",
+                    actionAllLabel: "Stage all",
+                    actionIcon: "stage" as const,
+                    onAction: stage,
+                  }
+                : {})}
             />
           </>
         ) : null}

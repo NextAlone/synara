@@ -11,6 +11,7 @@ import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
 import { GitCommandError } from "../../git/Errors.ts";
 import { CheckpointRef } from "@synara/contracts";
+import { JjCoreLive } from "../../vcs/Layers/JjCore.ts";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const started = Date.now();
@@ -57,6 +58,7 @@ describe("CheckpointStoreLive", () => {
     });
     const layer = CheckpointStoreLive.pipe(
       Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(JjCoreLive),
       Layer.provide(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -66,6 +68,7 @@ describe("CheckpointStoreLive", () => {
         const store = yield* CheckpointStore;
         const input = {
           cwd: "/repo",
+          backend: "git",
           checkpointRef: CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/message"),
         };
 
@@ -114,6 +117,7 @@ describe("CheckpointStoreLive", () => {
     });
     const layer = CheckpointStoreLive.pipe(
       Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(JjCoreLive),
       Layer.provide(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -123,6 +127,7 @@ describe("CheckpointStoreLive", () => {
         const store = yield* CheckpointStore;
         const input = {
           cwd: "/repo",
+          backend: "git",
           checkpointRef: CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/message"),
         };
 
@@ -180,6 +185,7 @@ describe("CheckpointStoreLive", () => {
     });
     const layer = CheckpointStoreLive.pipe(
       Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(JjCoreLive),
       Layer.provide(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -192,6 +198,7 @@ describe("CheckpointStoreLive", () => {
 
         yield* store.captureCheckpoint({
           cwd: "/repo",
+          backend: "git",
           checkpointRef: CheckpointRef.makeUnsafe(existingRef),
           skipIfExists: true,
         });
@@ -199,6 +206,7 @@ describe("CheckpointStoreLive", () => {
 
         yield* store.captureCheckpoint({
           cwd: "/repo",
+          backend: "git",
           checkpointRef: CheckpointRef.makeUnsafe(missingRef),
           skipIfExists: true,
         });
@@ -247,6 +255,7 @@ describe("CheckpointStoreLive", () => {
     });
     const layer = CheckpointStoreLive.pipe(
       Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(JjCoreLive),
       Layer.provide(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -257,6 +266,7 @@ describe("CheckpointStoreLive", () => {
         return yield* store
           .reverseCheckpointDiff({
             cwd: "/repo",
+            backend: "git",
             fromCheckpointRef: fromRef,
             toCheckpointRef: toRef,
           })

@@ -31,7 +31,6 @@ import type { RepoDiffScope } from "~/repoDiffScopeStore";
 import { REPO_DIFF_SCOPE_LABELS } from "~/repoDiffScopeStore";
 import { formatShortTimestamp } from "~/timestampFormat";
 import {
-  DIFF_PANEL_PICKER_SCOPE_OPTIONS,
   resolveDiffPanelPickerLabel,
   resolveDiffPanelScopePickerValue,
   type DiffPanelTurnScopeIntent,
@@ -79,6 +78,7 @@ interface DiffPanelToolbarProps {
   activeThreadId: ThreadId | null;
   viewSource: DiffPanelViewSource;
   turnScopeIntent: DiffPanelTurnScopeIntent;
+  repoScopeOptions: ReadonlyArray<RepoDiffScope>;
   scopeFileCounts: Partial<Record<RepoDiffScope, number>>;
   activeStats: { additions: number; deletions: number } | null;
   orderedTurnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
@@ -257,7 +257,7 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
                 }
               }}
             >
-              {DIFF_PANEL_PICKER_SCOPE_OPTIONS.map((scope) => (
+              {props.repoScopeOptions.map((scope) => (
                 <MenuRadioItem key={scope} value={scope}>
                   {resolveScopeMenuIcon(scope)}
                   <span className="min-w-0 flex-1 truncate">{REPO_DIFF_SCOPE_LABELS[scope]}</span>

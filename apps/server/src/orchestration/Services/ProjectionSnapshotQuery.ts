@@ -23,6 +23,7 @@ import type {
   ThreadId,
   ThreadEnvironmentMode,
   TurnId,
+  VcsBackend,
 } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Option } from "effect";
@@ -46,6 +47,7 @@ export interface ProjectionThreadCheckpointContext {
   readonly envMode: ThreadEnvironmentMode;
   readonly worktreePath: string | null;
   readonly workingDirectory: string | null;
+  readonly vcsBackend: VcsBackend | null;
   readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
   /** Completed file-change payloads, newest first, when explicitly requested by the caller. */
   readonly fileChangeActivityPayloads?: ReadonlyArray<unknown>;
@@ -69,6 +71,7 @@ export interface ProjectionFullThreadDiffContext {
   readonly envMode: ThreadEnvironmentMode;
   readonly worktreePath: string | null;
   readonly workingDirectory: string | null;
+  readonly vcsBackend: VcsBackend | null;
   readonly latestCheckpointTurnCount: number;
   readonly baselineCheckpointRef: CheckpointRef | null;
   readonly toCheckpointRef: CheckpointRef | null;

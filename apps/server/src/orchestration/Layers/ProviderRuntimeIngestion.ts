@@ -48,7 +48,7 @@ import {
   ProviderRuntimeEventRepository,
 } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
-import { isGitRepository } from "../../git/isRepo.ts";
+import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProjectionSnapshotQuery,
@@ -538,6 +538,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const checkpointStore = yield* CheckpointStore;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const runtimeEvents = yield* ProviderRuntimeEventRepository;
   const commandReceipts = yield* OrchestrationCommandReceiptRepository;
@@ -869,13 +870,17 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const isGitRepoForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+  const hasCheckpointBackendForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const thread = yield* getThreadDetail(threadId);
     if (!thread) {
       return false;
     }
     const project = yield* getProjectShell(thread);
     if (!project) {
+      return false;
+    }
+    const backend = project.vcs?.binding?.backend;
+    if (!backend) {
       return false;
     }
     const workspaceCwd = resolveThreadWorkspaceCwd({
@@ -885,7 +890,7 @@ const make = Effect.gen(function* () {
     if (!workspaceCwd) {
       return false;
     }
-    return isGitRepository(workspaceCwd);
+    return yield* checkpointStore.isRepository({ cwd: workspaceCwd, backend });
   });
 
   const supportsLiveTurnDiffPatch = Effect.fnUntraced(function* (
@@ -2323,7 +2328,7 @@ const make = Effect.gen(function* () {
 
       if (event.type === "turn.diff.updated") {
         const turnId = toTurnId(event.turnId);
-        if (turnId && (yield* isGitRepoForThread(thread.id))) {
+        if (turnId && (yield* hasCheckpointBackendForThread(thread.id))) {
           const existingCheckpoint = thread.checkpoints.find((c) => c.turnId === turnId);
           const placeholderKey = providerTurnKey(thread.id, turnId);
           const trackedPlaceholder = (yield* Ref.get(providerDiffPlaceholdersRef)).get(

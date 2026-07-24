@@ -1802,6 +1802,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           envMode: "local",
           worktreePath: "/tmp/context-worktree",
           workingDirectory: null,
+          vcsBackend: null,
           checkpoints: [
             {
               turnId: asTurnId("turn-1"),
@@ -1896,6 +1897,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           envMode: "local",
           worktreePath: "/tmp/context-worktree",
           workingDirectory: null,
+          vcsBackend: null,
           latestCheckpointTurnCount: 2,
           baselineCheckpointRef: asCheckpointRef("checkpoint-a"),
           toCheckpointRef: asCheckpointRef("checkpoint-b"),

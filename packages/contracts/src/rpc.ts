@@ -74,16 +74,24 @@ import {
   GitUnstageFilesResult,
 } from "./git";
 import {
+  VcsCreateReferenceInput,
+  VcsCreateReferenceResult,
+  VcsCreateWorkspaceInput,
+  VcsCreateWorkspaceResult,
   VcsListReferencesInput,
   VcsListReferencesResult,
   VcsListWorkspacesInput,
   VcsListWorkspacesResult,
   VcsReadDiffInput,
   VcsReadDiffResult,
+  VcsRemoveWorkspaceInput,
+  VcsRemoveWorkspaceResult,
   VcsSetBackendInput,
   VcsSetBackendResult,
   VcsStatusInput,
   VcsStatusResult,
+  VcsSwitchReferenceInput,
+  VcsSwitchReferenceResult,
 } from "./vcs";
 import {
   PullRequestActionInput,
@@ -455,9 +463,33 @@ export const WsVcsListReferencesRpc = Rpc.make(WS_METHODS.vcsListReferences, {
   error: WsRpcError,
 });
 
+export const WsVcsCreateReferenceRpc = Rpc.make(WS_METHODS.vcsCreateReference, {
+  payload: VcsCreateReferenceInput,
+  success: VcsCreateReferenceResult,
+  error: WsRpcError,
+});
+
+export const WsVcsSwitchReferenceRpc = Rpc.make(WS_METHODS.vcsSwitchReference, {
+  payload: VcsSwitchReferenceInput,
+  success: VcsSwitchReferenceResult,
+  error: WsRpcError,
+});
+
 export const WsVcsListWorkspacesRpc = Rpc.make(WS_METHODS.vcsListWorkspaces, {
   payload: VcsListWorkspacesInput,
   success: VcsListWorkspacesResult,
+  error: WsRpcError,
+});
+
+export const WsVcsCreateWorkspaceRpc = Rpc.make(WS_METHODS.vcsCreateWorkspace, {
+  payload: VcsCreateWorkspaceInput,
+  success: VcsCreateWorkspaceResult,
+  error: WsRpcError,
+});
+
+export const WsVcsRemoveWorkspaceRpc = Rpc.make(WS_METHODS.vcsRemoveWorkspace, {
+  payload: VcsRemoveWorkspaceInput,
+  success: VcsRemoveWorkspaceResult,
   error: WsRpcError,
 });
 
@@ -1039,7 +1071,11 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsVcsStatusRpc,
   WsVcsReadDiffRpc,
   WsVcsListReferencesRpc,
+  WsVcsCreateReferenceRpc,
+  WsVcsSwitchReferenceRpc,
   WsVcsListWorkspacesRpc,
+  WsVcsCreateWorkspaceRpc,
+  WsVcsRemoveWorkspaceRpc,
   WsGitGithubRepositoryRpc,
   WsGitStatusRpc,
   WsGitReadWorkingTreeDiffRpc,

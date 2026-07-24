@@ -39,7 +39,7 @@ vi.mock("~/hooks/useCopyToClipboard", () => ({
 vi.mock("~/lib/activeThreadDelete", () => ({
   deleteActiveThreadFromClient: harness.deleteActiveThread,
 }));
-vi.mock("~/lib/gitReactQuery", () => ({ gitRemoveWorktreeMutationOptions: () => ({}) }));
+vi.mock("~/lib/vcsReactQuery", () => ({ vcsRemoveWorkspaceMutationOptions: () => ({}) }));
 vi.mock("~/lib/threadArchive", () => ({ archiveThreadFromClient: harness.archiveThread }));
 vi.mock("~/lib/threadRename", () => ({ dispatchThreadRename: vi.fn() }));
 vi.mock("../../composerDraftStore", () => ({

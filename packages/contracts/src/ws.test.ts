@@ -80,6 +80,34 @@ it.effect("accepts git.preparePullRequestThread requests", () =>
   }),
 );
 
+it.effect("accepts project-scoped VCS reference mutations", () =>
+  Effect.gen(function* () {
+    const create = yield* decode(WebSocketRequest, {
+      id: "req-vcs-create-ref",
+      body: {
+        _tag: WS_METHODS.vcsCreateReference,
+        projectId: "project-1",
+        expectedEpoch: 2,
+        name: "feature",
+        publish: false,
+      },
+    });
+    const switchReference = yield* decode(WebSocketRequest, {
+      id: "req-vcs-switch-ref",
+      body: {
+        _tag: WS_METHODS.vcsSwitchReference,
+        projectId: "project-1",
+        threadId: "thread-1",
+        expectedEpoch: 2,
+        ref: "feature",
+      },
+    });
+
+    assert.strictEqual(create.body._tag, WS_METHODS.vcsCreateReference);
+    assert.strictEqual(switchReference.body._tag, WS_METHODS.vcsSwitchReference);
+  }),
+);
+
 it.effect("accepts project script discovery requests", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WebSocketRequest, {
