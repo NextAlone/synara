@@ -89,6 +89,8 @@ export function makeServerRuntimeServicesLayer(
   );
   const studioOutputReactorLayer = StudioOutputReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
+    // vcsBackend selection for Studio turn baseline scans
+    Layer.provideMerge(ServerSettingsLive),
   );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
