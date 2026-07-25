@@ -9,6 +9,7 @@ import { cn } from "~/lib/utils";
 import type { RenderablePatch } from "~/lib/diffRendering";
 import { DiffPanelFileList, type DiffFileChatActions } from "./DiffPanelFileList";
 import { DiffPanelLoadingState } from "./DiffPanelShell";
+import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 
 type DiffRenderMode = "stacked" | "split";
@@ -72,18 +73,25 @@ export const DiffPanelPatchViewport = memo(
     }
 
     if (props.renderablePatch.kind === "files") {
+      const fileList = (
+        <DiffPanelFileList
+          renderableFiles={props.renderableFiles}
+          resolvedTheme={props.resolvedTheme}
+          diffRenderMode={props.diffRenderMode}
+          diffWordWrap={props.diffWordWrap}
+          workspaceRoot={props.workspaceRoot}
+          collapsedFiles={props.collapsedFiles}
+          onToggleFileCollapsed={props.onToggleFileCollapsed}
+          chatActions={props.chatActions}
+        />
+      );
       return (
         <div className={viewportClassName}>
-          <DiffPanelFileList
-            renderableFiles={props.renderableFiles}
-            resolvedTheme={props.resolvedTheme}
-            diffRenderMode={props.diffRenderMode}
-            diffWordWrap={props.diffWordWrap}
-            workspaceRoot={props.workspaceRoot}
-            collapsedFiles={props.collapsedFiles}
-            onToggleFileCollapsed={props.onToggleFileCollapsed}
-            chatActions={props.chatActions}
-          />
+          {props.renderableFiles.length > 0 ? (
+            <DiffWorkerPoolProvider>{fileList}</DiffWorkerPoolProvider>
+          ) : (
+            fileList
+          )}
         </div>
       );
     }

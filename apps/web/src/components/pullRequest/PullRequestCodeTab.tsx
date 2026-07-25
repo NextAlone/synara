@@ -10,7 +10,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { DiffPanelPatchViewport } from "~/components/DiffPanelPatchViewport";
-import { DiffWorkerPoolProvider } from "~/components/DiffWorkerPoolProvider";
 import { DiffPanelLoadingState } from "~/components/DiffPanelShell";
 import { useTheme } from "~/hooks/useTheme";
 import { getRenderablePatch, sortFileDiffsByPath, summarizePatchTotals } from "~/lib/diffRendering";
@@ -41,64 +40,62 @@ export function PullRequestCodeTab({
   const patchTotals = summarizePatchTotals(diffQuery.data?.patch);
 
   return (
-    <DiffWorkerPoolProvider>
-      <div className="flex h-full min-h-0 flex-col">
-        {diffQuery.data?.truncated ? (
-          <PullRequestWarningNote shape="banner">
-            Diff exceeded 8 MiB and was truncated.
-          </PullRequestWarningNote>
-        ) : null}
-        {patchTotals ? (
-          <PullRequestMetaLine
-            className={cn(
-              PR_META_TEXT_CLASS_NAME,
-              "border-b border-border/60 px-3 py-2 text-muted-foreground",
-            )}
-          >
-            <span>{patchTotals.fileCount} files</span>
-            <PullRequestDiffStat
-              additions={patchTotals.additions}
-              deletions={patchTotals.deletions}
-              tone="diff"
-            />
-          </PullRequestMetaLine>
-        ) : null}
-        {diffQuery.isPending ? (
-          <DiffPanelLoadingState label="Loading pull request diff…" />
-        ) : (
-          <DiffPanelPatchViewport
-            renderablePatch={renderablePatch}
-            renderableFiles={renderableFiles}
-            resolvedTheme={resolvedTheme}
-            diffRenderMode="split"
-            diffWordWrap
-            workspaceRoot={detail.workspaceRoot}
-            collapsedFiles={collapsedFiles}
-            onToggleFileCollapsed={(key) =>
-              setCollapsedFiles((current) => {
-                const next = new Set(current);
-                if (next.has(key)) next.delete(key);
-                else next.add(key);
-                return next;
-              })
-            }
-            isLoading={diffQuery.isFetching}
-            hasNoChanges={diffQuery.isSuccess && !renderablePatch}
-            error={
-              diffQuery.isError
-                ? diffQuery.error instanceof Error
-                  ? diffQuery.error.message
-                  : "Could not load diff."
-                : null
-            }
-            loadingLabel="Loading pull request diff…"
-            emptyLabel="This pull request has no file changes."
-            unavailableLabel="The pull request diff is unavailable."
-            viewKind="repo"
+    <div className="flex h-full min-h-0 flex-col">
+      {diffQuery.data?.truncated ? (
+        <PullRequestWarningNote shape="banner">
+          Diff exceeded 8 MiB and was truncated.
+        </PullRequestWarningNote>
+      ) : null}
+      {patchTotals ? (
+        <PullRequestMetaLine
+          className={cn(
+            PR_META_TEXT_CLASS_NAME,
+            "border-b border-border/60 px-3 py-2 text-muted-foreground",
+          )}
+        >
+          <span>{patchTotals.fileCount} files</span>
+          <PullRequestDiffStat
+            additions={patchTotals.additions}
+            deletions={patchTotals.deletions}
+            tone="diff"
           />
-        )}
-      </div>
-    </DiffWorkerPoolProvider>
+        </PullRequestMetaLine>
+      ) : null}
+      {diffQuery.isPending ? (
+        <DiffPanelLoadingState label="Loading pull request diff…" />
+      ) : (
+        <DiffPanelPatchViewport
+          renderablePatch={renderablePatch}
+          renderableFiles={renderableFiles}
+          resolvedTheme={resolvedTheme}
+          diffRenderMode="split"
+          diffWordWrap
+          workspaceRoot={detail.workspaceRoot}
+          collapsedFiles={collapsedFiles}
+          onToggleFileCollapsed={(key) =>
+            setCollapsedFiles((current) => {
+              const next = new Set(current);
+              if (next.has(key)) next.delete(key);
+              else next.add(key);
+              return next;
+            })
+          }
+          isLoading={diffQuery.isFetching}
+          hasNoChanges={diffQuery.isSuccess && !renderablePatch}
+          error={
+            diffQuery.isError
+              ? diffQuery.error instanceof Error
+                ? diffQuery.error.message
+                : "Could not load diff."
+              : null
+          }
+          loadingLabel="Loading pull request diff…"
+          emptyLabel="This pull request has no file changes."
+          unavailableLabel="The pull request diff is unavailable."
+          viewKind="repo"
+        />
+      )}
+    </div>
   );
 }
 

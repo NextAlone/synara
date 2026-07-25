@@ -8,10 +8,12 @@ import {
   isDiffPanelPickerOptionSelected,
   isStaleDiffTurnSelection,
   resolveConversationCacheScope,
-  resolveDiffPanelGitStatusQueriesEnabled,
+  resolveDiffPanelCheckpointQueryEnabled,
   resolveDiffPanelQueriesEnabled,
+  resolveDiffPanelRepoMetadataQueriesEnabled,
   resolveDiffPanelRepoLiveRefresh,
   resolveDiffPanelRepoLiveRefetchIntervalMs,
+  resolveDiffPanelRepoState,
   resolveDiffPanelScopeCountQueriesEnabled,
   resolveDiffPanelScopeFileCounts,
   resolveDiffPanelScopePickerValue,
@@ -163,28 +165,76 @@ describe("diff panel view source helpers", () => {
     ).toBe(true);
   });
 
-  it("only enables git status work for repo diffs with a cwd", () => {
+  it("only enables VCS metadata work for repo diffs with a cwd", () => {
     expect(
-      resolveDiffPanelGitStatusQueriesEnabled({
+      resolveDiffPanelRepoMetadataQueriesEnabled({
         queriesEnabled: true,
         activeCwd: "/repo",
         diffViewKind: "repo",
       }),
     ).toBe(true);
     expect(
-      resolveDiffPanelGitStatusQueriesEnabled({
+      resolveDiffPanelRepoMetadataQueriesEnabled({
         queriesEnabled: true,
         activeCwd: "/repo",
         diffViewKind: "turn",
       }),
     ).toBe(false);
     expect(
-      resolveDiffPanelGitStatusQueriesEnabled({
+      resolveDiffPanelRepoMetadataQueriesEnabled({
         queriesEnabled: true,
         activeCwd: null,
         diffViewKind: "repo",
       }),
     ).toBe(false);
+  });
+
+  it("loads checkpoint diffs directly without waiting for repo metadata", () => {
+    expect(
+      resolveDiffPanelCheckpointQueryEnabled({
+        queriesEnabled: true,
+        diffEnvironmentPending: false,
+        diffViewKind: "turn",
+      }),
+    ).toBe(true);
+    expect(
+      resolveDiffPanelCheckpointQueryEnabled({
+        queriesEnabled: true,
+        diffEnvironmentPending: false,
+        diffViewKind: "repo",
+      }),
+    ).toBe(false);
+    expect(
+      resolveDiffPanelCheckpointQueryEnabled({
+        queriesEnabled: true,
+        diffEnvironmentPending: true,
+        diffViewKind: "turn",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps an actual repo probe error distinct from missing configuration", () => {
+    expect(
+      resolveDiffPanelRepoState({
+        backendConfigured: false,
+        queryIsSuccess: false,
+        queryIsError: false,
+      }),
+    ).toBe("unconfigured");
+    expect(
+      resolveDiffPanelRepoState({
+        backendConfigured: true,
+        queryIsSuccess: false,
+        queryIsError: true,
+      }),
+    ).toBe("error");
+    expect(
+      resolveDiffPanelRepoState({
+        backendConfigured: true,
+        queryIsSuccess: true,
+        queryIsError: false,
+      }),
+    ).toBe("ready");
   });
 
   it("only surfaces scope file counts for the active scope until the picker opens", () => {

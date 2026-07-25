@@ -126,12 +126,36 @@ export function resolveDiffPanelScopeCountQueriesEnabled(input: {
   return input.queriesEnabled && input.scopePickerOpen;
 }
 
-export function resolveDiffPanelGitStatusQueriesEnabled(input: {
+export function resolveDiffPanelRepoMetadataQueriesEnabled(input: {
   queriesEnabled: boolean;
   activeCwd: string | null;
   diffViewKind: DiffViewKind;
 }): boolean {
   return input.queriesEnabled && input.activeCwd !== null && input.diffViewKind === "repo";
+}
+
+export function resolveDiffPanelCheckpointQueryEnabled(input: {
+  queriesEnabled: boolean;
+  diffEnvironmentPending: boolean;
+  diffViewKind: DiffViewKind;
+}): boolean {
+  return input.queriesEnabled && !input.diffEnvironmentPending && input.diffViewKind === "turn";
+}
+
+export type DiffPanelRepoState = "unconfigured" | "checking" | "ready" | "error";
+
+export function resolveDiffPanelRepoState(input: {
+  backendConfigured: boolean;
+  queryIsSuccess: boolean;
+  queryIsError: boolean;
+}): DiffPanelRepoState {
+  if (!input.backendConfigured) {
+    return "unconfigured";
+  }
+  if (input.queryIsSuccess) {
+    return "ready";
+  }
+  return input.queryIsError ? "error" : "checking";
 }
 
 export function resolveDiffPanelScopeFileCounts(input: {

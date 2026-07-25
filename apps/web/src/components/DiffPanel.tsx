@@ -50,10 +50,12 @@ import {
   DIFF_PANEL_PICKER_SCOPE_OPTIONS,
   isStaleDiffTurnSelection,
   resolveConversationCacheScope,
-  resolveDiffPanelGitStatusQueriesEnabled,
+  resolveDiffPanelCheckpointQueryEnabled,
   resolveDiffPanelQueriesEnabled,
+  resolveDiffPanelRepoMetadataQueriesEnabled,
   resolveDiffPanelScopeCountQueriesEnabled,
   resolveDiffPanelRepoLiveRefetchIntervalMs,
+  resolveDiffPanelRepoState,
   resolveDiffPanelScopeFileCounts,
   resolveDiffPanelScopePickerValue,
   resolveDiffPanelThread,
@@ -367,8 +369,6 @@ interface DiffPanelProps {
   onEditorDiffOptionsChange?: (control: ReactNode | null) => void;
 }
 
-export { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
-
 export default function DiffPanel({
   mode = "inline",
   threadId: controlledThreadId,
@@ -519,38 +519,34 @@ export default function DiffPanel({
   const [turnScopeIntent, setTurnScopeIntent] = useState<DiffPanelTurnScopeIntent>(() =>
     selectedTurnId === null ? "all" : "last",
   );
-  const gitStatusQueriesEnabled = useMemo(
+  const repoMetadataQueriesEnabled = useMemo(
     () =>
-      resolveDiffPanelGitStatusQueriesEnabled({
+      resolveDiffPanelRepoMetadataQueriesEnabled({
         queriesEnabled: diffQueriesEnabled,
         activeCwd,
         diffViewKind,
       }),
     [activeCwd, diffQueriesEnabled, diffViewKind],
   );
-  const gitBranchesQuery = useQuery({
+  const vcsReferencesQuery = useQuery({
     ...vcsReferencesQueryOptions(vcsTarget),
-    enabled: diffQueriesEnabled && activeCwd !== null,
+    enabled: repoMetadataQueriesEnabled,
   });
-  const gitStatusQuery = useQuery({
+  const vcsStatusQuery = useQuery({
     ...vcsStatusQueryOptions(vcsTarget),
-    enabled: gitStatusQueriesEnabled,
+    enabled: repoMetadataQueriesEnabled,
   });
-  const gitRepoStatus =
-    vcsTarget.backend === null
-      ? false
-      : gitBranchesQuery.isSuccess
-        ? true
-        : gitBranchesQuery.isError
-          ? false
-          : undefined;
-  const gitRepoStatusError =
-    gitBranchesQuery.error instanceof Error
-      ? gitBranchesQuery.error.message
-      : gitBranchesQuery.error
+  const repoState = resolveDiffPanelRepoState({
+    backendConfigured: vcsTarget.backend !== null,
+    queryIsSuccess: vcsReferencesQuery.isSuccess,
+    queryIsError: vcsReferencesQuery.isError,
+  });
+  const repoStatusError =
+    vcsReferencesQuery.error instanceof Error
+      ? vcsReferencesQuery.error.message
+      : vcsReferencesQuery.error
         ? "Failed to check source control repository."
         : null;
-  const isGitRepo = gitRepoStatus === true;
   const turnDiffSummaries = activeThreadContext?.turnDiffSummaries ?? [];
   const inferredCheckpointTurnCountByTurnId = useMemo(
     () => inferCheckpointTurnCountByTurnId(turnDiffSummaries),
@@ -643,12 +639,11 @@ export default function DiffPanel({
       toTurnCount: activeCheckpointRange?.toTurnCount ?? null,
       ignoreWhitespace: diffIgnoreWhitespace,
       cacheScope: selectedTurn ? `turn:${selectedTurn.turnId}` : conversationCacheScope,
-      enabled:
-        diffQueriesEnabled &&
-        vcsTarget.backend !== null &&
-        isGitRepo &&
-        !diffEnvironmentPending &&
-        diffViewKind === "turn",
+      enabled: resolveDiffPanelCheckpointQueryEnabled({
+        queriesEnabled: diffQueriesEnabled,
+        diffEnvironmentPending,
+        diffViewKind,
+      }),
     }),
   );
   const selectedTurnCheckpointDiff = selectedTurn
@@ -707,7 +702,7 @@ export default function DiffPanel({
       : repoDiffQuery.error
         ? "Failed to load repo diff."
         : null;
-  const branchHasCommittedChanges = (gitStatusQuery.data?.remote?.aheadCount ?? 0) > 0;
+  const branchHasCommittedChanges = (vcsStatusQuery.data?.remote?.aheadCount ?? 0) > 0;
 
   useEffect(() => {
     if (
@@ -1060,7 +1055,11 @@ export default function DiffPanel({
     },
     [selectedTurnId, updateDiffSelection],
   );
-  const showDiffToolbar = Boolean(activeThreadContext && isGitRepo && !diffEnvironmentPending);
+  const showDiffToolbar = Boolean(
+    activeThreadContext &&
+      !diffEnvironmentPending &&
+      (diffViewKind === "turn" || repoState === "ready"),
+  );
   const copyDiff = useCallback(() => {
     if (diffCopyText) {
       copyDiffToClipboard(diffCopyText, undefined);
@@ -1249,21 +1248,24 @@ export default function DiffPanel({
         <PanelStateMessage density="compact" fill="flex">
           Select a thread to inspect turn diffs.
         </PanelStateMessage>
-      ) : gitRepoStatus === false ? (
-        <PanelStateMessage density="compact" fill="flex">
-          Configure this project for the global source control backend to inspect diffs.
-        </PanelStateMessage>
-      ) : gitRepoStatusError ? (
-        <PanelStateMessage density="compact" fill="flex">
-          {gitRepoStatusError}
-        </PanelStateMessage>
-      ) : gitRepoStatus === undefined && diffQueriesEnabled && activeCwd ? (
-        <DiffPanelLoadingState label="Checking source control repository..." />
       ) : diffEnvironmentPending ? (
         <PanelStateMessage density="compact" fill="flex">
           This chat environment is still being prepared. Diffs will be available once the worktree
           is ready.
         </PanelStateMessage>
+      ) : diffViewKind === "repo" && repoState === "unconfigured" ? (
+        <PanelStateMessage density="compact" fill="flex">
+          Configure this project for the global source control backend to inspect diffs.
+        </PanelStateMessage>
+      ) : diffViewKind === "repo" && repoState === "error" ? (
+        <PanelStateMessage density="compact" fill="flex">
+          {repoStatusError ?? "Failed to check source control repository."}
+        </PanelStateMessage>
+      ) : diffViewKind === "repo" &&
+        repoState === "checking" &&
+        diffQueriesEnabled &&
+        activeCwd ? (
+        <DiffPanelLoadingState label="Checking source control repository..." />
       ) : (
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <div

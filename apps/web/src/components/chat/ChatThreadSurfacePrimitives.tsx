@@ -3,7 +3,6 @@ import type { ThreadId, TurnId } from "@synara/contracts";
 import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
 
 import ChatView from "../ChatView";
-import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import {
   DiffPanelHeaderSkeleton,
   DiffPanelLoadingState,
@@ -46,35 +45,33 @@ export function LazyDiffPanel(props: {
   onEditorDiffOptionsChange?: (control: ReactNode | null) => void;
 }) {
   return (
-    <DiffWorkerPoolProvider>
-      <Suspense
-        fallback={
-          <DiffLoadingFallback
-            mode={props.mode}
-            {...(props.hideHeader !== undefined ? { hideHeader: props.hideHeader } : {})}
-          />
-        }
-      >
-        <DiffPanel
+    <Suspense
+      fallback={
+        <DiffLoadingFallback
           mode={props.mode}
-          {...(props.threadId !== undefined ? { threadId: props.threadId } : {})}
-          {...(props.panelState ? { panelState: props.panelState } : {})}
-          {...(props.onUpdatePanelState ? { onUpdatePanelState: props.onUpdatePanelState } : {})}
-          {...(props.onClosePanel ? { onClosePanel: props.onClosePanel } : {})}
-          {...(props.liveRefreshEnabled !== undefined
-            ? { liveRefreshEnabled: props.liveRefreshEnabled }
-            : {})}
-          {...(props.queriesEnabled !== undefined ? { queriesEnabled: props.queriesEnabled } : {})}
           {...(props.hideHeader !== undefined ? { hideHeader: props.hideHeader } : {})}
-          {...(props.onRenderableFilesChange
-            ? { onRenderableFilesChange: props.onRenderableFilesChange }
-            : {})}
-          {...(props.onEditorDiffOptionsChange
-            ? { onEditorDiffOptionsChange: props.onEditorDiffOptionsChange }
-            : {})}
         />
-      </Suspense>
-    </DiffWorkerPoolProvider>
+      }
+    >
+      <DiffPanel
+        mode={props.mode}
+        {...(props.threadId !== undefined ? { threadId: props.threadId } : {})}
+        {...(props.panelState ? { panelState: props.panelState } : {})}
+        {...(props.onUpdatePanelState ? { onUpdatePanelState: props.onUpdatePanelState } : {})}
+        {...(props.onClosePanel ? { onClosePanel: props.onClosePanel } : {})}
+        {...(props.liveRefreshEnabled !== undefined
+          ? { liveRefreshEnabled: props.liveRefreshEnabled }
+          : {})}
+        {...(props.queriesEnabled !== undefined ? { queriesEnabled: props.queriesEnabled } : {})}
+        {...(props.hideHeader !== undefined ? { hideHeader: props.hideHeader } : {})}
+        {...(props.onRenderableFilesChange
+          ? { onRenderableFilesChange: props.onRenderableFilesChange }
+          : {})}
+        {...(props.onEditorDiffOptionsChange
+          ? { onEditorDiffOptionsChange: props.onEditorDiffOptionsChange }
+          : {})}
+      />
+    </Suspense>
   );
 }
 
