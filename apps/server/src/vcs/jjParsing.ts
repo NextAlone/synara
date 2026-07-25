@@ -12,8 +12,7 @@ export const JJ_BOOKMARK_NAME_TEMPLATE = '"{\\"name\\":" ++ json(self.name()) ++
 export const JJ_DIFF_ENTRY_TEMPLATE =
   '"{\\"status\\":" ++ json(status) ++ ",\\"sourcePath\\":" ++ json(source.path()) ++ ",\\"targetPath\\":" ++ json(target.path()) ++ ",\\"conflicted\\":" ++ json(source.conflict() || target.conflict()) ++ "}\\n"';
 
-export const JJ_WORKSPACE_TEMPLATE =
-  '"{\\"name\\":" ++ json(name) ++ ",\\"root\\":" ++ json(root) ++ "}\\n"';
+export const JJ_WORKSPACE_TEMPLATE = 'json(name) ++ "\\0" ++ json(root) ++ "\\0"';
 
 export interface JjRevisionIdentity {
   readonly changeId: string;
@@ -181,12 +180,34 @@ export function parseJjFileChanges(output: string): JjFileChange[] {
 }
 
 export function parseJjWorkspaces(output: string): JjWorkspace[] {
-  return parseJsonLines(output, RawWorkspace).map((workspace) => ({
-    name: workspace.name,
-    registration: workspace.root.startsWith("<Error:")
-      ? { kind: "stale" as const }
-      : { kind: "present" as const, root: workspace.root },
-  }));
+  const fields = output.split("\0");
+  if (fields.pop() !== "") {
+    throw new Error("Expected NUL-terminated JJ workspace fields.");
+  }
+  if (fields.length % 2 !== 0) {
+    throw new Error(`Expected JJ workspace name/root pairs, received ${fields.length} fields.`);
+  }
+
+  const decode = Schema.decodeUnknownSync(RawWorkspace);
+  const workspaces: JjWorkspace[] = [];
+  for (let index = 0; index < fields.length; index += 2) {
+    const nameField = fields[index]!;
+    const rootField = fields[index + 1]!;
+    const workspace = decode({
+      name: JSON.parse(nameField),
+      // jj renders a missing workspace path as an unescaped inline template
+      // error, so it cannot be parsed as JSON. The NUL framing keeps that
+      // sentinel isolated without weakening validation for any other field.
+      root: rootField.startsWith("<Error:") ? rootField : JSON.parse(rootField),
+    });
+    workspaces.push({
+      name: workspace.name,
+      registration: workspace.root.startsWith("<Error:")
+        ? { kind: "stale" }
+        : { kind: "present", root: workspace.root },
+    });
+  }
+  return workspaces;
 }
 
 export function parseJjGitRemotes(output: string): JjGitRemote[] {

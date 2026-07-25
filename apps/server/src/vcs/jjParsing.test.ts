@@ -112,9 +112,12 @@ describe("JJ machine output parsing", () => {
   it("distinguishes present, stale, and absent workspace registrations", () => {
     const workspaces = parseJjWorkspaces(
       [
-        '{"name":"default","root":"/repo"}',
-        '{"name":"gone","root":"<Error: Workspace is inaccessible>"}',
-      ].join("\n"),
+        '"default"',
+        '"/repo"',
+        '"gone"',
+        "<Error: Workspace has no recorded path: gone>",
+        "",
+      ].join("\0"),
     );
 
     expect(findJjWorkspaceRegistration(workspaces, "default")).toEqual({
@@ -123,6 +126,28 @@ describe("JJ machine output parsing", () => {
     });
     expect(findJjWorkspaceRegistration(workspaces, "gone")).toEqual({ kind: "stale" });
     expect(findJjWorkspaceRegistration(workspaces, "missing")).toEqual({ kind: "absent" });
+  });
+
+  it("preserves JSON escaping inside NUL-framed workspace fields", () => {
+    expect(
+      parseJjWorkspaces(
+        [
+          JSON.stringify('quoted"workspace'),
+          JSON.stringify("/repo/line\nbreak"),
+          "",
+        ].join("\0"),
+      ),
+    ).toEqual([
+      {
+        name: 'quoted"workspace',
+        registration: { kind: "present", root: "/repo/line\nbreak" },
+      },
+    ]);
+  });
+
+  it("rejects malformed workspace framing and non-sentinel root fields", () => {
+    expect(() => parseJjWorkspaces('"default"\0"/repo"')).toThrow("NUL-terminated");
+    expect(() => parseJjWorkspaces('"default"\0not-json\0')).toThrow();
   });
 
   it("parses and sorts Git remotes", () => {

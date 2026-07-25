@@ -10,6 +10,33 @@ function result(stdout = "", stderr = "", code = 0): ExecuteJjResult {
 }
 
 describe("JjCore", () => {
+  it("decodes stale workspace roots without treating jj template errors as malformed output", async () => {
+    const calls: ExecuteJjInput[] = [];
+    const executeOverride: JjCoreShape["execute"] = (input) => {
+      calls.push(input);
+      return Effect.succeed(
+        result(
+          [
+            '"default"',
+            '"/repo"',
+            '"gone"',
+            "<Error: Workspace has no recorded path: gone>",
+            "",
+          ].join("\0"),
+        ),
+      );
+    };
+    const core = await Effect.runPromise(makeJjCore({ executeOverride }));
+
+    await expect(Effect.runPromise(core.listWorkspaces("/repo"))).resolves.toEqual([
+      { name: "default", registration: { kind: "present", root: "/repo" } },
+      { name: "gone", registration: { kind: "stale" } },
+    ]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.args).toContain("--ignore-working-copy");
+    expect(calls[0]?.args.at(-1)).toContain("\\0");
+  });
+
   it("snapshots status once and makes dependent reads ignore the working copy", async () => {
     const repositoryRoot = nodePath.resolve(import.meta.dirname, "../../../../..");
     const calls: ExecuteJjInput[] = [];
