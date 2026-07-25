@@ -142,6 +142,7 @@ export function createShellSnapshotFromReadModel(
         defaultModelSelection: project.defaultModelSelection,
         scripts: project.scripts,
         spaceId: project.spaceId,
+        vcs: project.vcs,
         createdAt: project.createdAt,
         updatedAt: project.updatedAt,
       })),

@@ -74,6 +74,8 @@ import {
   GitUnstageFilesResult,
 } from "./git";
 import {
+  VcsConfigureProjectInput,
+  VcsConfigureProjectResult,
   VcsCreateReferenceInput,
   VcsCreateReferenceResult,
   VcsCreateWorkspaceInput,
@@ -457,6 +459,12 @@ export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
 export const WsVcsSetBackendRpc = Rpc.make(WS_METHODS.vcsSetBackend, {
   payload: VcsSetBackendInput,
   success: VcsSetBackendResult,
+  error: WsRpcError,
+});
+
+export const WsVcsConfigureProjectRpc = Rpc.make(WS_METHODS.vcsConfigureProject, {
+  payload: VcsConfigureProjectInput,
+  success: VcsConfigureProjectResult,
   error: WsRpcError,
 });
 
@@ -1141,6 +1149,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsFilesystemBrowseRpc,
   WsShellOpenInEditorRpc,
   WsVcsSetBackendRpc,
+  WsVcsConfigureProjectRpc,
   WsVcsStatusRpc,
   WsVcsReadDiffRpc,
   WsVcsListReferencesRpc,

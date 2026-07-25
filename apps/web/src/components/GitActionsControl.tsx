@@ -377,8 +377,9 @@ export default function GitActionsControl({
       makeVcsQueryTarget(
         activeProject,
         hasServerThread ? activeThreadId : null,
+        settings.vcsBackend,
       ),
-    [activeProject, activeThreadId, hasServerThread],
+    [activeProject, activeThreadId, hasServerThread, settings.vcsBackend],
   );
   const isJjBackend = vcsTarget.backend === "jj";
   const backendName = isJjBackend ? "JJ" : "Git";

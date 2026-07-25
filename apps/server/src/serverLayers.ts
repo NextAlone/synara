@@ -85,6 +85,7 @@ export function makeServerRuntimeServicesLayer(
   );
   const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(ServerSettingsLive),
   );
   const studioOutputReactorLayer = StudioOutputReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
@@ -100,6 +101,7 @@ export function makeServerRuntimeServicesLayer(
   );
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(ServerSettingsLive),
   );
   const profileStatsArchiveLayer = ProfileStatsArchiveLive.pipe(
     Layer.provideMerge(checkpointStoreLayer),
@@ -143,6 +145,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(TextGenerationLayerLive),
     Layer.provideMerge(VcsLayerLive),
+    Layer.provideMerge(ServerSettingsLive),
   );
   const automationServiceLayer = AutomationServiceLive.pipe(
     Layer.provideMerge(AutomationRepositoryLive),

@@ -861,6 +861,7 @@ function makeHarnessLayer(
       }),
   } as never);
   const projectVcsLayer = Layer.succeed(ProjectVcs, {
+    getBackend: Effect.succeed(options.vcsBackend ?? "git"),
     materializePullRequestHead: (input: { reference: string }) =>
       Effect.sync(() => {
         const number = Number(/(\d+)(?:\D*)$/u.exec(input.reference)?.[1] ?? "0");

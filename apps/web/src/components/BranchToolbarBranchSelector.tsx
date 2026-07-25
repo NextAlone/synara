@@ -10,6 +10,7 @@ import type {
   ProjectId,
   ProjectVcsState,
   ThreadId,
+  VcsBackend,
   VcsStatusResult,
 } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
@@ -89,6 +90,7 @@ export type BranchSelectorVariant = "toolbar" | "panel";
 interface BranchToolbarBranchSelectorProps {
   projectId: ProjectId;
   projectVcs: ProjectVcsState;
+  vcsBackend: VcsBackend;
   activeThreadId: ThreadId | null;
   activeProjectCwd: string;
   activeThreadBranch: string | null;
@@ -386,6 +388,7 @@ function getCurrentBranchChangeSummary(
 export function BranchToolbarBranchSelector({
   projectId,
   projectVcs,
+  vcsBackend,
   activeThreadId,
   activeProjectCwd,
   activeThreadBranch,
@@ -411,6 +414,7 @@ export function BranchToolbarBranchSelector({
   const vcsTarget = makeVcsQueryTarget(
     { id: projectId, vcs: projectVcs },
     hasServerThread ? activeThreadId : null,
+    vcsBackend,
   );
   const branchesQuery = useQuery(vcsReferencesQueryOptions(vcsTarget));
   const branchStatusQuery = useQuery(vcsStatusQueryOptions(vcsTarget));
@@ -607,6 +611,7 @@ export function BranchToolbarBranchSelector({
     const switchTarget = makeVcsQueryTarget(
       { id: projectId, vcs: projectVcs },
       hasServerThread ? activeThreadId : null,
+      vcsBackend,
     );
 
     setIsBranchMenuOpen(false);

@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import type { VcsBackend } from "@synara/contracts";
 import { resolveWorktreeHandoffIntent } from "@synara/shared/worktreeHandoff";
 import { useCallback, useState } from "react";
 import { vcsHandoffThreadMutationOptions } from "~/lib/vcsReactQuery";
@@ -15,6 +16,7 @@ import type { Project, ProjectScript, Thread } from "../types";
 export function useThreadWorkspaceHandoff(input: {
   activeProject: Project | undefined;
   activeThread: Thread | undefined;
+  vcsBackend: VcsBackend;
   activeRootBranch: string | null;
   activeThreadAssociatedWorktree: {
     associatedWorktreePath: string | null;
@@ -50,8 +52,10 @@ export function useThreadWorkspaceHandoff(input: {
       try {
         await input.stopActiveThreadSession();
         const vcs = input.activeProject.vcs;
-        if (!vcs?.binding) {
-          throw new Error("Choose Git or JJ for this project before moving the thread workspace.");
+        if (!vcs?.binding || vcs.binding.backend !== input.vcsBackend) {
+          throw new Error(
+            `This project is not configured for the global ${input.vcsBackend === "jj" ? "JJ" : "Git"} backend yet.`,
+          );
         }
         const result = await handoffThreadMutation.mutateAsync({
           commandId: newCommandId(),

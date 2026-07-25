@@ -797,7 +797,7 @@ export const AutomationServiceLive = Layer.effect(
           ? Effect.fail(
               new AutomationServiceError({
                 message:
-                  "Automation requires a configured Git or JJ workspace backend for this project.",
+                  "Automation requires this project to be configured for the global source control backend.",
               }),
             )
           : requireLocalCheckoutAcknowledgement().pipe(Effect.as(localThreadEnvironment));

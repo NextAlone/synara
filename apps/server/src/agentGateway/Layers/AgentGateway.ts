@@ -211,7 +211,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_create_threads",
       description:
-        "Create an exact batch of 1–20 standalone Synara threads. Isolated threads use the project's selected Git or JJ backend at baseRef (or the selected checkout's current revision) and copy local checkout changes plus .worktreeinclude files when that revision is selected. Validation/preflight failures create nothing and may be corrected with the same requestId; durable retries replay the exact operation.",
+        "Create an exact batch of 1–20 standalone Synara threads. Isolated threads use the globally selected Git or JJ backend at baseRef (or the selected checkout's current revision) and copy local checkout changes plus .worktreeinclude files when that revision is selected. Validation/preflight failures create nothing and may be corrected with the same requestId; durable retries replay the exact operation.",
       inputSchema: {
         type: "object",
         properties: {

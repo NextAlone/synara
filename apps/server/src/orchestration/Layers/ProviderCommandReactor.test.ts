@@ -503,7 +503,11 @@ describe("ProviderCommandReactor", () => {
           generateThreadTitle,
         } as unknown as TextGenerationShape),
       ),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        ServerSettingsService.layerTest({
+          vcsBackend: input?.vcsBackend ?? "git",
+        }),
+      ),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),

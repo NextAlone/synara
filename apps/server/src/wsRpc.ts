@@ -637,6 +637,9 @@ const makeWsRpcHandlersLayer = () =>
         );
       const assertLegacyGitBackendAllowed = makeLegacyGitBackendBoundary({
         snapshotQuery: projectionReadModelQuery,
+        getVcsBackend: serverSettings.getSettings.pipe(
+          Effect.map((settings) => settings.vcsBackend),
+        ),
         canonicalizePath: (input) =>
           realpathNearestExisting(input).pipe(
             Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -1094,7 +1097,9 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(open.openInEditor(input), "Failed to open editor"),
 
         [WS_METHODS.vcsSetBackend]: (input) =>
-          rpcEffect(projectVcs.setBackend(input), "Failed to configure project VCS"),
+          rpcEffect(projectVcs.setBackend(input), "Failed to change the global VCS backend"),
+        [WS_METHODS.vcsConfigureProject]: (input) =>
+          rpcEffect(projectVcs.configureProject(input), "Failed to configure project VCS"),
         [WS_METHODS.vcsStatus]: (input) =>
           rpcEffect(projectVcs.status(input), "Failed to read project VCS status"),
         [WS_METHODS.vcsReadDiff]: (input) =>
@@ -1569,7 +1574,15 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.serverGetSettings]: () =>
           rpcEffect(serverSettings.getSettingsView, "Failed to load server settings"),
         [WS_METHODS.serverUpdateSettings]: (input) =>
-          rpcEffect(serverSettings.updateSettingsView(input), "Failed to update server settings"),
+          input.vcsBackend !== undefined
+            ? Effect.fail(
+                new WsRpcError({
+                  code: "VCS_BACKEND_COORDINATION_REQUIRED",
+                  message:
+                    "Change the global VCS backend through vcs.setBackend so active turns and workspaces are checked first.",
+                }),
+              )
+            : rpcEffect(serverSettings.updateSettingsView(input), "Failed to update server settings"),
         [WS_METHODS.serverRefreshProviders]: () =>
           rpcEffect(
             providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),

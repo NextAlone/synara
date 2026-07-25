@@ -47,6 +47,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Pick the default workspace mode for newly created draft threads. local worktree environment",
   },
   {
+    id: "general:source-control",
+    section: "general",
+    title: "Source control",
+    keywords:
+      "Use one Git or Jujutsu JJ backend across every project. repository version control global",
+  },
+  {
     id: "general:project-order",
     section: "general",
     title: "Project order",

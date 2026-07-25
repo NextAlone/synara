@@ -820,6 +820,7 @@ describe("AppSettingsSchema", () => {
       codexHomePath: "",
       grokBinaryPath: "",
       defaultThreadEnvMode: "local",
+      vcsBackend: "git",
       confirmThreadDelete: false,
       confirmTerminalTabClose: true,
       enableAppSnap: false,

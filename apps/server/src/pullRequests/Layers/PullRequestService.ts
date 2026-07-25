@@ -598,7 +598,7 @@ export const PullRequestServiceLive = Layer.effect(
               )
           : Effect.fail(
               new Error(
-                "Choose Git or JJ for this project before loading pull requests.",
+                "Configure this project for the global source control backend before loading pull requests.",
               ),
             ),
       resolveGitHubCwd: (project) =>

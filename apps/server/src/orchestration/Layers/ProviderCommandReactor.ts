@@ -437,7 +437,8 @@ const make = Effect.gen(function* () {
   ) {
     const project = yield* resolveThreadWorkspaceProject(thread);
     const backend = project?.vcs.binding?.backend;
-    if (!project || !backend) return undefined;
+    const selectedBackend = (yield* serverSettings.getSettings).vcsBackend;
+    if (!project || !backend || backend !== selectedBackend) return undefined;
     const cwd = resolveThreadWorkspaceCwd({
       thread,
       projects: [project],
@@ -1787,7 +1788,8 @@ const make = Effect.gen(function* () {
     if (!thread) return;
     const project = yield* resolveThreadWorkspaceProject(thread);
     const backend = project?.vcs.binding?.backend;
-    if (!backend) return;
+    const selectedBackend = (yield* serverSettings.getSettings).vcsBackend;
+    if (!backend || backend !== selectedBackend) return;
     if (
       (backend === "git" &&
         (!input.branch || !isTemporaryWorktreeBranch(input.branch))) ||

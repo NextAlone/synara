@@ -9,6 +9,7 @@ import { makeLegacyGitBackendBoundary } from "./legacyGitBackendBoundary.ts";
 const PROJECT_ID = ProjectId.makeUnsafe("project-jj");
 
 function makeBoundary(input?: {
+  readonly selectedBackend?: "git" | "jj";
   readonly backend?: "git" | "jj" | null;
   readonly projectRelativePath?: string;
   readonly worktreePath?: string | null;
@@ -17,6 +18,7 @@ function makeBoundary(input?: {
 }) {
   const backend = input?.backend === undefined ? "jj" : input.backend;
   return makeLegacyGitBackendBoundary({
+    getVcsBackend: Effect.succeed(input?.selectedBackend ?? "jj"),
     snapshotQuery: {
       getShellSnapshot: () =>
         Effect.succeed({
@@ -70,6 +72,19 @@ describe("legacy Git backend boundary", () => {
     await expect(
       Effect.runPromise(
         assertAllowed({
+          method: WS_METHODS.gitStatus,
+          cwd: "/repo/packages/app/src",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: "VCS_BACKEND_MISMATCH",
+    });
+  });
+
+  it("blocks a stale Git project binding while JJ is selected globally", async () => {
+    await expect(
+      Effect.runPromise(
+        makeBoundary({ backend: "git" })({
           method: WS_METHODS.gitStatus,
           cwd: "/repo/packages/app/src",
         }),
@@ -144,10 +159,10 @@ describe("legacy Git backend boundary", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("allows legacy Git calls for Git-bound, unbound, and unrelated paths", async () => {
+  it("allows legacy Git calls when Git is selected globally and for unrelated paths", async () => {
     await expect(
       Effect.runPromise(
-        makeBoundary({ backend: "git" })({
+        makeBoundary({ selectedBackend: "git", backend: "git" })({
           method: WS_METHODS.gitStatus,
           cwd: "/repo/packages/app",
         }),
@@ -155,7 +170,7 @@ describe("legacy Git backend boundary", () => {
     ).resolves.toBeUndefined();
     await expect(
       Effect.runPromise(
-        makeBoundary({ backend: null })({
+        makeBoundary({ selectedBackend: "git", backend: null })({
           method: WS_METHODS.gitInit,
           cwd: "/repo/packages/app",
         }),

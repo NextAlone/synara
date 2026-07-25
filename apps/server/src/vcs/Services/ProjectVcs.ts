@@ -3,8 +3,11 @@ import type {
   GitRunStackedActionResult,
   ProjectId,
   ProjectVcsBinding,
+  ServerSettingsError,
   ThreadId,
   VcsBackend,
+  VcsConfigureProjectInput,
+  VcsConfigureProjectResult,
   VcsCreateReferenceInput,
   VcsCreateReferenceResult,
   VcsCreateWorkspaceInput,
@@ -54,7 +57,8 @@ export type ProjectVcsServiceError =
   | GitHubCliError
   | TextGenerationError
   | ProjectionRepositoryError
-  | OrchestrationDispatchError;
+  | OrchestrationDispatchError
+  | ServerSettingsError;
 
 export interface ResolvedProjectVcsTarget {
   readonly projectId: ProjectId;
@@ -75,9 +79,13 @@ export interface MaterializedPullRequestHead {
 }
 
 export interface ProjectVcsShape {
+  readonly getBackend: Effect.Effect<VcsBackend, ProjectVcsServiceError>;
   readonly setBackend: (
     input: VcsSetBackendInput,
   ) => Effect.Effect<VcsSetBackendResult, ProjectVcsServiceError>;
+  readonly configureProject: (
+    input: VcsConfigureProjectInput,
+  ) => Effect.Effect<VcsConfigureProjectResult, ProjectVcsServiceError>;
   readonly resolveTarget: (
     input: VcsStatusInput,
   ) => Effect.Effect<ResolvedProjectVcsTarget, ProjectVcsServiceError>;

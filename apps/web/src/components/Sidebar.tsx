@@ -3737,10 +3737,10 @@ export default function Sidebar() {
             envMode: thread.envMode,
             worktreePath: thread.worktreePath,
           }),
-          vcsTarget: makeVcsQueryTarget(project, thread.id),
+          vcsTarget: makeVcsQueryTarget(project, thread.id, appSettings.vcsBackend),
         };
       }),
-    [projectById, visibleSidebarThreads],
+    [appSettings.vcsBackend, projectById, visibleSidebarThreads],
   );
   const threadVcsStatusQueries = useQueries({
     queries: threadVcsTargets.map((target) => ({

@@ -3205,6 +3205,7 @@ export default function ChatView({
   const vcsReferenceTarget = makeVcsQueryTarget(
     activeProject,
     isServerThread ? activeThread?.id ?? null : null,
+    settings.vcsBackend,
   );
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const mentionTriggerQuery = composerTrigger?.kind === "mention" ? composerTrigger.query : "";
@@ -4296,6 +4297,7 @@ export default function ChatView({
   } = useThreadWorkspaceHandoff({
     activeProject,
     activeThread,
+    vcsBackend: settings.vcsBackend,
     activeRootBranch,
     activeThreadAssociatedWorktree,
     isServerThread,
@@ -7228,11 +7230,30 @@ export default function ChatView({
       );
       return false;
     }
+    if (
+      shouldCreateWorktree &&
+      targetProjectKindForSend === "project" &&
+      targetProjectVcsForSend.binding?.backend !== settings.vcsBackend
+    ) {
+      try {
+        targetProjectVcsForSend = (
+          await api.vcs.configureProject({
+            projectId: targetProjectIdForSend,
+            expectedEpoch: targetProjectVcsForSend.epoch,
+          })
+        ).vcs;
+      } catch (error) {
+        setStoreThreadError(
+          threadIdForSend,
+          error instanceof Error
+            ? error.message
+            : "Could not configure source control before creating a workspace.",
+        );
+        return false;
+      }
+    }
     if (shouldCreateWorktree && !targetProjectVcsForSend.binding) {
-      setStoreThreadError(
-        threadIdForSend,
-        "Choose Git or JJ for this project before creating a workspace.",
-      );
+      setStoreThreadError(threadIdForSend, "Source control is not available for this project.");
       return false;
     }
 
@@ -11158,7 +11179,11 @@ export default function ChatView({
       />
       <ThreadWorktreeHandoffDialog
         open={worktreeHandoffDialogOpen}
-        backend={activeProject?.vcs.binding?.backend ?? null}
+        backend={
+          activeProject?.vcs.binding?.backend === settings.vcsBackend
+            ? settings.vcsBackend
+            : null
+        }
         worktreeName={worktreeHandoffName}
         busy={handoffBusy}
         onWorktreeNameChange={setWorktreeHandoffName}

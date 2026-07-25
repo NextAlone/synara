@@ -14,6 +14,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { useTheme } from "~/hooks/useTheme";
+import { useAppSettings } from "~/appSettings";
 import {
   buildFileDiffRenderKey,
   getRenderablePatch,
@@ -206,6 +207,7 @@ export function GitPanel(props: {
 }) {
   const queryClient = useQueryClient();
   const { resolvedTheme } = useTheme();
+  const { settings } = useAppSettings();
   const theme = resolvedTheme as "light" | "dark";
   const thread = useStore(
     useMemo(() => createThreadSelector(props.hostThreadId), [props.hostThreadId]),
@@ -223,6 +225,7 @@ export function GitPanel(props: {
   const vcsTarget = makeVcsQueryTarget(
     project,
     hasServerThread ? props.hostThreadId : null,
+    settings.vcsBackend,
   );
   const isGitBackend = vcsTarget.backend === "git";
 

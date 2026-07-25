@@ -36,6 +36,7 @@ import { RuntimeReceiptBusLive } from "./RuntimeReceiptBus.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -312,6 +313,7 @@ describe("CheckpointReactor", () => {
         ),
       ),
       Layer.provideMerge(ServerConfigLayer),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(SqlitePersistenceMemory),
     );

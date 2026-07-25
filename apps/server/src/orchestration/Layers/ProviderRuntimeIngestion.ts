@@ -66,6 +66,7 @@ import {
   runtimePayloadRecord,
   runtimeTurnState,
 } from "../providerRuntimeActivityProjection.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 
 // FILE: ProviderRuntimeIngestion.ts
 // Purpose: Projects provider runtime events into orchestration read-model updates and thread activity.
@@ -542,6 +543,7 @@ const make = Effect.gen(function* () {
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const runtimeEvents = yield* ProviderRuntimeEventRepository;
   const commandReceipts = yield* OrchestrationCommandReceiptRepository;
+  const serverSettings = yield* ServerSettingsService;
   const outstandingTurnIdsByThreadRef = yield* Ref.make<ReadonlyMap<ThreadId, ReadonlySet<TurnId>>>(
     new Map(),
   );
@@ -880,7 +882,8 @@ const make = Effect.gen(function* () {
       return false;
     }
     const backend = project.vcs?.binding?.backend;
-    if (!backend) {
+    const selectedBackend = (yield* serverSettings.getSettings).vcsBackend;
+    if (!backend || backend !== selectedBackend) {
       return false;
     }
     const workspaceCwd = resolveThreadWorkspaceCwd({

@@ -40,20 +40,24 @@ export function makeVcsQueryTarget(
       }
     | null
     | undefined,
-  threadId?: ThreadId | null,
+  threadId: ThreadId | null | undefined,
+  selectedBackend: VcsBackend,
 ): VcsQueryTarget {
   const vcs = project?.vcs ?? { epoch: 0, binding: null };
+  const backend = vcs.binding?.backend ?? null;
   return {
     projectId: project?.id ?? null,
     threadId: threadId ?? null,
     epoch: vcs.epoch,
-    backend: vcs.binding?.backend ?? null,
+    backend: backend === selectedBackend ? backend : null,
   };
 }
 
 function requestTarget(target: VcsQueryTarget) {
   if (!target.projectId || !target.backend) {
-    throw new Error("Choose Git or JJ for this project before using source control.");
+    throw new Error(
+      "Configure this project for the global source control backend before using source control.",
+    );
   }
   return {
     projectId: target.projectId,
@@ -310,18 +314,6 @@ function mutationInvalidation(queryClient: QueryClient) {
   return async () => {
     await invalidateVcsQueries(queryClient);
   };
-}
-
-export function vcsSetBackendMutationOptions(input: { queryClient: QueryClient }) {
-  return mutationOptions({
-    mutationKey: ["vcs", "mutation", "set-backend"] as const,
-    mutationFn: (request: {
-      projectId: ProjectId;
-      expectedEpoch: number;
-      backend: VcsBackend;
-    }) => ensureNativeApi().vcs.setBackend(request),
-    onSuccess: mutationInvalidation(input.queryClient),
-  });
 }
 
 export function vcsCreateReferenceMutationOptions(input: { queryClient: QueryClient }) {

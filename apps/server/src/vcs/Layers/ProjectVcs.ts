@@ -9,6 +9,7 @@ import {
   type OrchestrationThreadShell,
   type ProjectId,
   type ProjectVcsBinding,
+  type ServerSettingsError,
   type VcsBackend,
   type VcsFileChange,
   type VcsHandoffThreadResult,
@@ -32,10 +33,15 @@ import {
   type OrchestrationEngineShape,
 } from "../../orchestration/Services/OrchestrationEngine.ts";
 import {
+  threadHasCheckpointRevertInProgress,
+  threadHasInFlightTurn,
+} from "../../orchestration/commandInvariants.ts";
+import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
 } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { resolveGitHubRepository } from "../../pullRequests/repositoryResolution.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProjectVcsError } from "../Errors.ts";
 import { makeJjActions } from "../jjActions.ts";
 import {
@@ -61,6 +67,10 @@ export interface ProjectVcsDependencies {
   readonly jj: JjCoreShape;
   readonly orchestrationEngine: OrchestrationEngineShape;
   readonly projection: ProjectionSnapshotQueryShape;
+  readonly getVcsBackend: Effect.Effect<VcsBackend, ServerSettingsError>;
+  readonly setVcsBackend: (
+    backend: VcsBackend,
+  ) => Effect.Effect<void, ServerSettingsError>;
   readonly canonicalizePath: (path: string) => Promise<string>;
   readonly now: () => string;
   readonly makeCommandId: () => CommandId;
@@ -154,6 +164,7 @@ function chooseDefaultReference(names: ReadonlyArray<string>): string | null {
 }
 
 export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): ProjectVcsShape {
+  const globalBackendMutation = Semaphore.makeUnsafe(1);
   const mutationLocks = new Map<
     ProjectId,
     { readonly semaphore: Semaphore.Semaphore; users: number }
@@ -180,13 +191,26 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
         ),
       );
     });
+  const withProjectMutations = <A, E, R>(
+    projectIds: ReadonlyArray<ProjectId>,
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R> => {
+    let guarded = effect;
+    const orderedProjectIds = [...new Set(projectIds)].sort((left, right) =>
+      String(left).localeCompare(String(right)),
+    );
+    for (const projectId of orderedProjectIds.reverse()) {
+      guarded = withProjectMutation(projectId, guarded);
+    }
+    return guarded;
+  };
   const jjActions = makeJjActions({
     jj: dependencies.jj,
     git: dependencies.git,
     gitHubCli: dependencies.gitHubCli,
     textGeneration: dependencies.textGeneration,
   });
-  const readProject = (operation: string, projectId: Parameters<ProjectVcsShape["setBackend"]>[0]["projectId"]) =>
+  const readProject = (operation: string, projectId: ProjectId) =>
     dependencies.projection.getProjectShellById(projectId).pipe(
       Effect.flatMap(
         Option.match({
@@ -346,8 +370,85 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
     });
 
   const setBackend: ProjectVcsShape["setBackend"] = (input) =>
+    globalBackendMutation.withPermit(
+      Effect.gen(function* () {
+        const operation = "ProjectVcs.setBackend";
+        const currentBackend = yield* dependencies.getVcsBackend;
+        if (currentBackend === input.backend) {
+          return { backend: currentBackend };
+        }
+
+        const snapshot = yield* dependencies.projection.getCommandReadModel();
+        const projectIdsToLock = snapshot.projects
+          .filter(
+            (project) =>
+              project.deletedAt === null &&
+              (project.kind ?? "project") === "project" &&
+              project.vcs.binding?.backend !== input.backend,
+          )
+          .map((project) => project.id);
+
+        return yield* withProjectMutations(
+          projectIdsToLock,
+          Effect.gen(function* () {
+            const currentSnapshot =
+              yield* dependencies.projection.getCommandReadModel();
+            const affectedProjectIds = new Set(
+              currentSnapshot.projects
+                .filter(
+                  (project) =>
+                    project.deletedAt === null &&
+                    (project.kind ?? "project") === "project" &&
+                    project.vcs.binding?.backend !== input.backend,
+                )
+                .map((project) => project.id),
+            );
+            const affectedThreads = currentSnapshot.threads.filter(
+              (thread) =>
+                thread.deletedAt === null &&
+                affectedProjectIds.has(thread.projectId),
+            );
+            const activeThread =
+              affectedThreads.find(threadHasInFlightTurn);
+            if (activeThread) {
+              return yield* projectError(
+                operation,
+                "backend-switch-blocked",
+                `Thread '${activeThread.id}' has an active turn. Stop it before changing the global VCS backend.`,
+              );
+            }
+            const revertingThread = affectedThreads.find(
+              threadHasCheckpointRevertInProgress,
+            );
+            if (revertingThread) {
+              return yield* projectError(
+                operation,
+                "backend-switch-blocked",
+                `Thread '${revertingThread.id}' has a checkpoint revert in progress. Wait for it before changing the global VCS backend.`,
+              );
+            }
+            const worktreeThreadCount = affectedThreads.filter(
+              (thread) => thread.worktreePath !== null,
+            ).length;
+            if (worktreeThreadCount > 0) {
+              return yield* projectError(
+                operation,
+                "backend-switch-blocked",
+                `Move or remove ${worktreeThreadCount} existing workspace thread(s) before changing the global VCS backend.`,
+              );
+            }
+
+            yield* dependencies.setVcsBackend(input.backend);
+            return { backend: input.backend };
+          }),
+        );
+      }),
+    );
+
+  const configureProject: ProjectVcsShape["configureProject"] = (input) =>
     Effect.gen(function* () {
-      const operation = "ProjectVcs.setBackend";
+      const operation = "ProjectVcs.configureProject";
+      const backend = yield* dependencies.getVcsBackend;
       const project = yield* readProject(operation, input.projectId);
       const update = Effect.gen(function* () {
         if ((project.kind ?? "project") !== "project") {
@@ -367,9 +468,9 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
 
         const changesBackend =
           project.vcs.binding !== null &&
-          project.vcs.binding.backend !== input.backend;
+          project.vcs.binding.backend !== backend;
         const initializesJj =
-          project.vcs.binding === null && input.backend === "jj";
+          project.vcs.binding === null && backend === "jj";
         const assertNoWorktreeThreads = Effect.gen(function* () {
           const snapshot = yield* dependencies.projection.getShellSnapshot();
           const blockingThreadIds = snapshot.threads
@@ -393,18 +494,18 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
 
         const binding = yield* detectBinding(
           operation,
-          input.backend,
+          backend,
           project.workspaceRoot,
         ).pipe(
           Effect.catchTag("ProjectVcsError", (error) => {
             if (
               error.reason !== "repository-not-found" ||
-              project.vcs.binding !== null
+              (project.vcs.binding !== null && backend !== "jj")
             ) {
               return Effect.fail(error);
             }
             const initialize =
-              input.backend === "jj"
+              backend === "jj"
                 ? Effect.gen(function* () {
                     const existingGit = yield* dependencies.git.execute({
                       operation: "ProjectVcs.findGitRepositoryForJjInit",
@@ -447,7 +548,7 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
               Effect.flatMap(() =>
                 detectBinding(
                   operation,
-                  input.backend,
+                  backend,
                   project.workspaceRoot,
                 ),
               ),
@@ -527,12 +628,13 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
           `The VCS backend changed from epoch ${input.expectedEpoch} to ${project.vcs.epoch}; refresh and retry.`,
         );
       }
+      const selectedBackend = yield* dependencies.getVcsBackend;
       const binding = project.vcs.binding;
-      if (!binding) {
+      if (!binding || binding.backend !== selectedBackend) {
         return yield* projectError(
           operation,
           "backend-unconfigured",
-          "Choose Git or JJ for this project before using source control.",
+          `This project is not configured for the global ${selectedBackend === "jj" ? "JJ" : "Git"} backend yet.`,
         );
       }
       const projectCwd = yield* validateBindingRoot(operation, project, binding);
@@ -2073,8 +2175,10 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
     );
 
   return {
-    setBackend: (input) =>
-      withProjectMutation(input.projectId, setBackend(input)),
+    getBackend: dependencies.getVcsBackend,
+    setBackend,
+    configureProject: (input) =>
+      withProjectMutation(input.projectId, configureProject(input)),
     resolveTarget,
     status,
     readDiff,
@@ -2122,6 +2226,7 @@ export const makeProjectVcs = Effect.gen(function* () {
   const jj = yield* JjCore;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projection = yield* ProjectionSnapshotQuery;
+  const serverSettings = yield* ServerSettingsService;
   const config = yield* ServerConfig;
   return makeProjectVcsWith({
     git,
@@ -2131,6 +2236,11 @@ export const makeProjectVcs = Effect.gen(function* () {
     jj,
     orchestrationEngine,
     projection,
+    getVcsBackend: serverSettings.getSettings.pipe(
+      Effect.map((settings) => settings.vcsBackend),
+    ),
+    setVcsBackend: (backend) =>
+      serverSettings.updateSettings({ vcsBackend: backend }).pipe(Effect.asVoid),
     canonicalizePath: nodeFs.realpath,
     now: () => new Date().toISOString(),
     makeCommandId: () =>

@@ -82,6 +82,8 @@ import type {
   GitUnstageFilesResult,
 } from "./git";
 import type {
+  VcsConfigureProjectInput,
+  VcsConfigureProjectResult,
   VcsCreateReferenceInput,
   VcsCreateReferenceResult,
   VcsCreateWorkspaceInput,
@@ -617,6 +619,9 @@ export interface NativeApi {
   };
   vcs: {
     setBackend: (input: VcsSetBackendInput) => Promise<VcsSetBackendResult>;
+    configureProject: (
+      input: VcsConfigureProjectInput,
+    ) => Promise<VcsConfigureProjectResult>;
     status: (input: VcsStatusInput) => Promise<VcsStatusResult>;
     readDiff: (input: VcsReadDiffInput) => Promise<VcsReadDiffResult>;
     listReferences: (input: VcsListReferencesInput) => Promise<VcsListReferencesResult>;

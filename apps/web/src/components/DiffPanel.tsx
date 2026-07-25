@@ -489,6 +489,7 @@ export default function DiffPanel({
   const vcsTarget = makeVcsQueryTarget(
     activeProject,
     serverThreadCatalog ? activeThreadId : null,
+    settings.vcsBackend,
   );
   const repoScopeOptions =
     vcsTarget.backend === "jj" ? JJ_DIFF_SCOPE_OPTIONS : DIFF_PANEL_PICKER_SCOPE_OPTIONS;
@@ -1244,7 +1245,7 @@ export default function DiffPanel({
         </PanelStateMessage>
       ) : gitRepoStatus === false ? (
         <PanelStateMessage density="compact" fill="flex">
-          Choose a source control backend for this project to inspect diffs.
+          Configure this project for the global source control backend to inspect diffs.
         </PanelStateMessage>
       ) : gitRepoStatusError ? (
         <PanelStateMessage density="compact" fill="flex">

@@ -294,6 +294,14 @@ function createSnapshotForTargetUser(options: {
           model: "gpt-5",
         },
         scripts: [],
+        vcs: {
+          epoch: 0,
+          binding: {
+            backend: "git",
+            repoRoot: "/repo/project",
+            projectRelativePath: ".",
+          },
+        },
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
         deletedAt: null,
@@ -1095,6 +1103,64 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
       aheadCount: 0,
       behindCount: 0,
       pr: null,
+    };
+  }
+  if (tag === WS_METHODS.vcsListReferences) {
+    return {
+      backend: "git",
+      epoch: typeof body.expectedEpoch === "number" ? body.expectedEpoch : 0,
+      references: [
+        {
+          name: "main",
+          kind: "branch",
+          isRemote: false,
+          remoteName: null,
+          current: true,
+          isDefault: true,
+          workspacePath: null,
+          conflicted: false,
+          tracked: false,
+          synced: false,
+        },
+      ],
+      hasOriginRemote: true,
+    };
+  }
+  if (tag === WS_METHODS.vcsStatus) {
+    return {
+      backend: "git",
+      epoch: typeof body.expectedEpoch === "number" ? body.expectedEpoch : 0,
+      ref: "main",
+      revision: null,
+      hasChanges: false,
+      hasConflicts: false,
+      files: [],
+      insertions: 0,
+      deletions: 0,
+      remote: {
+        ref: "origin/main",
+        aheadCount: 0,
+        behindCount: 0,
+      },
+      pullRequest: null,
+      capabilities: {
+        staging: true,
+        stash: true,
+        checkout: true,
+        workspaces: true,
+      },
+    };
+  }
+  if (tag === WS_METHODS.vcsCreateWorkspace) {
+    return {
+      backend: "git",
+      epoch: typeof body.expectedEpoch === "number" ? body.expectedEpoch : 0,
+      workspace: {
+        name: "synara",
+        path: "/repo/.codex/worktrees/generated/synara",
+        ref: "0123456789abcdef0123456789abcdef01234567",
+        branch: null,
+      },
     };
   }
   if (tag === WS_METHODS.gitCreateWorktree) {
@@ -4808,10 +4874,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           const createWorktreeRequest = wsRequests.find(
             (request) =>
-              request._tag === WS_METHODS.gitCreateDetachedWorktree &&
-              request.cwd === "/repo/project" &&
-              request.ref === "main" &&
-              request.copyChangesFrom === "/repo/project",
+              request._tag === WS_METHODS.vcsCreateWorkspace &&
+              request.projectId === PROJECT_ID &&
+              request.expectedEpoch === 0 &&
+              request.sourceRef === "main" &&
+              request.path === null &&
+              request.copyChangesFromCurrent === true,
           );
           expect(createWorktreeRequest).toBeTruthy();
 
@@ -4927,9 +4995,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           const request = wsRequests.find(
             (candidate) =>
-              candidate._tag === WS_METHODS.gitCreateDetachedWorktree &&
-              candidate.cwd === "/repo/project" &&
-              candidate.ref === "main",
+              candidate._tag === WS_METHODS.vcsCreateWorkspace &&
+              candidate.projectId === PROJECT_ID &&
+              candidate.expectedEpoch === 0 &&
+              candidate.sourceRef === "main" &&
+              candidate.path === null &&
+              candidate.copyChangesFromCurrent === true,
           );
           expect(
             request,
@@ -4945,7 +5016,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
               .slice(-40)
               .join(", ")}`,
           ).toBeTruthy();
-          if (!request || request._tag !== WS_METHODS.gitCreateDetachedWorktree) {
+          if (!request || request._tag !== WS_METHODS.vcsCreateWorkspace) {
             throw new Error("Expected create worktree request.");
           }
           return request;

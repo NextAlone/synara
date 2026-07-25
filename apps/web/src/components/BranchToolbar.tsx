@@ -1,7 +1,7 @@
 // FILE: BranchToolbar.tsx
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
-import type { ThreadId, RuntimeMode, VcsBackend } from "@synara/contracts";
+import type { ThreadId, RuntimeMode } from "@synara/contracts";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   CheckIcon,
@@ -12,7 +12,7 @@ import {
 } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAppSettings } from "~/appSettings";
 
 import { newCommandId, cn } from "../lib/utils";
@@ -433,39 +433,49 @@ export default function BranchToolbar({
   });
   const [rateLimitsOpen, setRateLimitsOpen] = useState(true);
   const [envPickerOpen, setEnvPickerOpen] = useState(false);
-  const [vcsPickerOpen, setVcsPickerOpen] = useState(false);
-  const [switchingVcsBackend, setSwitchingVcsBackend] = useState(false);
-  const vcsState = activeProject?.vcs ?? { epoch: 0, binding: null };
-  const vcsBackend = vcsState.binding?.backend ?? null;
-  const selectVcsBackend = useCallback(
-    (backend: VcsBackend) => {
-      const api = readNativeApi();
-      if (!api || !activeProject || switchingVcsBackend || backend === vcsBackend) {
-        setVcsPickerOpen(false);
-        return;
-      }
-      setVcsPickerOpen(false);
-      setSwitchingVcsBackend(true);
-      void api.vcs
-        .setBackend({
-          projectId: activeProject.id,
-          expectedEpoch: vcsState.epoch,
-          backend,
-        })
-        .then(() => invalidateVcsQueries(queryClient))
-        .catch((error: unknown) => {
-          toastManager.add({
-            type: "error",
-            title: "Could not change source control backend.",
-            description: error instanceof Error ? error.message : "An unknown error occurred.",
-          });
-        })
-        .finally(() => {
-          setSwitchingVcsBackend(false);
+  const projectedVcsState = activeProject?.vcs ?? { epoch: 0, binding: null };
+  const projectUsesGlobalBackend =
+    projectedVcsState.binding?.backend === settings.vcsBackend;
+  const vcsState = projectUsesGlobalBackend
+    ? projectedVcsState
+    : { ...projectedVcsState, binding: null };
+
+  useEffect(() => {
+    if (
+      !activeProject ||
+      activeProject.kind !== "project" ||
+      projectUsesGlobalBackend
+    ) {
+      return;
+    }
+    const api = readNativeApi();
+    if (!api) return;
+    let cancelled = false;
+    void api.vcs
+      .configureProject({
+        projectId: activeProject.id,
+        expectedEpoch: projectedVcsState.epoch,
+      })
+      .then(() => invalidateVcsQueries(queryClient))
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        toastManager.add({
+          type: "error",
+          title: `Could not configure this project for ${settings.vcsBackend === "jj" ? "JJ" : "Git"}.`,
+          description: error instanceof Error ? error.message : "An unknown error occurred.",
         });
-    },
-    [activeProject, queryClient, switchingVcsBackend, vcsBackend, vcsState.epoch],
-  );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeProject?.id,
+    activeProject?.kind,
+    projectUsesGlobalBackend,
+    projectedVcsState.epoch,
+    queryClient,
+    settings.vcsBackend,
+  ]);
 
   if (!activeThreadId || !activeProject) return null;
 
@@ -487,65 +497,23 @@ export default function BranchToolbar({
     >
       <div className={isPanel ? "flex flex-col gap-0.5" : "flex items-center gap-2"}>
         {activeProject.kind === "project" ? (
-          <Menu open={vcsPickerOpen} onOpenChange={setVcsPickerOpen}>
-            <MenuTrigger
-              render={
-                <button
-                  type="button"
-                  disabled={switchingVcsBackend}
-                  className={
-                    isPanel
-                      ? ENVIRONMENT_ROW_CLASS_NAME
-                      : COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME
-                  }
-                />
-              }
+          isPanel ? (
+            <div className={cn(ENVIRONMENT_ROW_CLASS_NAME, "cursor-default hover:bg-transparent")}>
+              <EnvironmentRowBody
+                icon={<GitBranchIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+                label="Source control"
+                trailing={settings.vcsBackend === "jj" ? "JJ" : "Git"}
+              />
+            </div>
+          ) : (
+            <span
+              className="inline-flex items-center gap-1.5 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)]"
+              title="Source control backend is configured globally in Settings"
             >
-              {isPanel ? (
-                <EnvironmentRowBody
-                  icon={<GitBranchIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-                  label="Source control"
-                  trailing={
-                    <span className="flex items-center gap-1.5">
-                      <span>{vcsBackend === "jj" ? "JJ" : vcsBackend === "git" ? "Git" : "Choose"}</span>
-                      <EnvironmentRowChevron />
-                    </span>
-                  }
-                />
-              ) : (
-                <>
-                  <GitBranchIcon className="size-3.5" />
-                  {vcsBackend === "jj" ? "JJ" : vcsBackend === "git" ? "Git" : "VCS"}
-                  <ChevronDownIcon className="size-3 opacity-60" />
-                </>
-              )}
-            </MenuTrigger>
-            <ComposerPickerMenuPopup
-              align="start"
-              side={isPanel ? "bottom" : "top"}
-              sideOffset={6}
-              className="w-56 min-w-56"
-            >
-              <MenuGroup>
-                <MenuGroupLabel>Source control backend</MenuGroupLabel>
-                <MenuRadioGroup
-                  value={vcsBackend ?? ""}
-                  onValueChange={(value) => {
-                    if (value === "git" || value === "jj") {
-                      selectVcsBackend(value);
-                    }
-                  }}
-                >
-                  <MenuRadioItem value="git">
-                    Git{vcsBackend === null ? " (initialize if needed)" : ""}
-                  </MenuRadioItem>
-                  <MenuRadioItem value="jj">
-                    Jujutsu (JJ){vcsBackend === null ? " (initialize if needed)" : ""}
-                  </MenuRadioItem>
-                </MenuRadioGroup>
-              </MenuGroup>
-            </ComposerPickerMenuPopup>
-          </Menu>
+              <GitBranchIcon className="size-3.5" />
+              {settings.vcsBackend === "jj" ? "JJ" : "Git"}
+            </span>
+          )
         ) : null}
 
         {showEnvPicker ? (
@@ -674,6 +642,7 @@ export default function BranchToolbar({
           <BranchToolbarBranchSelector
             projectId={activeProject.id}
             projectVcs={vcsState}
+            vcsBackend={settings.vcsBackend}
             activeThreadId={hasServerThread ? activeThreadId : null}
             activeProjectCwd={branchProjectCwd ?? activeProject.cwd}
             activeThreadBranch={activeThreadBranch}

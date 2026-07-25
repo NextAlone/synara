@@ -54,6 +54,7 @@ export function SettingsSelectControl({
   ariaLabel,
   triggerClassName = "w-full sm:w-44",
   valueContent,
+  disabled = false,
   children,
 }: {
   value: string;
@@ -61,11 +62,13 @@ export function SettingsSelectControl({
   ariaLabel: string;
   triggerClassName?: string;
   valueContent: ReactNode;
+  disabled?: boolean;
   children: ReactNode;
 }) {
   return (
     <Select
       value={value}
+      disabled={disabled}
       onValueChange={(next) => {
         if (next !== null) onValueChange(next);
       }}

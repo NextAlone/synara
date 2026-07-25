@@ -4,6 +4,7 @@ import {
   ThreadId,
   type OrchestrationProjectShell,
   type ProjectVcsBinding,
+  type VcsBackend,
 } from "@synara/contracts";
 import { Effect, Option } from "effect";
 import { describe, expect, it, vi } from "vitest";
@@ -45,6 +46,8 @@ function project(
 
 function dependencies(input: {
   project: OrchestrationProjectShell;
+  vcsBackend?: VcsBackend;
+  commandReadModel?: Record<string, unknown>;
   thread?: Record<string, unknown> | null;
   shellThreads?: ReadonlyArray<Record<string, unknown>>;
   git?: Partial<GitCoreShape>;
@@ -56,6 +59,13 @@ function dependencies(input: {
   removeDirectory?: (path: string) => Promise<void>;
 }) {
   const dispatched: unknown[] = [];
+  let vcsBackend =
+    input.vcsBackend ?? input.project.vcs.binding?.backend ?? "git";
+  const setVcsBackend = vi.fn((backend: VcsBackend) =>
+    Effect.sync(() => {
+      vcsBackend = backend;
+    }),
+  );
   const projection = {
     getProjectShellById: () => Effect.succeed(Option.some(input.project)),
     getThreadShellById: () =>
@@ -67,6 +77,16 @@ function dependencies(input: {
         projects: [input.project],
         threads: input.shellThreads ?? [],
       }),
+    getCommandReadModel: () =>
+      Effect.succeed(
+        input.commandReadModel ?? {
+          snapshotSequence: 1,
+          spaces: [],
+          projects: [{ ...input.project, deletedAt: null }],
+          threads: [],
+          updatedAt: NOW,
+        },
+      ),
   } as unknown as ProjectionSnapshotQueryShape;
   const orchestrationEngine = {
     dispatch: (command: unknown) =>
@@ -77,6 +97,7 @@ function dependencies(input: {
   } as unknown as OrchestrationEngineShape;
   return {
     dispatched,
+    setVcsBackend,
     value: {
       git: {
         execute: () =>
@@ -97,6 +118,8 @@ function dependencies(input: {
       },
       orchestrationEngine,
       projection,
+      getVcsBackend: Effect.sync(() => vcsBackend),
+      setVcsBackend,
       canonicalizePath: async (path: string) => path,
       now: () => NOW,
       makeCommandId: () => CommandId.makeUnsafe("cmd-project-vcs-service"),
@@ -130,6 +153,109 @@ const pullRequest = {
 };
 
 describe("ProjectVcs", () => {
+  it("changes the process-wide backend without mutating one project binding", async () => {
+    const boundProject = project({
+      epoch: 3,
+      binding: { ...jjBinding, backend: "git" },
+    });
+    const deps = dependencies({
+      project: boundProject,
+      vcsBackend: "git",
+      commandReadModel: {
+        snapshotSequence: 1,
+        spaces: [],
+        projects: [{ ...boundProject, deletedAt: null }],
+        threads: [],
+        updatedAt: NOW,
+      },
+    });
+
+    await expect(
+      Effect.runPromise(makeProjectVcsWith(deps.value).setBackend({ backend: "jj" })),
+    ).resolves.toEqual({ backend: "jj" });
+    expect(deps.setVcsBackend).toHaveBeenCalledWith("jj");
+    expect(deps.dispatched).toHaveLength(0);
+  });
+
+  it("blocks a global backend switch while an affected workspace thread exists", async () => {
+    const boundProject = project({
+      epoch: 3,
+      binding: { ...jjBinding, backend: "git" },
+    });
+    const deps = dependencies({
+      project: boundProject,
+      vcsBackend: "git",
+      commandReadModel: {
+        snapshotSequence: 1,
+        spaces: [],
+        projects: [{ ...boundProject, deletedAt: null }],
+        threads: [
+          {
+            id: THREAD_ID,
+            projectId: PROJECT_ID,
+            deletedAt: null,
+            worktreePath: "/managed/existing",
+            session: null,
+            latestTurn: null,
+            activities: [],
+          },
+        ],
+        updatedAt: NOW,
+      },
+    });
+
+    await expect(
+      Effect.runPromise(makeProjectVcsWith(deps.value).setBackend({ backend: "jj" })),
+    ).rejects.toThrow("Move or remove 1 existing workspace thread");
+    expect(deps.setVcsBackend).not.toHaveBeenCalled();
+  });
+
+  it("treats an unbound project with an existing workspace as affected", async () => {
+    const unboundProject = project({ epoch: 0, binding: null });
+    const deps = dependencies({
+      project: unboundProject,
+      vcsBackend: "git",
+      commandReadModel: {
+        snapshotSequence: 1,
+        spaces: [],
+        projects: [{ ...unboundProject, deletedAt: null }],
+        threads: [
+          {
+            id: THREAD_ID,
+            projectId: PROJECT_ID,
+            deletedAt: null,
+            worktreePath: "/managed/legacy",
+            session: null,
+            latestTurn: null,
+            activities: [],
+          },
+        ],
+        updatedAt: NOW,
+      },
+    });
+
+    await expect(
+      Effect.runPromise(makeProjectVcsWith(deps.value).setBackend({ backend: "jj" })),
+    ).rejects.toThrow("Move or remove 1 existing workspace thread");
+    expect(deps.setVcsBackend).not.toHaveBeenCalled();
+  });
+
+  it("rejects project operations whose persisted binding differs from the global backend", async () => {
+    const deps = dependencies({
+      project: project({ epoch: 3, binding: jjBinding }),
+      vcsBackend: "git",
+    });
+
+    await expect(
+      Effect.runPromise(
+        makeProjectVcsWith(deps.value).status({
+          projectId: PROJECT_ID,
+          expectedEpoch: 3,
+        }),
+      ),
+    ).rejects.toThrow("not configured for the global Git backend");
+  });
+
   it("detects and persists only the explicitly selected backend", async () => {
     const gitExecute = vi.fn(() =>
       Effect.succeed({ code: 0, stdout: "/repo\n", stderr: "" }),
@@ -143,15 +269,15 @@ describe("ProjectVcs", () => {
     );
     const deps = dependencies({
       project: project({ epoch: 0, binding: null }),
+      vcsBackend: "jj",
       git: { execute: gitExecute },
       jj: { detectRepository: jjDetect },
     });
     const service = makeProjectVcsWith(deps.value);
 
     const result = await Effect.runPromise(
-      service.setBackend({
+      service.configureProject({
         projectId: PROJECT_ID,
-        backend: "jj",
         expectedEpoch: 0,
       }),
     );
@@ -182,14 +308,14 @@ describe("ProjectVcs", () => {
       );
     const deps = dependencies({
       project: project({ epoch: 0, binding: null }, "/repo"),
+      vcsBackend: "jj",
       jj: { detectRepository, initRepository },
     });
     const service = makeProjectVcsWith(deps.value);
 
     const result = await Effect.runPromise(
-      service.setBackend({
+      service.configureProject({
         projectId: PROJECT_ID,
-        backend: "jj",
         expectedEpoch: 0,
       }),
     );
@@ -220,6 +346,7 @@ describe("ProjectVcs", () => {
       );
     const deps = dependencies({
       project: project({ epoch: 0, binding: null }),
+      vcsBackend: "jj",
       git: {
         execute: () =>
           Effect.succeed({ code: 0, stdout: "/repo\n", stderr: "" }),
@@ -229,9 +356,8 @@ describe("ProjectVcs", () => {
     const service = makeProjectVcsWith(deps.value);
 
     const result = await Effect.runPromise(
-      service.setBackend({
+      service.configureProject({
         projectId: PROJECT_ID,
-        backend: "jj",
         expectedEpoch: 0,
       }),
     );
@@ -261,9 +387,8 @@ describe("ProjectVcs", () => {
     const service = makeProjectVcsWith(deps.value);
 
     const result = await Effect.runPromise(
-      service.setBackend({
+      service.configureProject({
         projectId: PROJECT_ID,
-        backend: "git",
         expectedEpoch: 0,
       }),
     );
@@ -296,9 +421,8 @@ describe("ProjectVcs", () => {
 
     await expect(
       Effect.runPromise(
-        service.setBackend({
+        service.configureProject({
           projectId: PROJECT_ID,
-          backend: "git",
           expectedEpoch: 0,
         }),
       ),
@@ -309,31 +433,45 @@ describe("ProjectVcs", () => {
     expect(deps.dispatched).toHaveLength(0);
   });
 
-  it("does not initialize a missing backend while switching repositories", async () => {
+  it("initializes JJ lazily when a Git-bound project adopts the global JJ backend", async () => {
     const initRepository = vi.fn(() => Effect.void);
+    const detectRepository = vi
+      .fn()
+      .mockReturnValueOnce(Effect.succeed(null))
+      .mockReturnValueOnce(
+        Effect.succeed({
+          workspaceRoot: "/repo",
+          repositoryStorePath: "/store",
+          gitStorePath: "/repo/.git",
+        }),
+      );
     const deps = dependencies({
       project: project({
         epoch: 4,
         binding: { ...jjBinding, backend: "git" },
       }),
+      vcsBackend: "jj",
       jj: {
-        detectRepository: () => Effect.succeed(null),
+        detectRepository,
         initRepository,
+      },
+      git: {
+        execute: () =>
+          Effect.succeed({ code: 0, stdout: "/repo\n", stderr: "" }),
       },
     });
     const service = makeProjectVcsWith(deps.value);
 
     await expect(
       Effect.runPromise(
-        service.setBackend({
+        service.configureProject({
           projectId: PROJECT_ID,
-          backend: "jj",
           expectedEpoch: 4,
         }),
       ),
-    ).rejects.toThrow("not inside a JJ workspace");
-    expect(initRepository).not.toHaveBeenCalled();
-    expect(deps.dispatched).toHaveLength(0);
+    ).resolves.toEqual({ vcs: { epoch: 5, binding: jjBinding } });
+    expect(initRepository).toHaveBeenCalledWith("/repo");
+    expect(deps.dispatched).toHaveLength(1);
   });
 
   it("blocks a Git-to-JJ switch while projected worktree threads still exist", async () => {
@@ -342,6 +480,7 @@ describe("ProjectVcs", () => {
         epoch: 4,
         binding: { ...jjBinding, backend: "git" },
       }),
+      vcsBackend: "jj",
       shellThreads: [
         {
           id: THREAD_ID,
@@ -362,9 +501,8 @@ describe("ProjectVcs", () => {
 
     await expect(
       Effect.runPromise(
-        service.setBackend({
+        service.configureProject({
           projectId: PROJECT_ID,
-          backend: "jj",
           expectedEpoch: 4,
         }),
       ),
@@ -401,9 +539,8 @@ describe("ProjectVcs", () => {
 
     await expect(
       Effect.runPromise(
-        service.setBackend({
+        service.configureProject({
           projectId: PROJECT_ID,
-          backend: "jj",
           expectedEpoch: 4,
         }),
       ),
@@ -411,7 +548,7 @@ describe("ProjectVcs", () => {
     expect(deps.dispatched).toHaveLength(0);
   });
 
-  it("waits for an in-flight project mutation before switching backends", async () => {
+  it("waits for an in-flight project mutation before switching globally", async () => {
     let releaseCreateBranch: (() => void) | undefined;
     let markCreateBranchStarted: (() => void) | undefined;
     const createBranchStarted = new Promise<void>((resolve) => {
@@ -426,20 +563,21 @@ describe("ProjectVcs", () => {
           }),
       ),
     );
-    const detectRepository = vi.fn(() =>
-      Effect.succeed({
-        workspaceRoot: "/repo",
-        repositoryStorePath: "/store",
-        gitStorePath: "/repo",
-      }),
-    );
+    const boundProject = project({
+      epoch: 4,
+      binding: { ...jjBinding, backend: "git" },
+    });
     const deps = dependencies({
-      project: project({
-        epoch: 4,
-        binding: { ...jjBinding, backend: "git" },
-      }),
+      project: boundProject,
+      vcsBackend: "git",
+      commandReadModel: {
+        snapshotSequence: 1,
+        spaces: [],
+        projects: [{ ...boundProject, deletedAt: null }],
+        threads: [],
+        updatedAt: NOW,
+      },
       git: { createBranch },
-      jj: { detectRepository },
     });
     const service = makeProjectVcsWith(deps.value);
 
@@ -453,18 +591,16 @@ describe("ProjectVcs", () => {
     await createBranchStarted;
     const switchBackend = Effect.runPromise(
       service.setBackend({
-        projectId: PROJECT_ID,
         backend: "jj",
-        expectedEpoch: 4,
       }),
     );
     await new Promise<void>((resolve) => queueMicrotask(resolve));
-    expect(detectRepository).not.toHaveBeenCalled();
+    expect(deps.setVcsBackend).not.toHaveBeenCalled();
 
     releaseCreateBranch?.();
     await create;
     await switchBackend;
-    expect(detectRepository).toHaveBeenCalledOnce();
+    expect(deps.setVcsBackend).toHaveBeenCalledOnce();
   });
 
   it("derives a thread workspace cwd and routes status only to JJ", async () => {

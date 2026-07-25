@@ -53,6 +53,7 @@ import {
   CheckpointStore,
   type CheckpointStoreShape,
 } from "../../checkpointing/Services/CheckpointStore.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asItemId = (value: string): RuntimeItemId => RuntimeItemId.makeUnsafe(value);
@@ -243,6 +244,7 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);

@@ -468,6 +468,9 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       }
       const callerIsolatedInWorktree = caller?.envMode === "worktree";
       const providerAvailabilities = yield* loadProviderAvailabilities;
+      const selectedVcsBackend = yield* projectVcs.getBackend.pipe(
+        Effect.mapError((error) => new ToolInputError(errorText(error))),
+      );
 
       const prepared = yield* Effect.forEach(input.threads, (spec, index) =>
         Effect.gen(function* () {
@@ -541,12 +544,15 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           let worktreeRef: string | null = null;
           let copyChangesFrom: string | null = null;
           let plannedWorktreePath: string | null = null;
-          const vcsBinding = project.vcs.binding;
+          const vcsBinding =
+            project.vcs.binding?.backend === selectedVcsBackend
+              ? project.vcs.binding
+              : null;
           if (environment === "worktree") {
             if (!vcsBinding) {
               return yield* Effect.fail(
                 new ToolInputError(
-                  `Project "${projectId}" must select Git or JJ before creating an isolated workspace.`,
+                  `Project "${projectId}" is not configured for the global ${selectedVcsBackend === "jj" ? "JJ" : "Git"} backend yet.`,
                 ),
               );
             }

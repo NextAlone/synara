@@ -50,16 +50,25 @@ export const VcsProjectTarget = Schema.Struct({
 export type VcsProjectTarget = typeof VcsProjectTarget.Type;
 
 export const VcsSetBackendInput = Schema.Struct({
-  projectId: ProjectId,
   backend: VcsBackend,
-  expectedEpoch: NonNegativeInt,
 });
 export type VcsSetBackendInput = typeof VcsSetBackendInput.Type;
 
 export const VcsSetBackendResult = Schema.Struct({
-  vcs: ProjectVcsState,
+  backend: VcsBackend,
 });
 export type VcsSetBackendResult = typeof VcsSetBackendResult.Type;
+
+export const VcsConfigureProjectInput = Schema.Struct({
+  projectId: ProjectId,
+  expectedEpoch: NonNegativeInt,
+});
+export type VcsConfigureProjectInput = typeof VcsConfigureProjectInput.Type;
+
+export const VcsConfigureProjectResult = Schema.Struct({
+  vcs: ProjectVcsState,
+});
+export type VcsConfigureProjectResult = typeof VcsConfigureProjectResult.Type;
 
 export const VcsFileChangeStatus = Schema.Literals([
   "modified",

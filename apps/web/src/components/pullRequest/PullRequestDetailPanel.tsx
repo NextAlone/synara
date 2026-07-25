@@ -182,8 +182,8 @@ export function PullRequestDetailPanel({
   const project = useStore(
     useMemo(() => createProjectSelector(input.projectId), [input.projectId]),
   );
-  const vcsTarget = makeVcsQueryTarget(project);
-  // Use the configured project backend for local PR preparation. Hosted PR
+  const vcsTarget = makeVcsQueryTarget(project, null, settings.vcsBackend);
+  // Use the configured global backend for local PR preparation. Hosted PR
   // metadata remains GitHub-backed, while checkout/workspace creation stays
   // native to Git or JJ.
   const prepareThreadMutation = useMutation(

@@ -77,6 +77,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { SelectItem } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
+import { toastManager } from "../components/ui/toast";
 import { RouteInsetSurface } from "../components/RouteInsetSurface";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
@@ -192,10 +193,11 @@ function SettingsRouteView() {
     systemUiFont,
     setSystemUiFont,
   } = useTheme();
-  const { settings, defaults, updateSettings, resetSettings } = useAppSettings();
+  const { settings, defaults, updateSettings, setVcsBackend, resetSettings } = useAppSettings();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
+  const [switchingVcsBackend, setSwitchingVcsBackend] = useState(false);
   const shouldShowFontSmoothing = isMacPlatform(
     typeof navigator === "undefined" ? "" : navigator.platform,
   );
@@ -228,6 +230,7 @@ function SettingsRouteView() {
     ...(!isDefaultActiveTheme ? [`${resolvedTheme === "dark" ? "Dark" : "Light"} theme pack`] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
     ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
+    ...(settings.vcsBackend !== defaults.vcsBackend ? ["Source control backend"] : []),
     ...(settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder
       ? ["Project sort order"]
       : []),
@@ -305,6 +308,22 @@ function SettingsRouteView() {
     resetAllThemes();
     resetSettings();
     setResetEpoch((current) => current + 1);
+  }
+
+  function changeVcsBackend(backend: AppSettings["vcsBackend"]) {
+    if (switchingVcsBackend || backend === settings.vcsBackend) return;
+    setSwitchingVcsBackend(true);
+    void setVcsBackend(backend)
+      .catch((error: unknown) => {
+        toastManager.add({
+          type: "error",
+          title: "Could not change source control backend.",
+          description: error instanceof Error ? error.message : "An unknown error occurred.",
+        });
+      })
+      .finally(() => {
+        setSwitchingVcsBackend(false);
+      });
   }
 
   // Shared on/off settings row: a labelled Switch bound to a boolean AppSettings
@@ -420,6 +439,39 @@ function SettingsRouteView() {
               </SelectItem>
               <SelectItem hideIndicator value="worktree">
                 New worktree
+              </SelectItem>
+            </SettingsSelectControl>
+          }
+        />
+
+        <SettingsRow
+          title="Source control"
+          description="Use one backend across every project. Switching is blocked while affected tasks are running or attached to a workspace."
+          resetAction={
+            settings.vcsBackend !== defaults.vcsBackend ? (
+              <SettingResetButton
+                label="source control backend"
+                onClick={() => changeVcsBackend(defaults.vcsBackend)}
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={settings.vcsBackend}
+              disabled={switchingVcsBackend}
+              onValueChange={(value) => {
+                if (value === "git" || value === "jj") {
+                  changeVcsBackend(value);
+                }
+              }}
+              ariaLabel="Source control backend"
+              valueContent={settings.vcsBackend === "jj" ? "Jujutsu (JJ)" : "Git"}
+            >
+              <SelectItem hideIndicator value="git">
+                Git
+              </SelectItem>
+              <SelectItem hideIndicator value="jj">
+                Jujutsu (JJ)
               </SelectItem>
             </SettingsSelectControl>
           }

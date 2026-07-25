@@ -13,6 +13,7 @@ import {
   DEFAULT_SERVER_SETTINGS_VIEW,
   TrimmedNonEmptyString,
   ProviderKind,
+  VcsBackend,
   type ProviderStartOptions,
   type ServerSettingsView,
   type ServerSettingsPatch,
@@ -40,6 +41,7 @@ import {
 import { ensureNativeApi } from "./nativeApi";
 import { providerDiscoveryQueryKeys } from "./lib/providerDiscoveryReactQuery";
 import { serverQueryKeys, serverSettingsQueryOptions } from "./lib/serverReactQuery";
+import { invalidateVcsQueries } from "./lib/vcsReactQuery";
 import {
   DEFAULT_UI_DENSITY,
   UI_DENSITY_MODES,
@@ -202,6 +204,7 @@ export const AppSettingsSchema = Schema.Struct({
   openCodeServerPasswordConfigured: Schema.Boolean.pipe(withDefaults(() => false)),
   openCodeExperimentalWebSockets: Schema.Boolean.pipe(withDefaults(() => false)),
   defaultThreadEnvMode: EnvMode.pipe(withDefaults(() => "local" as const satisfies EnvMode)),
+  vcsBackend: VcsBackend.pipe(withDefaults(() => "git")),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadArchive: Schema.Boolean.pipe(withDefaults(() => false)),
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -557,6 +560,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     cursorApiEndpoint: settings.providers.cursor.apiEndpoint,
     cursorBinaryPath: settings.providers.cursor.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
+    vcsBackend: settings.vcsBackend,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
@@ -1263,9 +1267,41 @@ export function useAppSettings() {
       });
   };
 
+  const setVcsBackend = async (backend: AppSettings["vcsBackend"]) => {
+    const result = await ensureNativeApi().vcs.setBackend({ backend });
+    setSettings((previous) =>
+      normalizeAppSettings({
+        ...previous,
+        vcsBackend: result.backend,
+      }),
+    );
+    queryClient.setQueryData<ServerSettingsView>(
+      serverQueryKeys.settings(),
+      (previous) =>
+        previous
+          ? {
+              ...previous,
+              vcsBackend: result.backend,
+            }
+          : previous,
+    );
+    await invalidateVcsQueries(queryClient);
+    return result.backend;
+  };
+
   const resetSettings = () => {
-    setSettings(DEFAULT_APP_SETTINGS);
+    setSettings({
+      ...DEFAULT_APP_SETTINGS,
+      // A coordinated backend switch can be rejected while tasks or
+      // workspaces are active, so keep the confirmed value until it succeeds.
+      vcsBackend: settings.vcsBackend,
+    });
     void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
+    if (settings.vcsBackend !== defaults.vcsBackend) {
+      void setVcsBackend(defaults.vcsBackend).catch(() => {
+        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
+      });
+    }
     const serverPatch = appSettingsPatchToServerSettingsPatch(defaults);
     void ensureNativeApi()
       .server.updateSettings(serverPatch)
@@ -1281,6 +1317,7 @@ export function useAppSettings() {
     settings,
     serverSettings: serverSettingsQuery.data,
     updateSettings,
+    setVcsBackend,
     resetSettings,
     defaults,
   } as const;

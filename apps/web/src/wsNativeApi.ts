@@ -517,6 +517,8 @@ export function createWsNativeApi(): NativeApi {
     },
     vcs: {
       setBackend: (input) => transport.request(WS_METHODS.vcsSetBackend, input),
+      configureProject: (input) =>
+        transport.request(WS_METHODS.vcsConfigureProject, input),
       status: (input) => transport.request(WS_METHODS.vcsStatus, input),
       readDiff: (input) => transport.request(WS_METHODS.vcsReadDiff, input),
       listReferences: (input) => transport.request(WS_METHODS.vcsListReferences, input),

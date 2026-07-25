@@ -1,6 +1,6 @@
 import * as nodePath from "node:path";
 
-import { WS_METHODS, WsRpcError } from "@synara/contracts";
+import { WS_METHODS, WsRpcError, type VcsBackend } from "@synara/contracts";
 import { Effect } from "effect";
 
 import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -45,6 +45,7 @@ function workspaceRootForProjectPath(
 
 export interface LegacyGitBackendBoundaryDependencies {
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
+  readonly getVcsBackend: Effect.Effect<VcsBackend, unknown>;
   readonly canonicalizePath: (path: string) => Effect.Effect<string>;
   readonly resolveJjGitStorePath: (
     cwd: string,
@@ -70,6 +71,9 @@ export function makeLegacyGitBackendBoundary(
     }
 
     return Effect.gen(function* () {
+      if ((yield* dependencies.getVcsBackend) !== "jj") {
+        return;
+      }
       const [cwd, snapshot] = yield* Effect.all(
         [
           dependencies.canonicalizePath(input.cwd),
@@ -84,6 +88,8 @@ export function makeLegacyGitBackendBoundary(
       }> = [];
 
       for (const project of snapshot.projects) {
+        if ((project.kind ?? "project") !== "project") continue;
+        jjRoots.push({ projectId: project.id, root: project.workspaceRoot });
         const binding = project.vcs.binding;
         if (binding?.backend !== "jj") continue;
         jjRoots.push({ projectId: project.id, root: binding.repoRoot });
@@ -151,7 +157,7 @@ export function makeLegacyGitBackendBoundary(
         new WsRpcError({
           code: "VCS_BACKEND_MISMATCH",
           message:
-            `Project '${match.projectId}' uses JJ. ${input.method} cannot read or mutate its ` +
+            `The global backend is JJ. ${input.method} cannot read or mutate project '${match.projectId}' through ` +
             "local Git state; use the project-scoped VCS API instead.",
         }),
       );

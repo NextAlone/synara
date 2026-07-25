@@ -45,6 +45,7 @@ import {
   threadHasInFlightTurn,
 } from "../commandInvariants.ts";
 import { resolveProviderSessionThread } from "../providerSessionThread.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 
 type ReactorInput =
   | {
@@ -127,6 +128,7 @@ const make = Effect.gen(function* () {
   const checkpointStore = yield* CheckpointStore;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
+  const serverSettings = yield* ServerSettingsService;
   const receiptBus = yield* RuntimeReceiptBus;
   const turnCheckpointCoordinator = yield* TurnCheckpointCoordinator;
   const pendingMessageStartByThread = new Map<ThreadId, MessageId>();
@@ -337,7 +339,12 @@ const make = Effect.gen(function* () {
       return undefined;
     }
     const backend = input.project.vcs?.binding?.backend;
-    if (!backend || !(yield* checkpointStore.isRepository({ cwd, backend }))) {
+    const selectedBackend = (yield* serverSettings.getSettings).vcsBackend;
+    if (
+      !backend ||
+      backend !== selectedBackend ||
+      !(yield* checkpointStore.isRepository({ cwd, backend }))
+    ) {
       return undefined;
     }
     return { cwd, backend } satisfies { readonly cwd: string; readonly backend: VcsBackend };

@@ -60,6 +60,7 @@ import {
   GitUnstageFilesInput,
 } from "./git";
 import {
+  VcsConfigureProjectInput,
   VcsCreateReferenceInput,
   VcsCreateWorkspaceInput,
   VcsHandoffThreadInput,
@@ -170,8 +171,9 @@ export const WS_METHODS = {
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
 
-  // Project-scoped VCS methods
+  // Global VCS selection plus project-scoped VCS methods
   vcsSetBackend: "vcs.setBackend",
+  vcsConfigureProject: "vcs.configureProject",
   vcsStatus: "vcs.status",
   vcsReadDiff: "vcs.readDiff",
   vcsListReferences: "vcs.listReferences",
@@ -357,8 +359,9 @@ const WebSocketRequestBody = Schema.Union([
   // Shell methods
   tagRequestBody(WS_METHODS.shellOpenInEditor, OpenInEditorInput),
 
-  // Project-scoped VCS methods
+  // Global VCS selection plus project-scoped VCS methods
   tagRequestBody(WS_METHODS.vcsSetBackend, VcsSetBackendInput),
+  tagRequestBody(WS_METHODS.vcsConfigureProject, VcsConfigureProjectInput),
   tagRequestBody(WS_METHODS.vcsStatus, VcsStatusInput),
   tagRequestBody(WS_METHODS.vcsReadDiff, VcsReadDiffInput),
   tagRequestBody(WS_METHODS.vcsListReferences, VcsListReferencesInput),
