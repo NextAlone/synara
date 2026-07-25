@@ -7288,13 +7288,15 @@ export default function ChatView({
 
     // The branch query can finish just after the user chooses New worktree. Use the
     // resolved active branch at send time instead of rejecting an otherwise valid fast send.
+    // JJ defaults to the default workspace working copy (`@`); Git falls back to the root branch.
     if (
       isFirstMessage &&
       nextThreadEnvMode === "worktree" &&
       !nextThreadWorktreePath &&
       !nextThreadBranch
     ) {
-      nextThreadBranch = activeRootBranch ?? null;
+      nextThreadBranch =
+        settings.vcsBackend === "jj" ? "@" : (activeRootBranch ?? null);
     }
 
     const baseBranchForWorktree =
@@ -7302,14 +7304,15 @@ export default function ChatView({
         ? nextThreadBranch
         : null;
 
-    // In worktree mode, require an explicit base branch so we don't silently
-    // fall back to local execution when branch selection is missing.
+    // In worktree mode, require an explicit base so we don't silently fall back to local.
     const shouldCreateWorktree =
       isFirstMessage && nextThreadEnvMode === "worktree" && !nextThreadWorktreePath;
     if (shouldCreateWorktree && !nextThreadBranch) {
       setStoreThreadError(
         threadIdForSend,
-        "Select a base branch before sending in New worktree mode.",
+        settings.vcsBackend === "jj"
+          ? "Select a base bookmark or revision (@ / @-) before sending in New worktree mode."
+          : "Select a base branch before sending in New worktree mode.",
       );
       return false;
     }
@@ -7490,8 +7493,10 @@ export default function ChatView({
           projectId: targetProjectIdForSend,
           expectedEpoch: targetProjectVcsForSend.epoch,
           sourceRef: baseBranchForWorktree,
-          path: null,
-          copyChangesFromCurrent: baseBranchForWorktree === activeRootBranch,
+          // JJ can only copy dirty files when the source is the current change (`@`).
+          // Git copies when the base is the currently checked-out branch.
+          copyChangesFromCurrent:
+            baseBranchForWorktree === "@" || baseBranchForWorktree === activeRootBranch,
         });
         beginLocalDispatch({
           worktreeSetupStepId: "prepare-thread",
@@ -8815,15 +8820,28 @@ export default function ChatView({
   ]);
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
+      const isJjBackend = settings.vcsBackend === "jj";
+      // JJ Local always follows default workspace `@` (no sticky bookmark).
+      // JJ Worktree defaults the create base to `@`; Git keeps the current branch.
       const nextBranch =
         mode === "worktree"
-          ? (activeThread?.branch ?? draftThread?.branch ?? activeRootBranch ?? null)
-          : (activeThread?.branch ?? draftThread?.branch ?? null);
+          ? isJjBackend
+            ? (activeThread?.branch ?? draftThread?.branch ?? "@")
+            : (activeThread?.branch ?? draftThread?.branch ?? activeRootBranch ?? null)
+          : isJjBackend
+            ? null
+            : (activeThread?.branch ?? draftThread?.branch ?? null);
+      const branchPatch =
+        mode === "local" && isJjBackend
+          ? { branch: null as string | null }
+          : nextBranch
+            ? { branch: nextBranch }
+            : {};
       if (isLocalDraftThread) {
         setDraftThreadContext(threadId, {
           envMode: mode,
           ...(mode === "local" ? { worktreePath: null } : {}),
-          ...(nextBranch ? { branch: nextBranch } : {}),
+          ...branchPatch,
         });
       }
       if (isServerThread && activeThread && !hasNativeUserMessages && !activeThread.session) {
@@ -8834,7 +8852,7 @@ export default function ChatView({
             commandId: newCommandId(),
             threadId,
             envMode: mode,
-            ...(nextBranch ? { branch: nextBranch } : {}),
+            ...branchPatch,
             ...(mode === "local" ? { worktreePath: null } : {}),
           });
         }
@@ -8850,6 +8868,7 @@ export default function ChatView({
       isServerThread,
       scheduleComposerFocus,
       setDraftThreadContext,
+      settings.vcsBackend,
       threadId,
     ],
   );

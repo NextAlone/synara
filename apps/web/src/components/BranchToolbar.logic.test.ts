@@ -3,8 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
+  getJjWorktreeBaseSpecialItems,
+  isJjLocalDefaultWorkspaceMode,
+  isJjSyntheticWorktreeBaseRef,
   resolveBranchSelectionTarget,
   resolveAssociatedWorktreeMetadataAfterWorkspacePatch,
+  resolveDefaultWorktreeBaseRef,
   resolveDraftEnvModeAfterBranchChange,
   resolveFixedLocalWorkspacePatch,
   resolveBranchToolbarValue,
@@ -133,16 +137,79 @@ describe("resolveBranchToolbarValue", () => {
     ).toBe("main");
   });
 
-  it("keeps an explicit JJ draft bookmark when several bookmarks share one revision", () => {
+  it("keeps an explicit JJ worktree base when several bookmarks share one revision", () => {
     expect(
       resolveBranchToolbarValue({
-        envMode: "local",
+        envMode: "worktree",
         activeWorktreePath: null,
         activeThreadBranch: "feature/selected",
         currentGitBranch: "feature/other",
         preferActiveThreadBranch: true,
       }),
     ).toBe("feature/selected");
+  });
+
+  it("shows @ for local JJ default workspace mode", () => {
+    expect(
+      resolveBranchToolbarValue({
+        envMode: "local",
+        activeWorktreePath: null,
+        activeThreadBranch: "main",
+        currentGitBranch: "main",
+        jjLocalDefaultWorkspace: true,
+      }),
+    ).toBe("@");
+  });
+
+  it("keeps an explicit JJ synthetic worktree base", () => {
+    expect(
+      resolveBranchToolbarValue({
+        envMode: "worktree",
+        activeWorktreePath: null,
+        activeThreadBranch: "@-",
+        currentGitBranch: "main",
+        preferActiveThreadBranch: true,
+      }),
+    ).toBe("@-");
+  });
+});
+
+describe("jj local vs worktree base helpers", () => {
+  it("treats local JJ without a workspace as default-workspace mode", () => {
+    expect(
+      isJjLocalDefaultWorkspaceMode({
+        backend: "jj",
+        envMode: "local",
+        activeWorktreePath: null,
+      }),
+    ).toBe(true);
+    expect(
+      isJjLocalDefaultWorkspaceMode({
+        backend: "jj",
+        envMode: "worktree",
+        activeWorktreePath: null,
+      }),
+    ).toBe(false);
+    expect(
+      isJjLocalDefaultWorkspaceMode({
+        backend: "git",
+        envMode: "local",
+        activeWorktreePath: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("defaults JJ worktree bases to @ and Git bases to the current reference", () => {
+    expect(resolveDefaultWorktreeBaseRef({ backend: "jj", currentReference: "main" })).toBe("@");
+    expect(resolveDefaultWorktreeBaseRef({ backend: "git", currentReference: "main" })).toBe(
+      "main",
+    );
+  });
+
+  it("exposes @ and @- as synthetic JJ worktree bases", () => {
+    expect(getJjWorktreeBaseSpecialItems().map((item) => item.value)).toEqual(["@", "@-"]);
+    expect(isJjSyntheticWorktreeBaseRef("@")).toBe(true);
+    expect(isJjSyntheticWorktreeBaseRef("main")).toBe(false);
   });
 });
 
@@ -158,6 +225,20 @@ describe("shouldSyncLocalThreadBranch", () => {
         isBranchActionPending: false,
       }),
     ).toBe(true);
+  });
+
+  it("never syncs a bookmark for local JJ default workspace mode", () => {
+    expect(
+      shouldSyncLocalThreadBranch({
+        envMode: "local",
+        activeWorktreePath: null,
+        activeThreadBranch: "main",
+        currentGitBranch: "feature/other",
+        hasServerThread: true,
+        isBranchActionPending: false,
+        jjLocalDefaultWorkspace: true,
+      }),
+    ).toBe(false);
   });
 
   it("does not sync while a branch action is pending", () => {
@@ -212,10 +293,10 @@ describe("shouldSyncLocalThreadBranch", () => {
     ).toBe(false);
   });
 
-  it("does not overwrite an explicit JJ draft bookmark from nearest-bookmark status", () => {
+  it("does not overwrite an explicit JJ worktree base from nearest-bookmark status", () => {
     expect(
       shouldSyncLocalThreadBranch({
-        envMode: "local",
+        envMode: "worktree",
         activeWorktreePath: null,
         activeThreadBranch: "feature/selected",
         currentGitBranch: "feature/other",

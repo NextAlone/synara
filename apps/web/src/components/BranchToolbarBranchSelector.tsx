@@ -45,10 +45,14 @@ import {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
   EnvMode,
+  getJjWorktreeBaseSpecialItems,
+  isJjLocalDefaultWorkspaceMode,
   resolveBranchSelectionTarget,
   resolveBranchToolbarValue,
+  resolveDefaultWorktreeBaseRef,
   shouldSyncLocalThreadBranch,
 } from "./BranchToolbar.logic";
+import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -347,13 +351,26 @@ function getBranchTriggerLabel(input: {
   effectiveEnvMode: EnvMode;
   resolvedActiveBranch: string | null;
   isJjBackend: boolean;
+  jjLocalDefaultWorkspace?: boolean;
 }): string {
-  const { activeWorktreePath, effectiveEnvMode, resolvedActiveBranch, isJjBackend } = input;
+  const {
+    activeWorktreePath,
+    effectiveEnvMode,
+    resolvedActiveBranch,
+    isJjBackend,
+    jjLocalDefaultWorkspace = false,
+  } = input;
+  if (jjLocalDefaultWorkspace) {
+    return "@";
+  }
   if (!resolvedActiveBranch) {
-    return isJjBackend ? "Select bookmark" : "Select branch";
+    return isJjBackend ? "Select base" : "Select branch";
   }
   if (effectiveEnvMode === "worktree" && !activeWorktreePath) {
-    return `From ${resolvedActiveBranch}`;
+    const special = getJjWorktreeBaseSpecialItems().find(
+      (item) => item.value === resolvedActiveBranch,
+    );
+    return special ? `From ${special.label}` : `From ${resolvedActiveBranch}`;
   }
   return resolvedActiveBranch;
 }
@@ -418,7 +435,18 @@ export function BranchToolbarBranchSelector({
   );
   const activeBackend = vcsTarget.backend;
   const isJjBackend = activeBackend === "jj";
-  const branchesQuery = useQuery(vcsReferencesQueryOptions(vcsTarget));
+  const isSelectingWorktreeBase =
+    effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath;
+  const jjLocalDefaultWorkspace = isJjLocalDefaultWorkspaceMode({
+    backend: activeBackend,
+    envMode: effectiveEnvMode,
+    activeWorktreePath,
+  });
+  const branchesQuery = useQuery({
+    ...vcsReferencesQueryOptions(vcsTarget),
+    // Local JJ never switches bookmarks; skip listing unless we need worktree bases.
+    enabled: !jjLocalDefaultWorkspace,
+  });
   const branchStatusQuery = useQuery(vcsStatusQueryOptions(vcsTarget));
   const branches = useMemo(
     () =>
@@ -444,40 +472,62 @@ export function BranchToolbarBranchSelector({
     activeWorktreePath,
     activeThreadBranch,
     currentGitBranch,
-    preferActiveThreadBranch: isJjBackend && !hasServerThread,
+    // Draft JJ worktree-base selection must keep the explicit base, including @ / @-.
+    preferActiveThreadBranch: isJjBackend && isSelectingWorktreeBase,
+    jjLocalDefaultWorkspace,
   });
   const branchNames = useMemo(() => branches.map((branch) => branch.name), [branches]);
   const branchByName = useMemo(
     () => new Map(branches.map((branch) => [branch.name, branch] as const)),
     [branches],
   );
+  const jjWorktreeBaseSpecials = useMemo(
+    () => (isJjBackend && isSelectingWorktreeBase ? getJjWorktreeBaseSpecialItems() : []),
+    [isJjBackend, isSelectingWorktreeBase],
+  );
+  const jjWorktreeBaseSpecialByValue = useMemo(
+    () => new Map(jjWorktreeBaseSpecials.map((item) => [item.value, item] as const)),
+    [jjWorktreeBaseSpecials],
+  );
   const trimmedBranchQuery = branchQuery.trim();
   const deferredTrimmedBranchQuery = deferredBranchQuery.trim();
   const normalizedDeferredBranchQuery = deferredTrimmedBranchQuery.toLowerCase();
   const prReference = parsePullRequestReference(trimmedBranchQuery);
-  const isSelectingWorktreeBase =
-    effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath;
   const checkoutPullRequestItemValue =
     activeBackend && prReference && onCheckoutPullRequestRequest
       ? `__checkout_pull_request__:${prReference}`
       : null;
-  const canPrefillCreateBranch = !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
+  const canPrefillCreateBranch =
+    !isSelectingWorktreeBase &&
+    !jjLocalDefaultWorkspace &&
+    trimmedBranchQuery.length > 0;
   const hasExactBranchMatch = branchByName.has(trimmedBranchQuery);
   const branchPickerItems = useMemo(() => {
-    const items = [...branchNames];
+    const items = [
+      ...jjWorktreeBaseSpecials.map((item) => item.value),
+      ...branchNames,
+    ];
     if (checkoutPullRequestItemValue) {
       items.unshift(checkoutPullRequestItemValue);
     }
     return items;
-  }, [branchNames, checkoutPullRequestItemValue]);
+  }, [branchNames, checkoutPullRequestItemValue, jjWorktreeBaseSpecials]);
   const filteredBranchPickerItems = useMemo(
     () =>
       normalizedDeferredBranchQuery.length === 0
         ? branchPickerItems
-        : branchPickerItems.filter((itemValue) =>
-            itemValue.toLowerCase().includes(normalizedDeferredBranchQuery),
-          ),
-    [branchPickerItems, normalizedDeferredBranchQuery],
+        : branchPickerItems.filter((itemValue) => {
+            if (itemValue.toLowerCase().includes(normalizedDeferredBranchQuery)) {
+              return true;
+            }
+            const special = jjWorktreeBaseSpecialByValue.get(itemValue);
+            if (!special) return false;
+            return (
+              special.label.toLowerCase().includes(normalizedDeferredBranchQuery) ||
+              special.description.toLowerCase().includes(normalizedDeferredBranchQuery)
+            );
+          }),
+    [branchPickerItems, jjWorktreeBaseSpecialByValue, normalizedDeferredBranchQuery],
   );
   const [resolvedActiveBranch, setOptimisticBranch] = useOptimistic(
     canonicalActiveBranch,
@@ -499,7 +549,8 @@ export function BranchToolbarBranchSelector({
         currentGitBranch,
         hasServerThread,
         isBranchActionPending,
-        preferActiveThreadBranch: isJjBackend && !hasServerThread,
+        preferActiveThreadBranch: isJjBackend && isSelectingWorktreeBase,
+        jjLocalDefaultWorkspace,
       })
     ) {
       return;
@@ -512,10 +563,20 @@ export function BranchToolbarBranchSelector({
     currentGitBranch,
     effectiveEnvMode,
     hasServerThread,
-    isJjBackend,
     isBranchActionPending,
+    isJjBackend,
+    isSelectingWorktreeBase,
+    jjLocalDefaultWorkspace,
     onSetThreadWorkspace,
   ]);
+
+  // Clear sticky bookmark metadata when Local JJ is following default `@`.
+  useEffect(() => {
+    if (!jjLocalDefaultWorkspace || activeThreadBranch === null) {
+      return;
+    }
+    onSetThreadWorkspace({ branch: null, worktreePath: null });
+  }, [activeThreadBranch, jjLocalDefaultWorkspace, onSetThreadWorkspace]);
 
   const runBranchAction = (action: () => Promise<void>) => {
     startBranchActionTransition(async () => {
@@ -576,15 +637,24 @@ export function BranchToolbarBranchSelector({
     });
   }, [isDroppingStash, runBranchAction, stashDiscardDialog]);
 
+  const selectWorktreeBaseRef = (ref: string) => {
+    onSetThreadWorkspace({ branch: ref, worktreePath: null });
+    setIsBranchMenuOpen(false);
+    onComposerFocusRequest?.();
+  };
+
   const selectBranch = (branch: GitBranch) => {
     const api = readNativeApi();
     if (!api || !branchCwd || isBranchActionPending || !activeBackend) return;
 
-    // In new-worktree mode, selecting a branch sets the base branch.
+    // Local JJ must never mutate the default workspace via bookmark switch.
+    if (jjLocalDefaultWorkspace) {
+      return;
+    }
+
+    // In new-worktree mode, selecting a ref only sets the createWorkspace source.
     if (isSelectingWorktreeBase) {
-      onSetThreadWorkspace({ branch: branch.name, worktreePath: null });
-      setIsBranchMenuOpen(false);
-      onComposerFocusRequest?.();
+      selectWorktreeBaseRef(branch.name);
       return;
     }
 
@@ -741,16 +811,19 @@ export function BranchToolbarBranchSelector({
   };
 
   useEffect(() => {
-    if (
-      effectiveEnvMode !== "worktree" ||
-      activeWorktreePath ||
-      activeThreadBranch ||
-      !currentGitBranch
-    ) {
+    if (effectiveEnvMode !== "worktree" || activeWorktreePath || activeThreadBranch) {
       return;
     }
-    onSetThreadWorkspace({ branch: currentGitBranch, worktreePath: null });
+    const defaultBase = resolveDefaultWorktreeBaseRef({
+      backend: activeBackend,
+      currentReference: currentGitBranch,
+    });
+    if (!defaultBase) {
+      return;
+    }
+    onSetThreadWorkspace({ branch: defaultBase, worktreePath: null });
   }, [
+    activeBackend,
     activeThreadBranch,
     activeWorktreePath,
     currentGitBranch,
@@ -779,6 +852,7 @@ export function BranchToolbarBranchSelector({
       const itemValue = filteredBranchPickerItems[index];
       if (!itemValue) return 28;
       if (itemValue === checkoutPullRequestItemValue) return 44;
+      if (jjWorktreeBaseSpecialByValue.has(itemValue)) return 44;
       const branch = branchByName.get(itemValue);
       return branch && getCurrentBranchChangeSummary(branch, branchStatusQuery.data) ? 48 : 28;
     },
@@ -820,9 +894,30 @@ export function BranchToolbarBranchSelector({
     effectiveEnvMode,
     resolvedActiveBranch,
     isJjBackend,
+    jjLocalDefaultWorkspace,
   });
 
   function renderPickerItem(itemValue: string, index: number, style?: CSSProperties) {
+    const specialBase = jjWorktreeBaseSpecialByValue.get(itemValue);
+    if (specialBase) {
+      return (
+        <ComboboxItem
+          hideIndicator
+          key={itemValue}
+          index={index}
+          value={itemValue}
+          style={style}
+          onClick={() => selectWorktreeBaseRef(itemValue)}
+        >
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5 py-0.5">
+            <span className="truncate font-medium">{specialBase.label}</span>
+            <span className="truncate text-[11px] text-muted-foreground">
+              {specialBase.description}
+            </span>
+          </div>
+        </ComboboxItem>
+      );
+    }
     if (checkoutPullRequestItemValue && itemValue === checkoutPullRequestItemValue) {
       return (
         <ComboboxItem
@@ -905,6 +1000,46 @@ export function BranchToolbarBranchSelector({
           </div>
         </div>
       </ComboboxItem>
+    );
+  }
+
+  // JJ Local always tracks the default workspace `@` — no bookmark switcher.
+  if (jjLocalDefaultWorkspace) {
+    const nearestBookmark = currentGitBranch;
+    const localTitle = nearestBookmark
+      ? `Default workspace working copy (@). Nearest bookmark: ${nearestBookmark}.`
+      : "Default workspace working copy (@). Switch to Worktree to base a new workspace on a bookmark, @, or @-.";
+    if (isPanel) {
+      return (
+        <div
+          className={cn(ENVIRONMENT_ROW_CLASS_NAME, "cursor-default hover:bg-transparent")}
+          title={localTitle}
+        >
+          <EnvironmentRowBody
+            icon={<CentralIcon name="branch" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+            label="@"
+            trailing={
+              nearestBookmark ? (
+                <span className="max-w-[10rem] truncate text-[11px] text-muted-foreground">
+                  {nearestBookmark}
+                </span>
+              ) : null
+            }
+          />
+        </div>
+      );
+    }
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)]"
+        title={localTitle}
+      >
+        <CentralIcon name="branch" className="size-3.5 shrink-0" />
+        <span className="max-w-[240px] truncate">@</span>
+        {nearestBookmark ? (
+          <span className="max-w-[120px] truncate opacity-60">{nearestBookmark}</span>
+        ) : null}
+      </span>
     );
   }
 

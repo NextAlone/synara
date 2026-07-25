@@ -9,6 +9,61 @@ import type { ThreadWorkspacePatch } from "../types";
 export const EnvMode = Schema.Literals(["local", "worktree"]);
 export type EnvMode = typeof EnvMode.Type;
 
+/** Synthetic JJ bases offered only when creating a new workspace (not for Local). */
+export const JJ_WORKTREE_BASE_CURRENT = "@";
+export const JJ_WORKTREE_BASE_PARENT = "@-";
+
+export type VcsToolbarBackend = "git" | "jj";
+
+export function isJjSyntheticWorktreeBaseRef(ref: string): boolean {
+  return ref === JJ_WORKTREE_BASE_CURRENT || ref === JJ_WORKTREE_BASE_PARENT;
+}
+
+/**
+ * JJ Local always follows the default workspace working copy (`@`).
+ * Bookmark / `@` / `@-` selection is only meaningful when creating a worktree.
+ */
+export function isJjLocalDefaultWorkspaceMode(input: {
+  backend: VcsToolbarBackend | null | undefined;
+  envMode: EnvMode;
+  activeWorktreePath: string | null;
+}): boolean {
+  return (
+    input.backend === "jj" &&
+    input.envMode === "local" &&
+    input.activeWorktreePath === null
+  );
+}
+
+export function resolveDefaultWorktreeBaseRef(input: {
+  backend: VcsToolbarBackend | null | undefined;
+  currentReference: string | null;
+}): string | null {
+  if (input.backend === "jj") {
+    return JJ_WORKTREE_BASE_CURRENT;
+  }
+  return input.currentReference;
+}
+
+export function getJjWorktreeBaseSpecialItems(): ReadonlyArray<{
+  readonly value: string;
+  readonly label: string;
+  readonly description: string;
+}> {
+  return [
+    {
+      value: JJ_WORKTREE_BASE_CURRENT,
+      label: "Current change (@)",
+      description: "Default workspace working copy",
+    },
+    {
+      value: JJ_WORKTREE_BASE_PARENT,
+      label: "Parent change (@-)",
+      description: "Parent of the current change",
+    },
+  ] as const;
+}
+
 export function resolveEffectiveEnvMode(input: {
   activeWorktreePath: string | null;
   hasServerThread: boolean;
@@ -70,6 +125,8 @@ export function resolveBranchToolbarValue(input: {
   activeThreadBranch: string | null;
   currentGitBranch: string | null;
   preferActiveThreadBranch?: boolean;
+  /** When true, Local JJ always displays `@` (default workspace working copy). */
+  jjLocalDefaultWorkspace?: boolean;
 }): string | null {
   const {
     envMode,
@@ -77,7 +134,11 @@ export function resolveBranchToolbarValue(input: {
     activeThreadBranch,
     currentGitBranch,
     preferActiveThreadBranch = false,
+    jjLocalDefaultWorkspace = false,
   } = input;
+  if (jjLocalDefaultWorkspace) {
+    return JJ_WORKTREE_BASE_CURRENT;
+  }
   if (preferActiveThreadBranch && activeThreadBranch !== null) {
     return activeThreadBranch;
   }
@@ -87,8 +148,9 @@ export function resolveBranchToolbarValue(input: {
   return currentGitBranch ?? activeThreadBranch;
 }
 
-// Local threads should mirror the concrete checkout; stale thread metadata makes
+// Local Git threads should mirror the concrete checkout; stale thread metadata makes
 // the current Git branch appear selectable while clicks only perform a no-op.
+// Local JJ never syncs a bookmark: it always follows the default workspace `@`.
 export function shouldSyncLocalThreadBranch(input: {
   envMode: EnvMode;
   activeWorktreePath: string | null;
@@ -97,7 +159,11 @@ export function shouldSyncLocalThreadBranch(input: {
   hasServerThread: boolean;
   isBranchActionPending: boolean;
   preferActiveThreadBranch?: boolean;
+  jjLocalDefaultWorkspace?: boolean;
 }): boolean {
+  if (input.jjLocalDefaultWorkspace) {
+    return false;
+  }
   return (
     input.envMode === "local" &&
     input.activeWorktreePath === null &&
