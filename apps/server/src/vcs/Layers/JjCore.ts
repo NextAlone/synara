@@ -21,6 +21,7 @@ import {
 import {
   isSynaraJjCheckpointBookmark,
   SYNARA_JJ_CHECKPOINT_BOOKMARK_PREFIX,
+  SYNARA_JJ_SNAPSHOT_BOOKMARK_PREFIX,
 } from "../checkpointBookmarks.ts";
 import {
   JjCore,
@@ -286,7 +287,7 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
           "-r",
           `latest(::@ & (bookmarks() ~ bookmarks(glob:${JSON.stringify(
             `${SYNARA_JJ_CHECKPOINT_BOOKMARK_PREFIX}*`,
-          )})))`,
+          )}) ~ bookmarks(glob:${JSON.stringify(`${SYNARA_JJ_SNAPSHOT_BOOKMARK_PREFIX}*`)})))`,
           "-T",
           JJ_BOOKMARK_NAME_TEMPLATE,
         ],

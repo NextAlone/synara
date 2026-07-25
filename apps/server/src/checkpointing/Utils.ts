@@ -86,9 +86,9 @@ export function checkpointRefForThreadTurnStartInManagedFamily(
   );
 }
 
-// Throwaway ref used to snapshot the working tree mid-turn so a live diff can be
-// computed against the turn-start baseline. It is captured, diffed, and deleted
-// on every live recompute; it never becomes a durable checkpoint.
+// Legacy throwaway ref shape retained for cleanup and compatibility tests.
+// Current live diffs compare the turn-start checkpoint directly to the working
+// copy and do not create this ref.
 export function checkpointRefForThreadTurnLive(threadId: ThreadId, turnId: TurnId): CheckpointRef {
   return CheckpointRef.makeUnsafe(
     `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/turn-live/${Encoding.encodeBase64Url(turnId)}`,

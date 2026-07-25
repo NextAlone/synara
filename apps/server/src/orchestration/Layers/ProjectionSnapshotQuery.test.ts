@@ -1900,7 +1900,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           vcsBackend: null,
           latestCheckpointTurnCount: 2,
           baselineCheckpointRef: asCheckpointRef("checkpoint-a"),
+          baselineCheckpointStatus: "ready",
           toCheckpointRef: asCheckpointRef("checkpoint-b"),
+          toCheckpointStatus: "ready",
         });
       }
     }),

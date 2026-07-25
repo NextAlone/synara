@@ -567,6 +567,11 @@ export interface DesktopBridge {
   };
 }
 
+export interface NativeReadRequestOptions {
+  readonly signal?: AbortSignal;
+  readonly priority?: "interactive" | "background";
+}
+
 export interface NativeApi {
   dialogs: {
     pickFolder: () => Promise<string | null>;
@@ -594,7 +599,10 @@ export interface NativeApi {
     searchLocalEntries: (
       input: ProjectSearchLocalEntriesInput,
     ) => Promise<ProjectSearchLocalEntriesResult>;
-    readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
+    readFile: (
+      input: ProjectReadFileInput,
+      options?: NativeReadRequestOptions,
+    ) => Promise<ProjectReadFileResult>;
     createLocalFilePreviewGrant: (
       input: ProjectCreateLocalFilePreviewGrantInput,
     ) => Promise<ProjectCreateLocalFilePreviewGrantResult>;
@@ -620,12 +628,24 @@ export interface NativeApi {
   vcs: {
     setBackend: (input: VcsSetBackendInput) => Promise<VcsSetBackendResult>;
     configureProject: (input: VcsConfigureProjectInput) => Promise<VcsConfigureProjectResult>;
-    status: (input: VcsStatusInput) => Promise<VcsStatusResult>;
-    readDiff: (input: VcsReadDiffInput) => Promise<VcsReadDiffResult>;
-    listReferences: (input: VcsListReferencesInput) => Promise<VcsListReferencesResult>;
+    status: (
+      input: VcsStatusInput,
+      options?: NativeReadRequestOptions,
+    ) => Promise<VcsStatusResult>;
+    readDiff: (
+      input: VcsReadDiffInput,
+      options?: NativeReadRequestOptions,
+    ) => Promise<VcsReadDiffResult>;
+    listReferences: (
+      input: VcsListReferencesInput,
+      options?: NativeReadRequestOptions,
+    ) => Promise<VcsListReferencesResult>;
     createReference: (input: VcsCreateReferenceInput) => Promise<VcsCreateReferenceResult>;
     switchReference: (input: VcsSwitchReferenceInput) => Promise<VcsSwitchReferenceResult>;
-    listWorkspaces: (input: VcsListWorkspacesInput) => Promise<VcsListWorkspacesResult>;
+    listWorkspaces: (
+      input: VcsListWorkspacesInput,
+      options?: NativeReadRequestOptions,
+    ) => Promise<VcsListWorkspacesResult>;
     createWorkspace: (input: VcsCreateWorkspaceInput) => Promise<VcsCreateWorkspaceResult>;
     removeWorkspace: (input: VcsRemoveWorkspaceInput) => Promise<VcsRemoveWorkspaceResult>;
     handoffThread: (input: VcsHandoffThreadInput) => Promise<VcsHandoffThreadResult>;
@@ -634,6 +654,7 @@ export interface NativeApi {
     resolvePullRequest: (input: VcsResolvePullRequestInput) => Promise<VcsResolvePullRequestResult>;
     pullRequestSnapshot: (
       input: VcsPullRequestSnapshotInput,
+      options?: NativeReadRequestOptions,
     ) => Promise<VcsPullRequestSnapshotResult>;
     preparePullRequestThread: (
       input: VcsPreparePullRequestThreadInput,
@@ -772,9 +793,13 @@ export interface NativeApi {
       input: OrchestrationImportThreadInput,
     ) => Promise<OrchestrationImportThreadResult>;
     repairState: () => Promise<OrchestrationReadModel>;
-    getTurnDiff: (input: OrchestrationGetTurnDiffInput) => Promise<OrchestrationGetTurnDiffResult>;
+    getTurnDiff: (
+      input: OrchestrationGetTurnDiffInput,
+      options?: NativeReadRequestOptions,
+    ) => Promise<OrchestrationGetTurnDiffResult>;
     getFullThreadDiff: (
       input: OrchestrationGetFullThreadDiffInput,
+      options?: NativeReadRequestOptions,
     ) => Promise<OrchestrationGetFullThreadDiffResult>;
     replayEvents: (fromSequenceExclusive: number) => Promise<OrchestrationEvent[]>;
     listProviderDeliveryBlockers: (

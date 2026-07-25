@@ -648,14 +648,19 @@ export default function DiffPanel({
     }),
   );
   const selectedTurnCheckpointDiff = selectedTurn
-    ? activeCheckpointDiffQuery.data?.diff
+    ? activeCheckpointDiffQuery.data?.status === "ready"
+      ? activeCheckpointDiffQuery.data.diff
+      : undefined
     : undefined;
   const conversationCheckpointDiff = selectedTurn
     ? undefined
-    : activeCheckpointDiffQuery.data?.diff;
+    : activeCheckpointDiffQuery.data?.status === "ready"
+      ? activeCheckpointDiffQuery.data.diff
+      : undefined;
   const checkpointDiffDisplay = resolveCheckpointDiffQueryDisplayState({
     isLoading: activeCheckpointDiffQuery.isLoading,
     isFetching: activeCheckpointDiffQuery.isFetching,
+    dataUpdateCount: activeCheckpointDiffQuery.dataUpdateCount,
     data: activeCheckpointDiffQuery.data,
     error: activeCheckpointDiffQuery.error,
   });
@@ -1297,7 +1302,12 @@ export default function DiffPanel({
                     ? "No turn diffs are available yet."
                     : "No net changes in this selection."
               }
-              unavailableLabel="No repo diff is available right now."
+              unavailableLabel={
+                diffViewKind === "repo"
+                  ? "No repo diff is available right now."
+                  : (checkpointDiffDisplay.unavailable ??
+                    "No patch is available for this selection.")
+              }
             />
             {diffSelectionAction.pendingAction ? (
               <TranscriptSelectionAction

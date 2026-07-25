@@ -290,6 +290,7 @@ it.effect("rejects thread turn diff when fromTurnCount > toTurnCount", () =>
         threadId: "thread-1",
         fromTurnCount: 3,
         toTurnCount: 2,
+        status: "ready",
         diff: "patch",
       }),
     );

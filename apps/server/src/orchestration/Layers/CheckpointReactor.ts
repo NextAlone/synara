@@ -21,7 +21,6 @@ import {
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadTurn,
   checkpointRefForThreadTurnInManagedFamily,
-  checkpointRefForThreadTurnLive,
   checkpointRefForThreadTurnStart,
   checkpointRefForThreadTurnStartInManagedFamily,
   isManagedCheckpointRefForThread,
@@ -29,7 +28,10 @@ import {
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
-import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
+import {
+  CheckpointStore,
+  type CheckpointWorkspaceInput,
+} from "../../checkpointing/Services/CheckpointStore.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
@@ -367,17 +369,21 @@ const make = Effect.gen(function* () {
       ) {
         continue;
       }
-      return { cwd, backend } satisfies {
-        readonly cwd: string;
-        readonly backend: VcsBackend;
-      };
+      return {
+        cwd,
+        backend,
+        ...(backend === "jj" &&
+        input.thread.envMode === "worktree" &&
+        input.thread.worktreePath
+          ? { recoverStaleWorkingCopy: true }
+          : {}),
+      } satisfies CheckpointWorkspaceInput;
     }
     return undefined;
   });
 
-  // Shared tail for both capture paths: creates the git checkpoint ref, diffs
-  // it against the previous turn, then dispatches the domain events to update
-  // the orchestration read model.
+  // Shared tail for both capture paths: captures the durable VCS checkpoint,
+  // diffs it against the previous turn, then updates the orchestration read model.
   const captureAndDispatchCheckpoint = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly turnId: TurnId;
@@ -388,7 +394,7 @@ const make = Effect.gen(function* () {
         readonly turnId: TurnId | null;
       }>;
     };
-    readonly workspace: { readonly cwd: string; readonly backend: VcsBackend };
+    readonly workspace: CheckpointWorkspaceInput;
     readonly turnCount: number;
     readonly status: "ready" | "missing" | "error";
     readonly assistantMessageId: MessageId | undefined;
@@ -517,7 +523,7 @@ const make = Effect.gen(function* () {
 
   const ensureLegacyBaselineCheckpoint = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
-    readonly workspace: { readonly cwd: string; readonly backend: VcsBackend };
+    readonly workspace: CheckpointWorkspaceInput;
     readonly turnCount: number;
     readonly fromCheckpointRef: CheckpointRef;
     readonly createdAt: string;
@@ -640,10 +646,10 @@ const make = Effect.gen(function* () {
   });
 
   // Derives a live turn diff from the configured VCS while a turn is still running, for providers
-  // that do not stream their own unified diff (e.g. Claude). Snapshots the working
-  // tree into a throwaway ref (isolated temp index — the real index/worktree are
-  // untouched), diffs it against the turn-start baseline, and dispatches a
-  // provider-diff placeholder so the "files changed" strip shows live +N/-M.
+  // that do not stream their own unified diff (e.g. Claude). Compares the
+  // turn-start baseline directly to the working tree without retaining another
+  // checkpoint, then dispatches a provider-diff placeholder so the "files
+  // changed" strip shows live +N/-M.
   //
   // The terminal VCS checkpoint from `turn.completed` stays authoritative: it
   // captures with a real ref and status "ready", which the projector refuses to
@@ -698,26 +704,14 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const liveCheckpointRef = checkpointRefForThreadTurnLive(thread.id, turnId);
-    yield* checkpointStore.captureCheckpoint({
-      ...checkpointWorkspace,
-      checkpointRef: liveCheckpointRef,
-    });
     const diff = yield* checkpointStore
-      .diffCheckpoints({
+      .diffCheckpointToWorkingCopy({
         ...checkpointWorkspace,
         fromCheckpointRef,
-        toCheckpointRef: liveCheckpointRef,
         fallbackFromToHead: false,
         ignoreWhitespace: false,
       })
       .pipe(Effect.catch(() => Effect.succeed("")));
-    yield* checkpointStore
-      .deleteCheckpointRefs({
-        ...checkpointWorkspace,
-        checkpointRefs: [liveCheckpointRef],
-      })
-      .pipe(Effect.catch(() => Effect.void));
 
     const files = parseCheckpointFilesFromUnifiedDiff(diff);
     if (files.length === 0) {

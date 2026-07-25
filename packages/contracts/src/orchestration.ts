@@ -2296,13 +2296,44 @@ export const TurnCountRange = Schema.Struct({
   ),
 );
 
-export const ThreadTurnDiff = TurnCountRange.mapFields(
+const ThreadTurnDiffCoordinates = TurnCountRange.mapFields(
   Struct.assign({
     threadId: ThreadId,
-    diff: Schema.String,
   }),
   { unsafePreserveChecks: true },
 );
+
+export const CheckpointDiffUnavailableCode = Schema.Literals([
+  "BASELINE_MISSING",
+  "END_SNAPSHOT_MISSING",
+  "CHECKPOINT_BACKEND_UNAVAILABLE",
+]);
+export type CheckpointDiffUnavailableCode = typeof CheckpointDiffUnavailableCode.Type;
+
+export const ThreadTurnDiff = Schema.Union([
+  ThreadTurnDiffCoordinates.mapFields(
+    Struct.assign({
+      status: Schema.Literal("ready"),
+      diff: Schema.String,
+    }),
+    { unsafePreserveChecks: true },
+  ),
+  ThreadTurnDiffCoordinates.mapFields(
+    Struct.assign({
+      status: Schema.Literal("pending"),
+      retryAfterMs: NonNegativeInt,
+    }),
+    { unsafePreserveChecks: true },
+  ),
+  ThreadTurnDiffCoordinates.mapFields(
+    Struct.assign({
+      status: Schema.Literal("unavailable"),
+      code: CheckpointDiffUnavailableCode,
+      message: TrimmedNonEmptyString,
+    }),
+    { unsafePreserveChecks: true },
+  ),
+]);
 
 export const ProviderSessionRuntimeStatus = Schema.Literals([
   "starting",

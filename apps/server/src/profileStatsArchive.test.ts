@@ -58,6 +58,7 @@ const checkpointStoreTestLayer = Layer.succeed(CheckpointStore, {
   restoreCheckpoint: () => Effect.die("unused checkpoint store test method"),
   reverseCheckpointDiff: () => Effect.die("unused checkpoint store test method"),
   diffCheckpoints: () => Effect.die("unused checkpoint store test method"),
+  diffCheckpointToWorkingCopy: () => Effect.die("unused checkpoint store test method"),
   deleteCheckpointRefs: (input) => deleteCheckpointRefsImpl(input),
 } satisfies CheckpointStoreShape);
 
@@ -1043,22 +1044,25 @@ describe("ProfileStatsArchive", () => {
     );
   });
 
-  it("purges thread rows when checkpoint cleanup workspace is stale", async () => {
+  it("falls back to the project repository when a checkpoint worktree is stale", async () => {
     await runArchiveTest(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const archive = yield* ProfileStatsArchive;
-        isRepositoryImpl = () => Effect.succeed(false);
+        isRepositoryImpl = ({ cwd, backend }) =>
+          Effect.succeed(cwd === "/work/project-checkpoint" && backend === "jj");
 
         yield* sql`
           INSERT INTO projection_projects (
-            project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+            project_id, title, workspace_root, scripts_json, vcs_state_json,
+            created_at, updated_at, deleted_at
           )
           VALUES (
             'project-stale-checkpoint',
             'Stale Checkpoint',
-            '/work/missing-checkpoint',
+            '/work/project-checkpoint',
             '{}',
+            '{"binding":{"backend":"jj"}}',
             '2026-06-12T09:00:00.000Z',
             '2026-06-12T09:00:00.000Z',
             NULL
@@ -1067,14 +1071,14 @@ describe("ProfileStatsArchive", () => {
         yield* sql`
           INSERT INTO projection_threads (
             thread_id, project_id, title, model_selection_json, runtime_mode,
-            interaction_mode, env_mode, created_at, updated_at, deleted_at
+            interaction_mode, env_mode, worktree_path, created_at, updated_at, deleted_at
           )
           VALUES (
             'thread-stale-checkpoint',
             'project-stale-checkpoint',
             'Stale Checkpoint',
             '{"provider":"codex","model":"gpt-5-codex"}',
-            'full-access', 'default', 'local',
+            'full-access', 'default', 'worktree', '/work/missing-checkpoint-worktree',
             '2026-06-13T09:00:00.000Z',
             '2026-06-13T09:00:00.000Z',
             '2026-06-13T09:05:00.000Z'
@@ -1136,7 +1140,27 @@ describe("ProfileStatsArchive", () => {
         });
 
         expect(purged).toBe(true);
-        expect(deletedCheckpointRefCalls).toEqual([]);
+        expect(deletedCheckpointRefCalls).toEqual([
+          {
+            cwd: "/work/project-checkpoint",
+            backend: "jj",
+            checkpointRefs: [
+              "refs/historical/checkpoints/dGhyZWFkLXN0YWxlLWNoZWNrcG9pbnQ/turn/1",
+              String(
+                checkpointRefForThreadTurnStart(
+                  ThreadId.makeUnsafe("thread-stale-checkpoint"),
+                  TurnId.makeUnsafe("turn-stale-checkpoint"),
+                ),
+              ),
+              String(
+                checkpointRefForThreadMessageStart(
+                  ThreadId.makeUnsafe("thread-stale-checkpoint"),
+                  MessageId.makeUnsafe("message-stale-checkpoint"),
+                ),
+              ),
+            ],
+          },
+        ]);
         const rows = yield* sql<{
           readonly threads: number;
           readonly messages: number;

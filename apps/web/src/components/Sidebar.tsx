@@ -123,11 +123,6 @@ import {
 } from "../storeSelectors";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import {
-  makeVcsQueryTarget,
-  vcsResolvePullRequestQueryOptions,
-  vcsStatusQueryOptions,
-} from "../lib/vcsReactQuery";
-import {
   providerComposerCapabilitiesQueryOptions,
   supportsThreadImport,
 } from "../lib/providerDiscoveryReactQuery";
@@ -3728,91 +3723,17 @@ export default function Sidebar() {
     () => sidebarTreeThreads.filter((thread) => visibleSidebarThreadIdSet.has(thread.id)),
     [sidebarTreeThreads, visibleSidebarThreadIdSet],
   );
-  // PR badges only render on visible rows, so keep VCS/PR query setup off hidden project history.
-  const threadVcsTargets = useMemo(
-    () =>
-      visibleSidebarThreads.map((thread) => {
-        const project = projectById.get(thread.projectId) ?? null;
-        return {
-          threadId: thread.id,
-          branch: thread.branch,
-          lastKnownPr: thread.lastKnownPr ?? null,
-          cwd: resolveThreadWorkspaceCwd({
-            projectCwd: project?.cwd ?? null,
-            envMode: thread.envMode,
-            worktreePath: thread.worktreePath,
-            workingDirectory: thread.workingDirectory,
-          }),
-          vcsTarget: makeVcsQueryTarget(project, thread.id, appSettings.vcsBackend, {
-            threadWorkingDirectory:
-              project?.kind === "studio" ? (thread.workingDirectory ?? null) : null,
-          }),
-        };
-      }),
-    [appSettings.vcsBackend, projectById, visibleSidebarThreads],
-  );
-  const threadVcsStatusQueries = useQueries({
-    queries: threadVcsTargets.map((target) => ({
-      ...vcsStatusQueryOptions(target.vcsTarget, {
-        enabled: target.branch !== null,
-      }),
-      staleTime: 30_000,
-      refetchInterval: 60_000,
-    })),
-  });
-  const threadStoredPrTargets = useMemo(
-    () =>
-      threadVcsTargets.flatMap((target) =>
-        target.vcsTarget.backend !== null &&
-        target.lastKnownPr !== null &&
-        target.lastKnownPr.url.trim().length > 0
-          ? [{ ...target, lastKnownPr: target.lastKnownPr }]
-          : [],
-      ),
-    [threadVcsTargets],
-  );
-  const threadStoredPrQueries = useQueries({
-    queries: threadStoredPrTargets.map((target) => ({
-      ...vcsResolvePullRequestQueryOptions({
-        target: target.vcsTarget,
-        reference: target.lastKnownPr.url,
-      }),
-      staleTime: 30_000,
-      refetchInterval: 60_000,
-    })),
-  });
+  // Sidebar badges are projection data. Refreshing VCS status for every visible
+  // row creates an expensive-read fan-out that competes with the active Diff
+  // panel. Focused PR surfaces still refresh their own status and update this
+  // durable lastKnownPr projection.
   const prByThreadId = useMemo(() => {
-    const storedPrByThreadId = new Map<ThreadId, ThreadPr>();
-    for (const target of threadVcsTargets) {
-      if (target.lastKnownPr) {
-        storedPrByThreadId.set(target.threadId, toThreadPr(target.lastKnownPr));
-      }
-    }
-    for (let index = 0; index < threadStoredPrTargets.length; index += 1) {
-      const target = threadStoredPrTargets[index];
-      if (!target) {
-        continue;
-      }
-      const result = threadStoredPrQueries[index]?.data?.pullRequest ?? null;
-      if (result) {
-        storedPrByThreadId.set(target.threadId, toThreadPr(result));
-        continue;
-      }
-      storedPrByThreadId.set(target.threadId, toThreadPr(target.lastKnownPr));
-    }
-
     const map = new Map<ThreadId, ThreadPr>();
-    for (let index = 0; index < threadVcsTargets.length; index += 1) {
-      const target = threadVcsTargets[index];
-      if (!target) continue;
-      const status = threadVcsStatusQueries[index]?.data;
-      const branchMatches =
-        target.branch !== null && status?.ref !== null && status?.ref === target.branch;
-      const livePr = branchMatches ? (status?.pullRequest ?? null) : null;
-      map.set(target.threadId, livePr ?? storedPrByThreadId.get(target.threadId) ?? null);
+    for (const thread of visibleSidebarThreads) {
+      map.set(thread.id, thread.lastKnownPr ? toThreadPr(thread.lastKnownPr) : null);
     }
     return map;
-  }, [threadVcsStatusQueries, threadVcsTargets, threadStoredPrQueries, threadStoredPrTargets]);
+  }, [visibleSidebarThreads]);
   const isManualProjectSorting = appSettings.sidebarProjectSortOrder === "manual";
   const threadJumpCommandByThreadId = useMemo(() => {
     const mapping = new Map<ThreadId, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();

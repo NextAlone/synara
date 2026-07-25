@@ -79,6 +79,7 @@ interface CheckpointMessageRow {
 
 interface ThreadCheckpointCleanup {
   readonly cwd: string | null;
+  readonly repositoryFallbackCwd: string | null;
   readonly backend: VcsBackend | null;
   readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
 }
@@ -499,24 +500,33 @@ const makeProfileStatsArchive = Effect.gen(function* () {
 
       return {
         cwd,
+        repositoryFallbackCwd: readString(thread.workspaceRoot),
         backend: thread.vcsBackend,
         checkpointRefs,
       } satisfies ThreadCheckpointCleanup;
     });
 
-  // Stale/missing workspaces cannot contain reachable refs for us to delete; keep
-  // the DB purge moving, but fail normally once a usable Git repo is confirmed.
+  // A managed worktree may already be gone while its checkpoint bookmarks
+  // remain in the shared repository. Try the project root after the thread cwd
+  // so physical snapshots and catalog aliases still get reclaimed.
   const deleteCheckpointRefsForPurge = (input: {
     readonly threadId: string;
     readonly cwd: string | null;
+    readonly repositoryFallbackCwd: string | null;
     readonly backend: VcsBackend | null;
     readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
   }) => {
     if (input.checkpointRefs.length === 0) {
       return Effect.void;
     }
-    const cwd = input.cwd;
-    if (cwd === null) {
+    const candidateCwds = [
+      ...new Set(
+        [input.cwd, input.repositoryFallbackCwd].filter(
+          (cwd): cwd is string => cwd !== null,
+        ),
+      ),
+    ];
+    if (candidateCwds.length === 0) {
       return Effect.logWarning(
         "profile stats archive skipped checkpoint ref cleanup because VCS workspace is unavailable",
         { threadId: input.threadId, checkpointRefCount: input.checkpointRefs.length },
@@ -529,36 +539,39 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         : ["git", "jj"];
       let cleanedRepository = false;
       for (const backend of candidateBackends) {
-        const isRepository = yield* checkpointStore.isRepository({ cwd, backend }).pipe(
-          Effect.catchCause((cause) => {
-            if (Cause.hasInterruptsOnly(cause)) {
-              return Effect.failCause(cause);
-            }
-            return Effect.logWarning(
-              "profile stats archive could not verify checkpoint cleanup workspace",
-              {
-                threadId: input.threadId,
-                cwd,
-                backend,
-                cause: Cause.pretty(cause),
-              },
-            ).pipe(Effect.as(false));
-          }),
-        );
-        if (!isRepository) {
-          continue;
+        for (const cwd of candidateCwds) {
+          const isRepository = yield* checkpointStore.isRepository({ cwd, backend }).pipe(
+            Effect.catchCause((cause) => {
+              if (Cause.hasInterruptsOnly(cause)) {
+                return Effect.failCause(cause);
+              }
+              return Effect.logWarning(
+                "profile stats archive could not verify checkpoint cleanup workspace",
+                {
+                  threadId: input.threadId,
+                  cwd,
+                  backend,
+                  cause: Cause.pretty(cause),
+                },
+              ).pipe(Effect.as(false));
+            }),
+          );
+          if (!isRepository) {
+            continue;
+          }
+          cleanedRepository = true;
+          yield* checkpointStore.deleteCheckpointRefs({
+            cwd,
+            backend,
+            checkpointRefs: input.checkpointRefs,
+          });
+          break;
         }
-        cleanedRepository = true;
-        yield* checkpointStore.deleteCheckpointRefs({
-          cwd,
-          backend,
-          checkpointRefs: input.checkpointRefs,
-        });
       }
       if (!cleanedRepository) {
         yield* Effect.logWarning(
           "profile stats archive skipped checkpoint ref cleanup because configured VCS is unavailable",
-          { threadId: input.threadId, cwd, backends: candidateBackends },
+          { threadId: input.threadId, cwds: candidateCwds, backends: candidateBackends },
         );
       }
     });
@@ -567,6 +580,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
   const deleteCheckpointRefsAfterCommittedPurge = (input: {
     readonly threadId: string;
     readonly cwd: string | null;
+    readonly repositoryFallbackCwd: string | null;
     readonly backend: VcsBackend | null;
     readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
   }) =>
@@ -853,6 +867,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         yield* deleteCheckpointRefsAfterCommittedPurge({
           threadId: input.threadId,
           cwd: checkpointCleanup.cwd,
+          repositoryFallbackCwd: checkpointCleanup.repositoryFallbackCwd,
           backend: checkpointCleanup.backend,
           checkpointRefs: checkpointCleanup.checkpointRefs,
         });

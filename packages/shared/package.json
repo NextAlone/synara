@@ -204,6 +204,10 @@
       "types": "./src/migrationRecovery.ts",
       "import": "./src/migrationRecovery.ts"
     },
+    "./wsRequestClass": {
+      "types": "./src/wsRequestClass.ts",
+      "import": "./src/wsRequestClass.ts"
+    },
     "./threadMentions": {
       "types": "./src/threadMentions.ts",
       "import": "./src/threadMentions.ts"

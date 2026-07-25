@@ -168,10 +168,20 @@ export function invalidateVcsQueries(queryClient: QueryClient) {
   return queryClient.invalidateQueries({ queryKey: vcsQueryKeys.all });
 }
 
-export function vcsStatusQueryOptions(target: VcsQueryTarget, options?: { enabled?: boolean }) {
+export function vcsStatusQueryOptions(
+  target: VcsQueryTarget,
+  options?: {
+    enabled?: boolean;
+    priority?: "interactive" | "background";
+  },
+) {
   return queryOptions({
     queryKey: vcsQueryKeys.status(target),
-    queryFn: () => ensureNativeApi().vcs.status(requestTarget(target)),
+    queryFn: ({ signal }) =>
+      ensureNativeApi().vcs.status(requestTarget(target), {
+        signal,
+        priority: options?.priority ?? "interactive",
+      }),
     enabled: (options?.enabled ?? true) && target.projectId !== null && target.backend !== null,
     staleTime: VCS_STATUS_STALE_TIME_MS,
     refetchOnWindowFocus: true,
@@ -183,7 +193,11 @@ export function vcsStatusQueryOptions(target: VcsQueryTarget, options?: { enable
 export function vcsReferencesQueryOptions(target: VcsQueryTarget, options?: { enabled?: boolean }) {
   return queryOptions({
     queryKey: vcsQueryKeys.referencesFor(target),
-    queryFn: () => ensureNativeApi().vcs.listReferences(requestTarget(target)),
+    queryFn: ({ signal }) =>
+      ensureNativeApi().vcs.listReferences(requestTarget(target), {
+        signal,
+        priority: "interactive",
+      }),
     enabled: (options?.enabled ?? true) && target.projectId !== null && target.backend !== null,
     staleTime: VCS_REFERENCES_STALE_TIME_MS,
     refetchOnWindowFocus: true,
@@ -233,14 +247,17 @@ export function vcsPullRequestSnapshotQueryOptions(input: {
 }) {
   return queryOptions({
     queryKey: vcsQueryKeys.pullRequestSnapshot(input.target, input.reference),
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       if (!input.reference) {
         throw new Error("Pull request snapshot is unavailable.");
       }
-      return ensureNativeApi().vcs.pullRequestSnapshot({
-        ...requestTarget(input.target),
-        reference: input.reference,
-      });
+      return ensureNativeApi().vcs.pullRequestSnapshot(
+        {
+          ...requestTarget(input.target),
+          reference: input.reference,
+        },
+        { signal, priority: "background" },
+      );
     },
     enabled:
       (input.enabled ?? true) &&
@@ -265,11 +282,14 @@ export function vcsDiffQueryOptions(input: {
   const scope = input.scope ?? "workingTree";
   return queryOptions({
     queryKey: vcsQueryKeys.diff(input.target, scope),
-    queryFn: () =>
-      ensureNativeApi().vcs.readDiff({
-        ...requestTarget(input.target),
-        scope,
-      }),
+    queryFn: ({ signal }) =>
+      ensureNativeApi().vcs.readDiff(
+        {
+          ...requestTarget(input.target),
+          scope,
+        },
+        { signal, priority: "interactive" },
+      ),
     enabled:
       (input.enabled ?? true) &&
       input.target.projectId !== null &&

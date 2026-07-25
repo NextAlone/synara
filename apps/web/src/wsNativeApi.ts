@@ -476,7 +476,10 @@ export function createWsNativeApi(): NativeApi {
       searchEntries: (input) => transport.request(WS_METHODS.projectsSearchEntries, input),
       searchLocalEntries: (input) =>
         transport.request(WS_METHODS.projectsSearchLocalEntries, input),
-      readFile: (input) => transport.request(WS_METHODS.projectsReadFile, input),
+      readFile: (input, options) =>
+        options
+          ? transport.request(WS_METHODS.projectsReadFile, input, options)
+          : transport.request(WS_METHODS.projectsReadFile, input),
       createLocalFilePreviewGrant: (input) =>
         transport.request(WS_METHODS.projectsCreateLocalFilePreviewGrant, input),
       writeFile: (input) => transport.request(WS_METHODS.projectsWriteFile, input),
@@ -518,19 +521,34 @@ export function createWsNativeApi(): NativeApi {
     vcs: {
       setBackend: (input) => transport.request(WS_METHODS.vcsSetBackend, input),
       configureProject: (input) => transport.request(WS_METHODS.vcsConfigureProject, input),
-      status: (input) => transport.request(WS_METHODS.vcsStatus, input),
-      readDiff: (input) => transport.request(WS_METHODS.vcsReadDiff, input),
-      listReferences: (input) => transport.request(WS_METHODS.vcsListReferences, input),
+      status: (input, options) =>
+        options
+          ? transport.request(WS_METHODS.vcsStatus, input, options)
+          : transport.request(WS_METHODS.vcsStatus, input),
+      readDiff: (input, options) =>
+        options
+          ? transport.request(WS_METHODS.vcsReadDiff, input, options)
+          : transport.request(WS_METHODS.vcsReadDiff, input),
+      listReferences: (input, options) =>
+        options
+          ? transport.request(WS_METHODS.vcsListReferences, input, options)
+          : transport.request(WS_METHODS.vcsListReferences, input),
       createReference: (input) => transport.request(WS_METHODS.vcsCreateReference, input),
       switchReference: (input) => transport.request(WS_METHODS.vcsSwitchReference, input),
-      listWorkspaces: (input) => transport.request(WS_METHODS.vcsListWorkspaces, input),
+      listWorkspaces: (input, options) =>
+        options
+          ? transport.request(WS_METHODS.vcsListWorkspaces, input, options)
+          : transport.request(WS_METHODS.vcsListWorkspaces, input),
       createWorkspace: (input) => transport.request(WS_METHODS.vcsCreateWorkspace, input),
       removeWorkspace: (input) => transport.request(WS_METHODS.vcsRemoveWorkspace, input),
       handoffThread: (input) => transport.request(WS_METHODS.vcsHandoffThread, input),
       pull: (input) => transport.request(WS_METHODS.vcsPull, input),
       githubRepository: (input) => transport.request(WS_METHODS.vcsGithubRepository, input),
       resolvePullRequest: (input) => transport.request(WS_METHODS.vcsResolvePullRequest, input),
-      pullRequestSnapshot: (input) => transport.request(WS_METHODS.vcsPullRequestSnapshot, input),
+      pullRequestSnapshot: (input, options) =>
+        options
+          ? transport.request(WS_METHODS.vcsPullRequestSnapshot, input, options)
+          : transport.request(WS_METHODS.vcsPullRequestSnapshot, input),
       preparePullRequestThread: (input) =>
         transport.request(WS_METHODS.vcsPreparePullRequestThread, input),
       runStackedAction: (input) =>
@@ -708,9 +726,14 @@ export function createWsNativeApi(): NativeApi {
       },
       importThread: (input) => transport.request(ORCHESTRATION_WS_METHODS.importThread, input),
       repairState: () => transport.request(ORCHESTRATION_WS_METHODS.repairState),
-      getTurnDiff: (input) => transport.request(ORCHESTRATION_WS_METHODS.getTurnDiff, input),
-      getFullThreadDiff: (input) =>
-        transport.request(ORCHESTRATION_WS_METHODS.getFullThreadDiff, input),
+      getTurnDiff: (input, options) =>
+        options
+          ? transport.request(ORCHESTRATION_WS_METHODS.getTurnDiff, input, options)
+          : transport.request(ORCHESTRATION_WS_METHODS.getTurnDiff, input),
+      getFullThreadDiff: (input, options) =>
+        options
+          ? transport.request(ORCHESTRATION_WS_METHODS.getFullThreadDiff, input, options)
+          : transport.request(ORCHESTRATION_WS_METHODS.getFullThreadDiff, input),
       replayEvents: (fromSequenceExclusive) =>
         transport.request(ORCHESTRATION_WS_METHODS.replayEvents, {
           fromSequenceExclusive,

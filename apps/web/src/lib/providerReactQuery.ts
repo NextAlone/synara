@@ -11,6 +11,12 @@ import {
 import { queryOptions } from "@tanstack/react-query";
 import { Option, Schema } from "effect";
 import { ensureNativeApi } from "../nativeApi";
+import {
+  EXPENSIVE_READ_CAPACITY_MAX_FAILURE_COUNT,
+  expensiveReadCapacityRetryDelayMs,
+  isRetryableExpensiveReadCapacityError,
+  isWsRequestCancelled,
+} from "./wsRpcRetry";
 
 interface CheckpointDiffQueryInput {
   threadId: ThreadId | null;
@@ -113,14 +119,40 @@ export function isCheckpointTemporarilyUnavailable(error: unknown): boolean {
 export function resolveCheckpointDiffQueryDisplayState(input: {
   isLoading: boolean;
   isFetching: boolean;
+  dataUpdateCount?: number;
   data: unknown;
   error: unknown;
-}): { isLoading: boolean; error: string | null } {
+}): { isLoading: boolean; error: string | null; unavailable: string | null } {
+  const result =
+    input.data && typeof input.data === "object" && "status" in input.data
+      ? (input.data as {
+          readonly status?: unknown;
+          readonly message?: unknown;
+        })
+      : null;
+  const isPending = result?.status === "pending";
+  const pendingExhausted =
+    isPending &&
+    (input.dataUpdateCount ?? 0) >= CHECKPOINT_DIFF_PENDING_REFETCH_MAX_ATTEMPTS &&
+    !input.isFetching;
+  const unavailableFromResult =
+    result?.status === "unavailable" && typeof result.message === "string"
+      ? result.message
+      : null;
+  const unavailable = pendingExhausted
+    ? "The checkpoint did not become available after waiting."
+    : unavailableFromResult;
   const hasData = input.data != null;
   return {
-    isLoading: input.isLoading || (input.isFetching && !hasData),
+    isLoading:
+      (isPending && !pendingExhausted) ||
+      input.isLoading ||
+      (input.isFetching && !hasData),
     error:
-      input.isFetching || input.error == null ? null : normalizeCheckpointErrorMessage(input.error),
+      isPending || unavailable !== null || input.isFetching || input.error == null
+        ? null
+        : normalizeCheckpointErrorMessage(input.error),
+    unavailable,
   };
 }
 
@@ -129,33 +161,59 @@ export function checkpointDiffQueryOptions(input: CheckpointDiffQueryInput) {
 
   return queryOptions({
     queryKey: providerQueryKeys.checkpointDiff(input),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const api = ensureNativeApi();
       if (!input.threadId || decodedRequest._tag === "None") {
         throw new Error("Checkpoint diff is unavailable.");
       }
-      try {
-        if (decodedRequest.value.kind === "fullThreadDiff") {
-          return await api.orchestration.getFullThreadDiff(decodedRequest.value.input);
-        }
-        return await api.orchestration.getTurnDiff(decodedRequest.value.input);
-      } catch (error) {
-        throw new Error(normalizeCheckpointErrorMessage(error), { cause: error });
+      if (decodedRequest.value.kind === "fullThreadDiff") {
+        return api.orchestration.getFullThreadDiff(decodedRequest.value.input, {
+          signal,
+          priority: "interactive",
+        });
       }
+      return api.orchestration.getTurnDiff(decodedRequest.value.input, {
+        signal,
+        priority: "interactive",
+      });
     },
     enabled: (input.enabled ?? true) && !!input.threadId && decodedRequest._tag === "Some",
     staleTime: Infinity,
     retry: (failureCount, error) => {
+      if (isWsRequestCancelled(error)) {
+        return false;
+      }
+      if (isRetryableExpensiveReadCapacityError(error)) {
+        return failureCount < EXPENSIVE_READ_CAPACITY_MAX_FAILURE_COUNT;
+      }
       if (isCheckpointTemporarilyUnavailable(error)) {
-        return failureCount < 12;
+        return failureCount < CHECKPOINT_DIFF_PENDING_REFETCH_MAX_ATTEMPTS;
       }
       return failureCount < 3;
     },
-    retryDelay: (attempt, error) =>
-      isCheckpointTemporarilyUnavailable(error)
+    retryDelay: (attempt, error) => {
+      const capacityDelay = expensiveReadCapacityRetryDelayMs(attempt, error);
+      if (capacityDelay !== null) return capacityDelay;
+      return isCheckpointTemporarilyUnavailable(error)
         ? Math.min(5_000, 250 * 2 ** (attempt - 1))
-        : Math.min(1_000, 100 * 2 ** (attempt - 1)),
+        : Math.min(1_000, 100 * 2 ** (attempt - 1));
+    },
     refetchInterval: (query) => {
+      const result = query.state.data;
+      if (
+        result &&
+        typeof result === "object" &&
+        "status" in result &&
+        result.status === "pending"
+      ) {
+        const retryAfterMs =
+          "retryAfterMs" in result && typeof result.retryAfterMs === "number"
+            ? result.retryAfterMs
+            : CHECKPOINT_DIFF_PENDING_REFETCH_INTERVAL_MS;
+        return query.state.dataUpdateCount < CHECKPOINT_DIFF_PENDING_REFETCH_MAX_ATTEMPTS
+          ? retryAfterMs
+          : false;
+      }
       const temporaryError = query.state.error;
       if (!temporaryError || !isCheckpointTemporarilyUnavailable(temporaryError)) {
         return false;

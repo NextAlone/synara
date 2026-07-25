@@ -61,11 +61,7 @@ export const DiffPanelPatchViewport = memo(
         <div className={viewportClassName}>
           <PanelStateMessage density="compact" fill="flex">
             <p>
-              {props.hasNoChanges
-                ? props.emptyLabel
-                : props.viewKind === "repo"
-                  ? props.unavailableLabel
-                  : "No patch available for this selection."}
+              {props.hasNoChanges ? props.emptyLabel : props.unavailableLabel}
             </p>
           </PanelStateMessage>
         </div>

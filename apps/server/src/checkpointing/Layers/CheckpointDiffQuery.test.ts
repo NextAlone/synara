@@ -7,7 +7,7 @@ import {
   type VcsBackend,
 } from "@synara/contracts";
 import { Effect, Layer, Option } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   ProjectionSnapshotQuery,
@@ -15,6 +15,7 @@ import {
   type ProjectionThreadCheckpointContext,
 } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { checkpointRefForThreadTurn, checkpointRefForThreadTurnStart } from "../Utils.ts";
+import { CheckpointInvariantError } from "../Errors.ts";
 import { CheckpointDiffQueryLive } from "./CheckpointDiffQuery.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
 import { CheckpointDiffQuery } from "../Services/CheckpointDiffQuery.ts";
@@ -66,7 +67,9 @@ function makeFullThreadDiffContext(input: {
   readonly vcsBackend?: VcsBackend | null;
   readonly latestCheckpointTurnCount: number;
   readonly baselineCheckpointRef?: CheckpointRef | null;
+  readonly baselineCheckpointStatus?: "ready" | "missing" | "error" | null;
   readonly toCheckpointRef: CheckpointRef | null;
+  readonly toCheckpointStatus?: "ready" | "missing" | "error" | null;
 }): ProjectionFullThreadDiffContext {
   return {
     threadId: input.threadId,
@@ -79,7 +82,9 @@ function makeFullThreadDiffContext(input: {
     vcsBackend: input.vcsBackend === undefined ? "git" : input.vcsBackend,
     latestCheckpointTurnCount: input.latestCheckpointTurnCount,
     baselineCheckpointRef: input.baselineCheckpointRef ?? input.toCheckpointRef,
+    baselineCheckpointStatus: input.baselineCheckpointStatus ?? "ready",
     toCheckpointRef: input.toCheckpointRef,
+    toCheckpointStatus: input.toCheckpointStatus ?? "ready",
   };
 }
 
@@ -91,6 +96,7 @@ describe("CheckpointDiffQueryLive", () => {
       checkpointRefForThreadTurn(threadId, 1).replace("refs/synara/", "refs/historical/"),
     );
     const hasCheckpointRefCalls: Array<CheckpointRef> = [];
+    let failDiffAfterVerification = false;
     const diffCheckpointsCalls: Array<{
       readonly fromCheckpointRef: CheckpointRef;
       readonly toCheckpointRef: CheckpointRef;
@@ -119,11 +125,18 @@ describe("CheckpointDiffQueryLive", () => {
         }),
       restoreCheckpoint: () => Effect.succeed(true),
       reverseCheckpointDiff: () => Effect.succeed(true),
-      diffCheckpoints: ({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace }) =>
-        Effect.sync(() => {
-          diffCheckpointsCalls.push({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace });
-          return "diff patch";
-        }),
+      diffCheckpoints: ({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace }) => {
+        diffCheckpointsCalls.push({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace });
+        return failDiffAfterVerification
+          ? Effect.fail(
+              new CheckpointInvariantError({
+                operation: "test.diff",
+                detail: "Checkpoint bookmark is unavailable for diff operation.",
+              }),
+            )
+          : Effect.succeed("diff patch");
+      },
+      diffCheckpointToWorkingCopy: () => Effect.succeed(""),
       deleteCheckpointRefs: () => Effect.void,
     };
 
@@ -170,7 +183,7 @@ describe("CheckpointDiffQueryLive", () => {
         "refs/historical/",
       ),
     );
-    expect(hasCheckpointRefCalls).toEqual([expectedFromRef]);
+    expect(hasCheckpointRefCalls).toEqual([toCheckpointRef, expectedFromRef]);
     expect(diffCheckpointsCalls).toEqual([
       {
         cwd: "/tmp/workspace",
@@ -183,7 +196,46 @@ describe("CheckpointDiffQueryLive", () => {
       threadId,
       fromTurnCount: 0,
       toTurnCount: 1,
+      status: "ready",
       diff: "diff patch",
+    });
+
+    failDiffAfterVerification = true;
+    const unavailable = await Effect.runPromise(
+      Effect.gen(function* () {
+        const query = yield* CheckpointDiffQuery;
+        return yield* query.getTurnDiff({
+          threadId,
+          fromTurnCount: 0,
+          toTurnCount: 1,
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(unavailable).toEqual({
+      threadId,
+      fromTurnCount: 0,
+      toTurnCount: 1,
+      status: "unavailable",
+      code: "CHECKPOINT_BACKEND_UNAVAILABLE",
+      message: "The checkpoint backend could not produce this diff.",
+    });
+
+    const empty = await Effect.runPromise(
+      Effect.gen(function* () {
+        const query = yield* CheckpointDiffQuery;
+        return yield* query.getTurnDiff({
+          threadId,
+          fromTurnCount: 1,
+          toTurnCount: 1,
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(empty).toEqual({
+      threadId,
+      fromTurnCount: 1,
+      toTurnCount: 1,
+      status: "ready",
+      diff: "",
     });
   });
 
@@ -215,7 +267,7 @@ describe("CheckpointDiffQueryLive", () => {
       isRepository: () => Effect.succeed(true),
       captureCheckpoint: () => Effect.void,
       copyCheckpointRef: () => Effect.succeed(true),
-      hasCheckpointRef: () => Effect.die("unused"),
+      hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
       reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: ({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace }) =>
@@ -223,6 +275,7 @@ describe("CheckpointDiffQueryLive", () => {
           diffCheckpointsCalls.push({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace });
           return "full diff patch";
         }),
+      diffCheckpointToWorkingCopy: () => Effect.succeed(""),
       deleteCheckpointRefs: () => Effect.void,
     };
 
@@ -276,6 +329,7 @@ describe("CheckpointDiffQueryLive", () => {
       threadId,
       fromTurnCount: 0,
       toTurnCount: 2,
+      status: "ready",
       diff: "full diff patch",
     });
   });
@@ -291,6 +345,7 @@ describe("CheckpointDiffQueryLive", () => {
       restoreCheckpoint: () => Effect.succeed(true),
       reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed(""),
+      diffCheckpointToWorkingCopy: () => Effect.succeed(""),
       deleteCheckpointRefs: () => Effect.void,
     };
 
@@ -357,6 +412,7 @@ describe("CheckpointDiffQueryLive", () => {
       restoreCheckpoint: () => Effect.succeed(true),
       reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed("diff patch"),
+      diffCheckpointToWorkingCopy: () => Effect.succeed(""),
       deleteCheckpointRefs: () => Effect.void,
     };
 
@@ -424,6 +480,7 @@ describe("CheckpointDiffQueryLive", () => {
       restoreCheckpoint: () => Effect.succeed(true),
       reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed("diff patch"),
+      diffCheckpointToWorkingCopy: () => Effect.succeed(""),
       deleteCheckpointRefs: () => Effect.void,
     };
 
@@ -493,8 +550,7 @@ describe("CheckpointDiffQueryLive", () => {
       isRepository: () => Effect.succeed(true),
       captureCheckpoint: () => Effect.void,
       copyCheckpointRef: () => Effect.succeed(true),
-      hasCheckpointRef: ({ backend, checkpointRef }) =>
-        Effect.succeed(backend === "jj" && checkpointRef === toCheckpointRef),
+      hasCheckpointRef: ({ backend }) => Effect.succeed(backend === "jj"),
       restoreCheckpoint: () => Effect.succeed(true),
       reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: ({ cwd, backend }) =>
@@ -502,6 +558,7 @@ describe("CheckpointDiffQueryLive", () => {
           diffCheckpointsCalls.push({ cwd, backend });
           return "diff patch";
         }),
+      diffCheckpointToWorkingCopy: () => Effect.succeed(""),
       deleteCheckpointRefs: () => Effect.void,
     };
 
@@ -543,10 +600,10 @@ describe("CheckpointDiffQueryLive", () => {
     );
 
     expect(diffCheckpointsCalls).toEqual([{ cwd: "/tmp/studio-reference", backend: "jj" }]);
-    expect(result.diff).toBe("diff patch");
+    expect(result).toMatchObject({ status: "ready", diff: "diff patch" });
   });
 
-  it("fails cleanly when the selected checkpoint is still missing", async () => {
+  it("reports pending while the selected checkpoint is still missing", async () => {
     const projectId = ProjectId.makeUnsafe("project-missing");
     const threadId = ThreadId.makeUnsafe("thread-missing-checkpoint");
     const toCheckpointRef = checkpointRefForThreadTurn(threadId, 1);
@@ -562,6 +619,9 @@ describe("CheckpointDiffQueryLive", () => {
       status: "missing",
     });
 
+    const diffCheckpoints = vi.fn<CheckpointStoreShape["diffCheckpoints"]>(() =>
+      Effect.succeed("diff patch"),
+    );
     const checkpointStore: CheckpointStoreShape = {
       isRepository: () => Effect.succeed(true),
       captureCheckpoint: () => Effect.void,
@@ -569,7 +629,8 @@ describe("CheckpointDiffQueryLive", () => {
       hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
       reverseCheckpointDiff: () => Effect.succeed(true),
-      diffCheckpoints: () => Effect.succeed("diff patch"),
+      diffCheckpoints,
+      diffCheckpointToWorkingCopy: () => Effect.succeed(""),
       deleteCheckpointRefs: () => Effect.void,
     };
 
@@ -599,17 +660,24 @@ describe("CheckpointDiffQueryLive", () => {
       ),
     );
 
-    await expect(
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const query = yield* CheckpointDiffQuery;
-          return yield* query.getTurnDiff({
-            threadId,
-            fromTurnCount: 0,
-            toTurnCount: 1,
-          });
-        }).pipe(Effect.provide(layer)),
-      ),
-    ).rejects.toThrow("Checkpoint diff is not available yet for turn 1.");
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const query = yield* CheckpointDiffQuery;
+        return yield* query.getTurnDiff({
+          threadId,
+          fromTurnCount: 0,
+          toTurnCount: 1,
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result).toEqual({
+      threadId,
+      fromTurnCount: 0,
+      toTurnCount: 1,
+      status: "pending",
+      retryAfterMs: 500,
+    });
+    expect(diffCheckpoints).not.toHaveBeenCalled();
   });
 });

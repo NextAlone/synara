@@ -36,7 +36,11 @@ describe("JjCore", () => {
       if (input.operation === "JjCore.listBookmarks") {
         return Effect.succeed(
           result(
-            '{"name":"feature","remote":null,"tracked":false,"synced":true,"conflicted":false,"targetChangeId":"change-1"}\n',
+            [
+              '{"name":"feature","remote":null,"tracked":false,"synced":true,"conflicted":false,"targetChangeId":"change-1"}',
+              '{"name":"synara-checkpoint/legacy","remote":null,"tracked":false,"synced":true,"conflicted":false,"targetChangeId":"change-1"}',
+              '{"name":"synara-snapshot/catalog","remote":null,"tracked":false,"synced":true,"conflicted":false,"targetChangeId":"change-1"}',
+            ].join("\n"),
           ),
         );
       }
@@ -65,6 +69,11 @@ describe("JjCore", () => {
     for (const call of calls.slice(1)) {
       expect(call.args).toContain("--ignore-working-copy");
     }
+    const nearestBookmarkRevset = calls
+      .find((call) => call.operation === "JjCore.resolveNearestBookmark")
+      ?.args.join(" ");
+    expect(nearestBookmarkRevset).toContain("synara-checkpoint/*");
+    expect(nearestBookmarkRevset).toContain("synara-snapshot/*");
   });
 
   it("reads the patch from the same snapshot as its file list", async () => {

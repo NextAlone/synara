@@ -221,8 +221,6 @@ const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const PROVIDER_COMMAND_CLAIM_LEASE_MS = 30_000;
 const PROVIDER_COMMAND_SAFE_RETRY_LIMIT = 3;
 const PROVIDER_COMMAND_SAFE_RETRY_DELAY = Duration.millis(50);
-const PRE_TURN_CHECKPOINT_WAIT_MS = 2_000;
-const PRE_TURN_CHECKPOINT_RETRY_COOLDOWN_MS = 5 * 60_000;
 const PROVIDER_INPUT_SAFETY_MARGIN_CHARS = 1_000;
 const THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS = 2;
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
@@ -456,12 +454,17 @@ const make = Effect.gen(function* () {
     if (!cwd || !(yield* checkpointStore.isRepository({ cwd, backend }))) {
       return undefined;
     }
-    return { cwd, backend };
+    return {
+      cwd,
+      backend,
+      ...(backend === "jj" && thread.envMode === "worktree" && thread.worktreePath
+        ? { recoverStaleWorkingCopy: true }
+        : {}),
+    };
   });
   const editResendTurnStartKeys = new Set<string>();
   const quarantinedThreads = new Set<string>();
   const drainingQueuedTurns = new Set<string>();
-  const checkpointRetryAfterByWorkspace = new Map<string, number>();
   // Provider sessions with a drained queued turn whose promotion is in flight.
   // The reservation survives provider startup and binds to the exact turn that
   // must settle before another queue can drain, preventing late terminal events
@@ -1434,56 +1437,19 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      const checkpointWorkspaceKey = `${checkpointWorkspace.backend}\0${checkpointWorkspace.cwd}`;
-      const retryAfter = checkpointRetryAfterByWorkspace.get(checkpointWorkspaceKey) ?? 0;
-      if (retryAfter > Date.now()) {
-        yield* Effect.logDebug("skipping pre-turn checkpoint during workspace cooldown", {
-          threadId: input.threadId,
-          messageId: input.messageId,
-          backend: checkpointWorkspace.backend,
-          cwd: checkpointWorkspace.cwd,
-          retryAfter: new Date(retryAfter).toISOString(),
-        });
-        return;
-      }
-      checkpointRetryAfterByWorkspace.delete(checkpointWorkspaceKey);
-
       // Capture before provider dispatch so the later turn diff is bounded by
-      // the user's submit moment, not early provider edits. Checkpointing is
-      // auxiliary: a slow repository must not block provider execution.
-      const completed = yield* checkpointStore
-        .captureCheckpoint({
-          ...checkpointWorkspace,
-          checkpointRef: checkpointRefForThreadMessageStart(
-            input.threadId,
-            MessageId.makeUnsafe(input.messageId),
-          ),
-          skipIfExists: true,
-        })
-        .pipe(Effect.timeoutOption(Duration.millis(PRE_TURN_CHECKPOINT_WAIT_MS)));
-      if (Option.isSome(completed)) {
-        return;
-      }
-
-      const nextRetryAt = Date.now() + PRE_TURN_CHECKPOINT_RETRY_COOLDOWN_MS;
-      checkpointRetryAfterByWorkspace.set(checkpointWorkspaceKey, nextRetryAt);
-      yield* Effect.logWarning("pre-turn checkpoint exceeded its dispatch budget", {
-        threadId: input.threadId,
-        messageId: input.messageId,
-        backend: checkpointWorkspace.backend,
-        cwd: checkpointWorkspace.cwd,
-        waitMs: PRE_TURN_CHECKPOINT_WAIT_MS,
-        retryAfter: new Date(nextRetryAt).toISOString(),
+      // the user's submit moment, not early provider edits. This is a strict
+      // precondition: dispatching without a baseline makes Diff and Undo
+      // permanently non-authoritative for the turn.
+      yield* checkpointStore.captureCheckpoint({
+        ...checkpointWorkspace,
+        checkpointRef: checkpointRefForThreadMessageStart(
+          input.threadId,
+          MessageId.makeUnsafe(input.messageId),
+        ),
+        skipIfExists: true,
       });
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("failed to capture provider turn start checkpoint", {
-          threadId: input.threadId,
-          messageId: input.messageId,
-          cause: Cause.pretty(cause),
-        }),
-      ),
-    );
+    });
 
     // The VCS baseline is internally time-bounded; the Studio baseline must
     // finish before provider execution starts so a fast command cannot race it.

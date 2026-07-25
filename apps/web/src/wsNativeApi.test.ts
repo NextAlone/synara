@@ -579,6 +579,40 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("forwards workspace file read cancellation and priority options", async () => {
+    requestMock.mockResolvedValue({
+      relativePath: "src/app.ts",
+      contents: "export {};\n",
+      truncated: false,
+    });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const controller = new AbortController();
+
+    const api = createWsNativeApi();
+    await api.projects.readFile(
+      {
+        cwd: "/tmp/project",
+        relativePath: "src/app.ts",
+      },
+      {
+        signal: controller.signal,
+        priority: "interactive",
+      },
+    );
+
+    expect(requestMock).toHaveBeenCalledWith(
+      WS_METHODS.projectsReadFile,
+      {
+        cwd: "/tmp/project",
+        relativePath: "src/app.ts",
+      },
+      {
+        signal: controller.signal,
+        priority: "interactive",
+      },
+    );
+  });
+
   it("forwards local preview grant creation to the websocket project method", async () => {
     requestMock.mockResolvedValue({
       grant: "grant-token",
@@ -792,6 +826,32 @@ describe("wsNativeApi", () => {
       expectedEpoch: 3,
       ref: "feature",
     });
+  });
+
+  it("forwards cancellation and priority for project-scoped VCS reads", async () => {
+    requestMock.mockResolvedValue({ backend: "jj", scope: "workingTree", patch: "", files: [] });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const controller = new AbortController();
+    const api = createWsNativeApi();
+
+    await api.vcs.readDiff(
+      {
+        projectId: ProjectId.makeUnsafe("project-1"),
+        expectedEpoch: 3,
+        scope: "workingTree",
+      },
+      { signal: controller.signal, priority: "interactive" },
+    );
+
+    expect(requestMock).toHaveBeenCalledWith(
+      WS_METHODS.vcsReadDiff,
+      {
+        projectId: "project-1",
+        expectedEpoch: 3,
+        scope: "workingTree",
+      },
+      { signal: controller.signal, priority: "interactive" },
+    );
   });
 
   it("forwards full-thread diff requests to the orchestration websocket method", async () => {

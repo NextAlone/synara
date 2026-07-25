@@ -1,9 +1,9 @@
 /**
  * CheckpointStore - Repository interface for filesystem-backed workspace checkpoints.
  *
- * Owns hidden Git-ref checkpoint capture/restore and diff computation for a
- * workspace thread timeline. It does not store user-facing checkpoint metadata
- * and does not coordinate provider conversation rollback.
+ * Owns hidden Git-ref and catalog-backed JJ checkpoint capture/restore plus diff
+ * computation for a workspace thread timeline. It does not store user-facing
+ * orchestration checkpoint metadata or coordinate provider conversation rollback.
  *
  * Uses Effect `ServiceMap.Service` for dependency injection and exposes typed
  * domain errors for checkpoint storage operations.
@@ -19,6 +19,11 @@ import { CheckpointRef, type VcsBackend } from "@synara/contracts";
 export interface CheckpointWorkspaceInput {
   readonly cwd: string;
   readonly backend: VcsBackend;
+  /**
+   * Allows one `jj workspace update-stale` recovery before retrying a
+   * working-copy snapshot. Set only for Synara-managed workspaces.
+   */
+  readonly recoverStaleWorkingCopy?: boolean;
 }
 
 export interface CaptureCheckpointInput extends CheckpointWorkspaceInput {
@@ -51,6 +56,13 @@ export interface DiffCheckpointsInput extends CheckpointWorkspaceInput {
   readonly maxOutputBytes?: number;
 }
 
+export interface DiffCheckpointToWorkingCopyInput extends CheckpointWorkspaceInput {
+  readonly fromCheckpointRef: CheckpointRef;
+  readonly fallbackFromToHead?: boolean;
+  readonly ignoreWhitespace: boolean;
+  readonly maxOutputBytes?: number;
+}
+
 export interface ReverseCheckpointDiffInput extends CheckpointWorkspaceInput {
   readonly fromCheckpointRef: CheckpointRef;
   readonly toCheckpointRef: CheckpointRef;
@@ -73,16 +85,16 @@ export interface CheckpointStoreShape {
   ) => Effect.Effect<boolean, CheckpointStoreError>;
 
   /**
-   * Capture a checkpoint commit and store it at the provided checkpoint ref.
+   * Capture workspace state and bind it to the provided logical checkpoint ref.
    *
-   * Uses an isolated temporary Git index and writes a hidden ref.
+   * Git writes a hidden ref; JJ reuses one physical snapshot per unique tree.
    */
   readonly captureCheckpoint: (
     input: CaptureCheckpointInput,
   ) => Effect.Effect<void, CheckpointStoreError>;
 
   /**
-   * Copy an existing checkpoint commit to another hidden ref.
+   * Bind an existing checkpoint snapshot to another logical ref.
    *
    * Used to bind a pre-send message snapshot to the provider turn id once known.
    */
@@ -113,6 +125,14 @@ export interface CheckpointStoreShape {
    */
   readonly diffCheckpoints: (
     input: DiffCheckpointsInput,
+  ) => Effect.Effect<string, CheckpointStoreError>;
+
+  /**
+   * Compute a patch from a durable checkpoint to the current working copy
+   * without creating a temporary checkpoint ref.
+   */
+  readonly diffCheckpointToWorkingCopy: (
+    input: DiffCheckpointToWorkingCopyInput,
   ) => Effect.Effect<string, CheckpointStoreError>;
 
   /**

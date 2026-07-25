@@ -74,7 +74,9 @@ export interface ProjectionFullThreadDiffContext {
   readonly vcsBackend: VcsBackend | null;
   readonly latestCheckpointTurnCount: number;
   readonly baselineCheckpointRef: CheckpointRef | null;
+  readonly baselineCheckpointStatus: OrchestrationCheckpointSummary["status"] | null;
   readonly toCheckpointRef: CheckpointRef | null;
+  readonly toCheckpointStatus: OrchestrationCheckpointSummary["status"] | null;
 }
 
 /**

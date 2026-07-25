@@ -80,8 +80,8 @@ describe("providerQueryKeys.checkpointDiff", () => {
 
 describe("checkpointDiffQueryOptions", () => {
   it("forwards checkpoint range to the provider API", async () => {
-    const getTurnDiff = vi.fn().mockResolvedValue({ diff: "patch" });
-    const getFullThreadDiff = vi.fn().mockResolvedValue({ diff: "patch" });
+    const getTurnDiff = vi.fn().mockResolvedValue({ status: "ready", diff: "patch" });
+    const getFullThreadDiff = vi.fn().mockResolvedValue({ status: "ready", diff: "patch" });
     mockNativeApi({ getTurnDiff, getFullThreadDiff });
 
     const options = checkpointDiffQueryOptions({
@@ -95,18 +95,24 @@ describe("checkpointDiffQueryOptions", () => {
     const queryClient = new QueryClient();
     await queryClient.fetchQuery(options);
 
-    expect(getTurnDiff).toHaveBeenCalledWith({
-      threadId,
-      fromTurnCount: 3,
-      toTurnCount: 4,
-      ignoreWhitespace: true,
-    });
+    expect(getTurnDiff).toHaveBeenCalledWith(
+      {
+        threadId,
+        fromTurnCount: 3,
+        toTurnCount: 4,
+        ignoreWhitespace: true,
+      },
+      expect.objectContaining({
+        priority: "interactive",
+        signal: expect.any(AbortSignal),
+      }),
+    );
     expect(getFullThreadDiff).not.toHaveBeenCalled();
   });
 
   it("uses full thread diff API only for conversation-wide ranges from zero", async () => {
-    const getTurnDiff = vi.fn().mockResolvedValue({ diff: "patch" });
-    const getFullThreadDiff = vi.fn().mockResolvedValue({ diff: "patch" });
+    const getTurnDiff = vi.fn().mockResolvedValue({ status: "ready", diff: "patch" });
+    const getFullThreadDiff = vi.fn().mockResolvedValue({ status: "ready", diff: "patch" });
     mockNativeApi({ getTurnDiff, getFullThreadDiff });
 
     const options = checkpointDiffQueryOptions({
@@ -120,17 +126,23 @@ describe("checkpointDiffQueryOptions", () => {
     const queryClient = new QueryClient();
     await queryClient.fetchQuery(options);
 
-    expect(getFullThreadDiff).toHaveBeenCalledWith({
-      threadId,
-      toTurnCount: 2,
-      ignoreWhitespace: false,
-    });
+    expect(getFullThreadDiff).toHaveBeenCalledWith(
+      {
+        threadId,
+        toTurnCount: 2,
+        ignoreWhitespace: false,
+      },
+      expect.objectContaining({
+        priority: "interactive",
+        signal: expect.any(AbortSignal),
+      }),
+    );
     expect(getTurnDiff).not.toHaveBeenCalled();
   });
 
   it("uses turn diff API for single-turn ranges that start from zero", async () => {
-    const getTurnDiff = vi.fn().mockResolvedValue({ diff: "patch" });
-    const getFullThreadDiff = vi.fn().mockResolvedValue({ diff: "patch" });
+    const getTurnDiff = vi.fn().mockResolvedValue({ status: "ready", diff: "patch" });
+    const getFullThreadDiff = vi.fn().mockResolvedValue({ status: "ready", diff: "patch" });
     mockNativeApi({ getTurnDiff, getFullThreadDiff });
 
     const options = checkpointDiffQueryOptions({
@@ -144,18 +156,24 @@ describe("checkpointDiffQueryOptions", () => {
     const queryClient = new QueryClient();
     await queryClient.fetchQuery(options);
 
-    expect(getTurnDiff).toHaveBeenCalledWith({
-      threadId,
-      fromTurnCount: 0,
-      toTurnCount: 1,
-      ignoreWhitespace: true,
-    });
+    expect(getTurnDiff).toHaveBeenCalledWith(
+      {
+        threadId,
+        fromTurnCount: 0,
+        toTurnCount: 1,
+        ignoreWhitespace: true,
+      },
+      expect.objectContaining({
+        priority: "interactive",
+        signal: expect.any(AbortSignal),
+      }),
+    );
     expect(getFullThreadDiff).not.toHaveBeenCalled();
   });
 
   it("fails fast on invalid range and does not call provider RPC", async () => {
-    const getTurnDiff = vi.fn().mockResolvedValue({ diff: "patch" });
-    const getFullThreadDiff = vi.fn().mockResolvedValue({ diff: "patch" });
+    const getTurnDiff = vi.fn().mockResolvedValue({ status: "ready", diff: "patch" });
+    const getFullThreadDiff = vi.fn().mockResolvedValue({ status: "ready", diff: "patch" });
     mockNativeApi({ getTurnDiff, getFullThreadDiff });
 
     const options = checkpointDiffQueryOptions({
@@ -197,6 +215,37 @@ describe("checkpointDiffQueryOptions", () => {
     ).toBe(false);
     expect(retry(2, new Error("Something else failed."))).toBe(true);
     expect(retry(3, new Error("Something else failed."))).toBe(false);
+    expect(
+      retry(11, {
+        code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+        retryable: true,
+        retryAfterMs: 250,
+      }),
+    ).toBe(true);
+    expect(
+      retry(12, {
+        code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+        retryable: true,
+        retryAfterMs: 250,
+      }),
+    ).toBe(false);
+    expect(
+      retry(11, {
+        cause: {
+          code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+          retryable: true,
+          retryAfterMs: 250,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      retry(3, {
+        code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+        retryable: false,
+        retryAfterMs: 250,
+      }),
+    ).toBe(false);
+    expect(retry(0, { code: "WS_REQUEST_ABORTED" })).toBe(false);
   });
 
   it("backs off longer for checkpoint-not-ready errors", () => {
@@ -222,6 +271,13 @@ describe("checkpointDiffQueryOptions", () => {
     expect(typeof checkpointDelay).toBe("number");
     expect(typeof genericDelay).toBe("number");
     expect((checkpointDelay ?? 0) > (genericDelay ?? 0)).toBe(true);
+    expect(
+      retryDelay(1, {
+        code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+        retryable: true,
+        retryAfterMs: 735,
+      }),
+    ).toBe(735);
   });
 
   it("keeps polling while checkpoint diffs are still materializing", () => {
@@ -254,6 +310,15 @@ describe("checkpointDiffQueryOptions", () => {
         },
       } as never),
     ).toBe(false);
+    expect(
+      refetchInterval({
+        state: {
+          data: { status: "pending", retryAfterMs: 650 },
+          dataUpdateCount: 1,
+          error: null,
+        },
+      } as never),
+    ).toBe(650);
   });
 });
 
@@ -271,6 +336,7 @@ describe("resolveCheckpointDiffQueryDisplayState", () => {
     ).toEqual({
       isLoading: true,
       error: null,
+      unavailable: null,
     });
   });
 
@@ -285,6 +351,42 @@ describe("resolveCheckpointDiffQueryDisplayState", () => {
     ).toEqual({
       isLoading: false,
       error: "Checkpoint diff is not available yet for turn 1.",
+      unavailable: null,
+    });
+  });
+
+  it("renders expected unavailable results as neutral state", () => {
+    expect(
+      resolveCheckpointDiffQueryDisplayState({
+        isLoading: false,
+        isFetching: false,
+        data: {
+          status: "unavailable",
+          code: "BASELINE_MISSING",
+          message: "The initial checkpoint was not captured.",
+        },
+        error: null,
+      }),
+    ).toEqual({
+      isLoading: false,
+      error: null,
+      unavailable: "The initial checkpoint was not captured.",
+    });
+  });
+
+  it("stops showing a spinner after pending checkpoint polling is exhausted", () => {
+    expect(
+      resolveCheckpointDiffQueryDisplayState({
+        isLoading: false,
+        isFetching: false,
+        dataUpdateCount: CHECKPOINT_DIFF_PENDING_REFETCH_MAX_ATTEMPTS,
+        data: { status: "pending", retryAfterMs: 500 },
+        error: null,
+      }),
+    ).toEqual({
+      isLoading: false,
+      error: null,
+      unavailable: "The checkpoint did not become available after waiting.",
     });
   });
 });

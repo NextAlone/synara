@@ -234,6 +234,7 @@ describe("ProviderRuntimeIngestion", () => {
       restoreCheckpoint: () => Effect.succeed(false),
       reverseCheckpointDiff: () => Effect.succeed(false),
       diffCheckpoints: () => Effect.succeed(""),
+      diffCheckpointToWorkingCopy: () => Effect.succeed(""),
       deleteCheckpointRefs: () => Effect.void,
     } satisfies CheckpointStoreShape;
     const layer = ProviderRuntimeIngestionLive.pipe(

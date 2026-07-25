@@ -3,13 +3,14 @@ import {
   type OrchestrationGetFullThreadDiffInput,
   type OrchestrationGetFullThreadDiffResult,
   type OrchestrationGetTurnDiffResult as OrchestrationGetTurnDiffResultType,
+  type CheckpointDiffUnavailableCode,
   type CheckpointRef,
   type VcsBackend,
 } from "@synara/contracts";
 import { Effect, Layer, Option, Schema } from "effect";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { CheckpointInvariantError, CheckpointUnavailableError } from "../Errors.ts";
+import { CheckpointInvariantError } from "../Errors.ts";
 import {
   checkpointRefForThreadTurn,
   checkpointRefForThreadTurnInManagedFamily,
@@ -35,7 +36,40 @@ function buildTurnDiffResult(input: {
     threadId: input.threadId,
     fromTurnCount: input.fromTurnCount,
     toTurnCount: input.toTurnCount,
+    status: "ready",
     diff: input.diff,
+  };
+}
+
+function buildPendingTurnDiffResult(input: {
+  readonly threadId: OrchestrationGetTurnDiffResultType["threadId"];
+  readonly fromTurnCount: number;
+  readonly toTurnCount: number;
+  readonly retryAfterMs?: number;
+}): OrchestrationGetTurnDiffResultType {
+  return {
+    threadId: input.threadId,
+    fromTurnCount: input.fromTurnCount,
+    toTurnCount: input.toTurnCount,
+    status: "pending",
+    retryAfterMs: input.retryAfterMs ?? 500,
+  };
+}
+
+function buildUnavailableTurnDiffResult(input: {
+  readonly threadId: OrchestrationGetTurnDiffResultType["threadId"];
+  readonly fromTurnCount: number;
+  readonly toTurnCount: number;
+  readonly code: CheckpointDiffUnavailableCode;
+  readonly message: string;
+}): OrchestrationGetTurnDiffResultType {
+  return {
+    threadId: input.threadId,
+    fromTurnCount: input.fromTurnCount,
+    toTurnCount: input.toTurnCount,
+    status: "unavailable",
+    code: input.code,
+    message: input.message,
   };
 }
 
@@ -82,12 +116,12 @@ const make = Effect.gen(function* () {
       const ignoreWhitespace = input.ignoreWhitespace ?? true;
 
       if (input.fromTurnCount === input.toTurnCount) {
-        const emptyDiff: OrchestrationGetTurnDiffResultType = {
+        const emptyDiff = buildTurnDiffResult({
           threadId: input.threadId,
           fromTurnCount: input.fromTurnCount,
           toTurnCount: input.toTurnCount,
           diff: "",
-        };
+        });
         if (!isTurnDiffResult(emptyDiff)) {
           return yield* new CheckpointInvariantError({
             operation,
@@ -112,10 +146,10 @@ const make = Effect.gen(function* () {
         0,
       );
       if (input.toTurnCount > maxTurnCount) {
-        return yield* new CheckpointUnavailableError({
+        return buildPendingTurnDiffResult({
           threadId: input.threadId,
-          turnCount: input.toTurnCount,
-          detail: `Turn diff range exceeds current turn count: requested ${input.toTurnCount}, current ${maxTurnCount}.`,
+          fromTurnCount: input.fromTurnCount,
+          toTurnCount: input.toTurnCount,
         });
       }
 
@@ -144,17 +178,28 @@ const make = Effect.gen(function* () {
         (checkpoint) => checkpoint.checkpointTurnCount === input.toTurnCount,
       );
       if (!toCheckpoint) {
-        return yield* new CheckpointUnavailableError({
+        return buildUnavailableTurnDiffResult({
           threadId: input.threadId,
-          turnCount: input.toTurnCount,
-          detail: `Checkpoint ref is unavailable for turn ${input.toTurnCount}.`,
+          fromTurnCount: input.fromTurnCount,
+          toTurnCount: input.toTurnCount,
+          code: "END_SNAPSHOT_MISSING",
+          message: `The checkpoint for turn ${input.toTurnCount} is unavailable.`,
         });
       }
       if (toCheckpoint.status === "missing") {
-        return yield* new CheckpointUnavailableError({
+        return buildPendingTurnDiffResult({
           threadId: input.threadId,
-          turnCount: input.toTurnCount,
-          detail: `Checkpoint diff is not available yet for turn ${input.toTurnCount}.`,
+          fromTurnCount: input.fromTurnCount,
+          toTurnCount: input.toTurnCount,
+        });
+      }
+      if (toCheckpoint.status !== "ready") {
+        return buildUnavailableTurnDiffResult({
+          threadId: input.threadId,
+          fromTurnCount: input.fromTurnCount,
+          toTurnCount: input.toTurnCount,
+          code: "END_SNAPSHOT_MISSING",
+          message: `The checkpoint for turn ${input.toTurnCount} was not captured.`,
         });
       }
       const backend = yield* resolveCheckpointBackend({
@@ -163,12 +208,29 @@ const make = Effect.gen(function* () {
         checkpointRef: toCheckpoint.checkpointRef,
       });
       if (!backend) {
-        return yield* new CheckpointInvariantError({
-          operation,
-          detail: `Checkpoint VCS backend is unavailable for thread '${input.threadId}'.`,
+        return buildUnavailableTurnDiffResult({
+          threadId: input.threadId,
+          fromTurnCount: input.fromTurnCount,
+          toTurnCount: input.toTurnCount,
+          code: "CHECKPOINT_BACKEND_UNAVAILABLE",
+          message: "The source control backend for this checkpoint is unavailable.",
         });
       }
       const checkpointWorkspace = { cwd: workspaceCwd, backend };
+      if (
+        !(yield* checkpointStore.hasCheckpointRef({
+          ...checkpointWorkspace,
+          checkpointRef: toCheckpoint.checkpointRef,
+        }))
+      ) {
+        return buildUnavailableTurnDiffResult({
+          threadId: input.threadId,
+          fromTurnCount: input.fromTurnCount,
+          toTurnCount: input.toTurnCount,
+          code: "END_SNAPSHOT_MISSING",
+          message: `The checkpoint for turn ${input.toTurnCount} is no longer available.`,
+        });
+      }
 
       const fromCheckpoint =
         input.fromTurnCount === 0
@@ -176,11 +238,13 @@ const make = Effect.gen(function* () {
           : threadContext.value.checkpoints.find(
               (checkpoint) => checkpoint.checkpointTurnCount === input.fromTurnCount,
             );
-      if (fromCheckpoint?.status === "missing") {
-        return yield* new CheckpointUnavailableError({
+      if (fromCheckpoint && fromCheckpoint.status !== "ready") {
+        return buildUnavailableTurnDiffResult({
           threadId: input.threadId,
-          turnCount: input.fromTurnCount,
-          detail: `Checkpoint diff is not available yet for turn ${input.fromTurnCount}.`,
+          fromTurnCount: input.fromTurnCount,
+          toTurnCount: input.toTurnCount,
+          code: "BASELINE_MISSING",
+          message: `The baseline checkpoint for turn ${input.fromTurnCount} was not captured.`,
         });
       }
 
@@ -195,14 +259,17 @@ const make = Effect.gen(function* () {
           ? (earliestManagedBaselineRef ?? checkpointRefForThreadTurn(input.threadId, 0))
           : fromCheckpoint?.checkpointRef;
       if (!fromCheckpointRef) {
-        return yield* new CheckpointUnavailableError({
+        return buildUnavailableTurnDiffResult({
           threadId: input.threadId,
-          turnCount: input.fromTurnCount,
-          detail: `Checkpoint ref is unavailable for turn ${input.fromTurnCount}.`,
+          fromTurnCount: input.fromTurnCount,
+          toTurnCount: input.toTurnCount,
+          code: "BASELINE_MISSING",
+          message: `The baseline checkpoint for turn ${input.fromTurnCount} is unavailable.`,
         });
       }
 
       const toCheckpointRef = toCheckpoint.checkpointRef;
+      let fromCheckpointExists = false;
       if (input.toTurnCount === input.fromTurnCount + 1) {
         const turnStartCheckpointRef =
           checkpointRefForThreadTurnStartInManagedFamily(
@@ -216,22 +283,59 @@ const make = Effect.gen(function* () {
         });
         if (turnStartExists) {
           fromCheckpointRef = turnStartCheckpointRef;
+          fromCheckpointExists = true;
         }
       }
+      if (
+        !fromCheckpointExists &&
+        !(yield* checkpointStore.hasCheckpointRef({
+          ...checkpointWorkspace,
+          checkpointRef: fromCheckpointRef,
+        }))
+      ) {
+        return buildUnavailableTurnDiffResult({
+          threadId: input.threadId,
+          fromTurnCount: input.fromTurnCount,
+          toTurnCount: input.toTurnCount,
+          code: "BASELINE_MISSING",
+          message: `The baseline checkpoint for turn ${input.fromTurnCount} is no longer available.`,
+        });
+      }
 
-      const diff = yield* checkpointStore.diffCheckpoints({
-        ...checkpointWorkspace,
-        fromCheckpointRef,
-        toCheckpointRef,
-        fallbackFromToHead: false,
-        ignoreWhitespace,
-      });
+      const diff = yield* checkpointStore
+        .diffCheckpoints({
+          ...checkpointWorkspace,
+          fromCheckpointRef,
+          toCheckpointRef,
+          fallbackFromToHead: false,
+          ignoreWhitespace,
+        })
+        .pipe(
+          Effect.tapError((error) =>
+            Effect.logWarning("checkpoint diff failed after refs were verified", {
+              threadId: input.threadId,
+              fromTurnCount: input.fromTurnCount,
+              toTurnCount: input.toTurnCount,
+              detail: error.message,
+            }),
+          ),
+          Effect.option,
+        );
+      if (Option.isNone(diff)) {
+        return buildUnavailableTurnDiffResult({
+          threadId: input.threadId,
+          fromTurnCount: input.fromTurnCount,
+          toTurnCount: input.toTurnCount,
+          code: "CHECKPOINT_BACKEND_UNAVAILABLE",
+          message: "The checkpoint backend could not produce this diff.",
+        });
+      }
 
       const turnDiff = buildTurnDiffResult({
         threadId: input.threadId,
         fromTurnCount: input.fromTurnCount,
         toTurnCount: input.toTurnCount,
-        diff,
+        diff: diff.value,
       });
       if (!isTurnDiffResult(turnDiff)) {
         return yield* new CheckpointInvariantError({
@@ -278,10 +382,10 @@ const make = Effect.gen(function* () {
       }
 
       if (input.toTurnCount > threadContext.value.latestCheckpointTurnCount) {
-        return yield* new CheckpointUnavailableError({
+        return buildPendingTurnDiffResult({
           threadId: input.threadId,
-          turnCount: input.toTurnCount,
-          detail: `Turn diff range exceeds current turn count: requested ${input.toTurnCount}, current ${threadContext.value.latestCheckpointTurnCount}.`,
+          fromTurnCount: 0,
+          toTurnCount: input.toTurnCount,
         });
       }
 
@@ -306,11 +410,44 @@ const make = Effect.gen(function* () {
           detail: `Workspace path missing for thread '${input.threadId}' when computing full thread diff.`,
         });
       }
-      if (!threadContext.value.toCheckpointRef) {
-        return yield* new CheckpointUnavailableError({
+      if (
+        !threadContext.value.toCheckpointRef ||
+        threadContext.value.toCheckpointStatus === null
+      ) {
+        return buildUnavailableTurnDiffResult({
           threadId: input.threadId,
-          turnCount: input.toTurnCount,
-          detail: `Checkpoint ref is unavailable for turn ${input.toTurnCount}.`,
+          fromTurnCount: 0,
+          toTurnCount: input.toTurnCount,
+          code: "END_SNAPSHOT_MISSING",
+          message: `The checkpoint for turn ${input.toTurnCount} was not captured.`,
+        });
+      }
+      if (threadContext.value.toCheckpointStatus === "missing") {
+        return buildPendingTurnDiffResult({
+          threadId: input.threadId,
+          fromTurnCount: 0,
+          toTurnCount: input.toTurnCount,
+        });
+      }
+      if (threadContext.value.toCheckpointStatus !== "ready") {
+        return buildUnavailableTurnDiffResult({
+          threadId: input.threadId,
+          fromTurnCount: 0,
+          toTurnCount: input.toTurnCount,
+          code: "END_SNAPSHOT_MISSING",
+          message: `The checkpoint for turn ${input.toTurnCount} was not captured.`,
+        });
+      }
+      if (
+        !threadContext.value.baselineCheckpointRef ||
+        threadContext.value.baselineCheckpointStatus !== "ready"
+      ) {
+        return buildUnavailableTurnDiffResult({
+          threadId: input.threadId,
+          fromTurnCount: 0,
+          toTurnCount: input.toTurnCount,
+          code: "BASELINE_MISSING",
+          message: "The initial checkpoint for this conversation was not captured.",
         });
       }
       const backend = yield* resolveCheckpointBackend({
@@ -319,33 +456,83 @@ const make = Effect.gen(function* () {
         checkpointRef: threadContext.value.toCheckpointRef,
       });
       if (!backend) {
-        return yield* new CheckpointInvariantError({
-          operation,
-          detail: `Checkpoint VCS backend is unavailable for thread '${input.threadId}'.`,
+        return buildUnavailableTurnDiffResult({
+          threadId: input.threadId,
+          fromTurnCount: 0,
+          toTurnCount: input.toTurnCount,
+          code: "CHECKPOINT_BACKEND_UNAVAILABLE",
+          message: "The source control backend for this checkpoint is unavailable.",
         });
       }
       const checkpointWorkspace = { cwd: workspaceCwd, backend };
+      const baselineCheckpointRef =
+        checkpointRefForThreadTurnInManagedFamily(
+          threadContext.value.baselineCheckpointRef,
+          input.threadId,
+          0,
+        ) ?? checkpointRefForThreadTurn(input.threadId, 0);
+      if (
+        !(yield* checkpointStore.hasCheckpointRef({
+          ...checkpointWorkspace,
+          checkpointRef: threadContext.value.toCheckpointRef,
+        }))
+      ) {
+        return buildUnavailableTurnDiffResult({
+          threadId: input.threadId,
+          fromTurnCount: 0,
+          toTurnCount: input.toTurnCount,
+          code: "END_SNAPSHOT_MISSING",
+          message: `The checkpoint for turn ${input.toTurnCount} is no longer available.`,
+        });
+      }
+      if (
+        !(yield* checkpointStore.hasCheckpointRef({
+          ...checkpointWorkspace,
+          checkpointRef: baselineCheckpointRef,
+        }))
+      ) {
+        return buildUnavailableTurnDiffResult({
+          threadId: input.threadId,
+          fromTurnCount: 0,
+          toTurnCount: input.toTurnCount,
+          code: "BASELINE_MISSING",
+          message: "The initial checkpoint for this conversation is no longer available.",
+        });
+      }
 
-      const diff = yield* checkpointStore.diffCheckpoints({
-        ...checkpointWorkspace,
-        fromCheckpointRef:
-          (threadContext.value.baselineCheckpointRef
-            ? checkpointRefForThreadTurnInManagedFamily(
-                threadContext.value.baselineCheckpointRef,
-                input.threadId,
-                0,
-              )
-            : null) ?? checkpointRefForThreadTurn(input.threadId, 0),
-        toCheckpointRef: threadContext.value.toCheckpointRef,
-        fallbackFromToHead: false,
-        ignoreWhitespace,
-      });
+      const diff = yield* checkpointStore
+        .diffCheckpoints({
+          ...checkpointWorkspace,
+          fromCheckpointRef: baselineCheckpointRef,
+          toCheckpointRef: threadContext.value.toCheckpointRef,
+          fallbackFromToHead: false,
+          ignoreWhitespace,
+        })
+        .pipe(
+          Effect.tapError((error) =>
+            Effect.logWarning("full checkpoint diff failed after refs were verified", {
+              threadId: input.threadId,
+              toTurnCount: input.toTurnCount,
+              detail: error.message,
+            }),
+          ),
+          Effect.option,
+        );
+      if (Option.isNone(diff)) {
+        return buildUnavailableTurnDiffResult({
+          threadId: input.threadId,
+          fromTurnCount: 0,
+          toTurnCount: input.toTurnCount,
+          code: "CHECKPOINT_BACKEND_UNAVAILABLE",
+          message: "The checkpoint backend could not produce this conversation diff.",
+        });
+      }
 
       const fullThreadDiff = buildTurnDiffResult({
         threadId: input.threadId,
         fromTurnCount: 0,
         toTurnCount: input.toTurnCount,
-        diff,
+        diff: diff.value,
       });
       if (!isTurnDiffResult(fullThreadDiff)) {
         return yield* new CheckpointInvariantError({

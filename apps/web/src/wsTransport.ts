@@ -36,11 +36,16 @@ import {
   type WsPushMessage,
   type WsBootstrapNegotiateResult,
 } from "@synara/contracts";
+import {
+  classifyWsRequest,
+  WS_REQUEST_CLASS_LIMITS,
+} from "@synara/shared/wsRequestClass";
 import { Cause, Data, Effect, Exit, Layer, ManagedRuntime, Schema, Scope, Stream } from "effect";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
 import { APP_VERSION } from "./branding";
+import { WsRequestScheduler, type WsRequestPriority } from "./wsRequestScheduler";
 import type { WsTransportState } from "./wsTransportEvents";
 
 type PushListener<C extends WsPushChannel> = (message: WsPushMessage<C>) => void;
@@ -67,6 +72,7 @@ export class WsTransportRequestInterruptedError extends Data.TaggedError(
 export interface WsRequestOptions {
   readonly timeoutMs?: number | null;
   readonly signal?: AbortSignal;
+  readonly priority?: WsRequestPriority;
 }
 
 interface RequestAbortScope {
@@ -422,6 +428,9 @@ export class WsTransport {
   private readonly threadSubscriptions = new Map<string, unknown>();
   private compatibility: WsBootstrapNegotiateResult | null = null;
   private compatibilityIssue: WsCompatibilityError | null = null;
+  private readonly expensiveReadScheduler = new WsRequestScheduler(
+    WS_REQUEST_CLASS_LIMITS["expensive-read"],
+  );
 
   constructor(url?: string) {
     this.explicitUrl = url ?? null;
@@ -432,6 +441,35 @@ export class WsTransport {
   }
 
   async request<T = unknown>(
+    method: string,
+    params?: unknown,
+    options?: WsRequestOptions,
+  ): Promise<T> {
+    if (classifyWsRequest(method) !== "expensive-read") {
+      return this.performRequest<T>(method, params, options);
+    }
+    try {
+      return await this.expensiveReadScheduler.schedule(
+        () => this.performRequest<T>(method, params, options),
+        {
+          ...(options?.priority ? { priority: options.priority } : {}),
+          ...(options?.signal ? { signal: options.signal } : {}),
+        },
+      );
+    } catch (error) {
+      if (options?.signal?.aborted && !(error instanceof WsTransportRequestInterruptedError)) {
+        throw new WsTransportRequestInterruptedError({
+          message: `WebSocket RPC ${method} was cancelled.`,
+          code: "WS_REQUEST_ABORTED",
+          method,
+          cause: options.signal.reason ?? error,
+        });
+      }
+      throw error;
+    }
+  }
+
+  private async performRequest<T = unknown>(
     method: string,
     params?: unknown,
     options?: WsRequestOptions,
@@ -612,6 +650,7 @@ export class WsTransport {
     if (this.disposed) return;
     this.disposed = true;
     this.setState("disposed");
+    this.expensiveReadScheduler.dispose();
     this.resetAllStreamCapacityRetries();
     for (const cleanup of this.streamCleanups.values()) cleanup();
     this.streamCleanups.clear();

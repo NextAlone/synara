@@ -5,6 +5,7 @@ import {
   NonNegativeInt,
   OrchestrationPendingInteraction,
   OrchestrationCheckpointFile,
+  OrchestrationCheckpointStatus,
   OrchestrationProjectShell,
   OrchestrationSpaceShell,
   OrchestrationProposedPlanId,
@@ -210,7 +211,9 @@ const ProjectionFullThreadDiffContextRowSchema = Schema.Struct({
   vcsBackend: Schema.NullOr(VcsBackend),
   latestCheckpointTurnCount: Schema.NullOr(NonNegativeInt),
   baselineCheckpointRef: Schema.NullOr(CheckpointRef),
+  baselineCheckpointStatus: Schema.NullOr(OrchestrationCheckpointStatus),
   toCheckpointRef: Schema.NullOr(CheckpointRef),
+  toCheckpointStatus: Schema.NullOr(OrchestrationCheckpointStatus),
 });
 
 type ProjectionThreadDbRowRaw = Schema.Schema.Type<typeof ProjectionThreadDbRowSchema>;
@@ -1758,13 +1761,30 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             LIMIT 1
           ) AS "baselineCheckpointRef",
           (
+            SELECT turns.checkpoint_status
+            FROM projection_turns AS turns
+            WHERE turns.thread_id = threads.thread_id
+              AND turns.checkpoint_turn_count IS NOT NULL
+              AND turns.completed_at IS NOT NULL
+            ORDER BY turns.checkpoint_turn_count ASC
+            LIMIT 1
+          ) AS "baselineCheckpointStatus",
+          (
             SELECT turns.checkpoint_ref
             FROM projection_turns AS turns
             WHERE turns.thread_id = threads.thread_id
               AND turns.checkpoint_turn_count = ${checkpointTurnCount}
               AND turns.completed_at IS NOT NULL
             LIMIT 1
-          ) AS "toCheckpointRef"
+          ) AS "toCheckpointRef",
+          (
+            SELECT turns.checkpoint_status
+            FROM projection_turns AS turns
+            WHERE turns.thread_id = threads.thread_id
+              AND turns.checkpoint_turn_count = ${checkpointTurnCount}
+              AND turns.completed_at IS NOT NULL
+            LIMIT 1
+          ) AS "toCheckpointStatus"
         FROM projection_threads AS threads
         INNER JOIN projection_projects AS projects
           ON projects.project_id = threads.project_id
@@ -2431,7 +2451,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         vcsBackend: row.value.vcsBackend,
         latestCheckpointTurnCount: row.value.latestCheckpointTurnCount ?? 0,
         baselineCheckpointRef: row.value.baselineCheckpointRef,
+        baselineCheckpointStatus: row.value.baselineCheckpointStatus,
         toCheckpointRef: row.value.toCheckpointRef,
+        toCheckpointStatus: row.value.toCheckpointStatus,
       });
     });
 

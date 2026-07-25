@@ -11,6 +11,12 @@ import {
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
+import {
+  EXPENSIVE_READ_CAPACITY_MAX_FAILURE_COUNT,
+  expensiveReadCapacityRetryDelayMs,
+  isRetryableExpensiveReadCapacityError,
+  isWsRequestCancelled,
+} from "./wsRpcRetry";
 
 export const projectQueryKeys = {
   all: ["projects"] as const,
@@ -173,17 +179,20 @@ export function projectReadFileQueryOptions(input: {
       : null);
   return queryOptions<ProjectReadFileQueryResult>({
     queryKey: projectQueryKeys.readFile(input.cwd, input.relativePath),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const api = ensureNativeApi();
       if (!effectiveCwd || !input.relativePath) {
         throw new Error("Workspace file read is unavailable.");
       }
       try {
-        return await api.projects.readFile({
-          cwd: effectiveCwd,
-          relativePath: input.relativePath,
-          ...(input.previewGrant ? { previewGrant: input.previewGrant } : {}),
-        });
+        return await api.projects.readFile(
+          {
+            cwd: effectiveCwd,
+            relativePath: input.relativePath,
+            ...(input.previewGrant ? { previewGrant: input.previewGrant } : {}),
+          },
+          { signal, priority: "interactive" },
+        );
       } catch (error) {
         if (isProjectFileBinaryRpcError(error)) {
           return {
@@ -199,6 +208,16 @@ export function projectReadFileQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && effectiveCwd !== null && input.relativePath !== null,
     staleTime: input.staleTime ?? DEFAULT_READ_FILE_STALE_TIME,
+    retry: (failureCount, error) => {
+      if (isWsRequestCancelled(error)) return false;
+      if (isRetryableExpensiveReadCapacityError(error)) {
+        return failureCount < EXPENSIVE_READ_CAPACITY_MAX_FAILURE_COUNT;
+      }
+      return failureCount < 3;
+    },
+    retryDelay: (attempt, error) =>
+      expensiveReadCapacityRetryDelayMs(attempt, error) ??
+      Math.min(30_000, 1_000 * 2 ** Math.max(0, attempt)),
   });
 }
 

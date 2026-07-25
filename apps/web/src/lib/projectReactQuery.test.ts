@@ -95,6 +95,13 @@ describe("workspace file read query options", () => {
     });
     expect(isProjectUnsupportedBinaryFileResult(result)).toBe(true);
     expect(readFile).toHaveBeenCalledOnce();
+    expect(readFile).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        signal: expect.any(AbortSignal),
+        priority: "interactive",
+      },
+    );
   });
 
   it("keeps ordinary read failures as errors for the preview UI", async () => {
@@ -108,11 +115,62 @@ describe("workspace file read query options", () => {
 
     await expect(
       queryClient.fetchQuery(
-        projectReadFileQueryOptions({
-          cwd: "/repo/app",
-          relativePath: "src/app.ts",
-        }),
+        {
+          ...projectReadFileQueryOptions({
+            cwd: "/repo/app",
+            relativePath: "src/app.ts",
+          }),
+          retry: false,
+        },
       ),
     ).rejects.toBe(readError);
+  });
+
+  it("uses the extended bounded policy only for typed retryable capacity errors", () => {
+    const options = projectReadFileQueryOptions({
+      cwd: "/repo/app",
+      relativePath: "src/app.ts",
+    });
+    const retry = options.retry;
+    expect(typeof retry).toBe("function");
+    if (typeof retry !== "function") {
+      throw new Error("Expected retry to be a function.");
+    }
+
+    const capacity = {
+      code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+      retryable: true,
+      retryAfterMs: 250,
+    };
+    expect(retry(11, capacity)).toBe(true);
+    expect(retry(12, capacity)).toBe(false);
+    expect(retry(11, { cause: capacity })).toBe(true);
+    expect(retry(3, { ...capacity, retryable: false })).toBe(false);
+    expect(retry(2, new Error("ordinary failure"))).toBe(true);
+    expect(retry(3, new Error("ordinary failure"))).toBe(false);
+    expect(retry(0, { cause: { code: "WS_REQUEST_ABORTED" } })).toBe(false);
+  });
+
+  it("backs capacity retries off from the server floor with a two-second cap", () => {
+    const options = projectReadFileQueryOptions({
+      cwd: "/repo/app",
+      relativePath: "src/app.ts",
+    });
+    const retryDelay = options.retryDelay;
+    expect(typeof retryDelay).toBe("function");
+    if (typeof retryDelay !== "function") {
+      throw new Error("Expected retryDelay to be a function.");
+    }
+    const capacity = {
+      code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+      retryable: true,
+      retryAfterMs: 250,
+    };
+
+    expect(retryDelay(0, capacity)).toBe(250);
+    expect(retryDelay(1, capacity)).toBe(500);
+    expect(retryDelay(4, capacity)).toBe(2_000);
+    expect(retryDelay(1, { ...capacity, retryAfterMs: 735 })).toBe(735);
+    expect(retryDelay(2, new Error("ordinary failure"))).toBe(4_000);
   });
 });
