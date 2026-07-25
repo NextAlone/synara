@@ -379,6 +379,7 @@ function generateMacIconSet(
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const iconsetDir = path.join(tmpRoot, "icon.iconset");
+    const generatedIcnsPath = path.join(tmpRoot, "generated-icon.icns");
     yield* fs.makeDirectory(iconsetDir, { recursive: true });
 
     const iconSizes = [16, 32, 128, 256, 512] as const;
@@ -400,8 +401,9 @@ function generateMacIconSet(
     yield* runCommand(
       ChildProcess.make({
         ...commandOutputOptions(verbose),
-      })`iconutil -c icns ${iconsetDir} -o ${targetIcns}`,
+      })`iconutil -c icns ${iconsetDir} -o ${generatedIcnsPath}`,
     );
+    yield* fs.copyFile(generatedIcnsPath, targetIcns);
   });
 }
 
@@ -443,7 +445,19 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
       })`sips -z 1024 1024 ${legacyIconSource} --out ${dockIconPngPath}`,
     );
 
-    yield* generateMacIconSet(legacyIconSource, iconIcnsPath, tmpRoot, path, verbose);
+    yield* generateMacIconSet(legacyIconSource, iconIcnsPath, tmpRoot, path, verbose).pipe(
+      Effect.catch((error) =>
+        Effect.gen(function* () {
+          if (!(yield* fs.exists(iconIcnsPath))) {
+            return yield* Effect.fail(error);
+          }
+          yield* Effect.logWarning(
+            "macOS icon generation failed; retaining the staged icon.icns",
+            { error },
+          );
+        }),
+      ),
+    );
   });
 }
 
