@@ -62,7 +62,7 @@ export function useThreadWorkspaceHandoff(input: {
           projectId: input.activeProject.id,
           threadId: input.activeThread.id,
           expectedEpoch: vcs.epoch,
-          targetMode,
+          targetMode: targetMode === "worktree" ? "workspace" : "local",
           preferredLocalReference: input.activeRootBranch ?? input.activeThread.branch ?? null,
           preferredWorkspaceBaseReference:
             input.activeRootBranch ??
@@ -72,12 +72,12 @@ export function useThreadWorkspaceHandoff(input: {
           preferredNewWorkspaceName: options?.preferredWorktreeName ?? null,
         });
 
-        if (targetMode === "worktree" && result.worktreePath) {
+        if (targetMode === "worktree" && result.workspacePath) {
           const setupScript = setupProjectScript(input.activeProject.scripts);
           if (setupScript) {
             await input.runProjectScript(setupScript, {
-              cwd: result.worktreePath,
-              worktreePath: result.worktreePath,
+              cwd: result.workspacePath,
+              worktreePath: result.workspacePath,
               rememberAsLastInvoked: false,
             });
           }

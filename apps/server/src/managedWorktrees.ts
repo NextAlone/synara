@@ -5,7 +5,7 @@ import * as path from "node:path";
 
 import type {
   OrchestrationThread,
-  ServerManagedWorktree,
+  ServerManagedWorkspace,
 } from "@synara/contracts";
 import { Effect } from "effect";
 
@@ -237,9 +237,9 @@ export function pruneArchivedManagedWorktrees(input: {
   });
 }
 
-export function pruneProjectedArchivedManagedWorktrees(input: {
+export function pruneProjectedArchivedManagedWorkspaces(input: {
   readonly homeDir: string;
-  readonly worktreesDir: string;
+  readonly workspacesDir: string;
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly git: GitCoreShape;
   readonly projectVcs: ProjectVcsShape;
@@ -247,13 +247,13 @@ export function pruneProjectedArchivedManagedWorktrees(input: {
   return Effect.gen(function* () {
     const snapshot = yield* input.snapshotQuery.getSnapshot();
     const gitInventory = yield* pruneArchivedManagedWorktrees({
-      worktreesDir: input.worktreesDir,
+      worktreesDir: input.workspacesDir,
       snapshotsDir: path.join(input.homeDir, "worktree-snapshots"),
       threads: snapshot.threads,
       git: input.git,
     });
     yield* pruneArchivedManagedJjWorkspaces({
-      worktreesDir: input.worktreesDir,
+      workspacesDir: input.workspacesDir,
       snapshotQuery: input.snapshotQuery,
       projectVcs: input.projectVcs,
       threads: snapshot.threads,
@@ -274,10 +274,10 @@ function pathIsInside(root: string, candidate: string): boolean {
 
 /** List app-managed Git worktrees and JJ workspaces through the configured project backend. */
 export function listProjectedManagedWorkspaces(input: {
-  readonly worktreesDir: string;
+  readonly workspacesDir: string;
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly projectVcs: ProjectVcsShape;
-}): Effect.Effect<ReadonlyArray<ServerManagedWorktree>, Error> {
+}): Effect.Effect<ReadonlyArray<ServerManagedWorkspace>, Error> {
   return Effect.gen(function* () {
     const snapshot = yield* input.snapshotQuery.getShellSnapshot().pipe(
       Effect.mapError((cause) =>
@@ -286,14 +286,14 @@ export function listProjectedManagedWorkspaces(input: {
     );
     const managedRoot = yield* Effect.tryPromise({
       try: () =>
-        fs.realpath(input.worktreesDir).catch(() => path.resolve(input.worktreesDir)),
+        fs.realpath(input.workspacesDir).catch(() => path.resolve(input.workspacesDir)),
       catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
     });
     const listed = yield* Effect.forEach(
       snapshot.projects,
       (project) => {
         const binding = project.vcs.binding;
-        if (!binding) return Effect.succeed<ReadonlyArray<ServerManagedWorktree>>([]);
+        if (!binding) return Effect.succeed<ReadonlyArray<ServerManagedWorkspace>>([]);
         return input.projectVcs
           .listWorkspaces({
             projectId: project.id,
@@ -305,7 +305,7 @@ export function listProjectedManagedWorkspaces(input: {
                 result.workspaces,
                 (workspace) => {
                   if (workspace.path === null || workspace.current) {
-                    return Effect.succeed<ServerManagedWorktree | null>(null);
+                    return Effect.succeed<ServerManagedWorkspace | null>(null);
                   }
                   return Effect.tryPromise({
                     try: () =>
@@ -342,7 +342,7 @@ export function listProjectedManagedWorkspaces(input: {
       },
       { concurrency: 4 },
     );
-    const byIdentity = new Map<string, ServerManagedWorktree>();
+    const byIdentity = new Map<string, ServerManagedWorkspace>();
     for (const entry of listed.flat()) {
       if (entry !== null) {
         byIdentity.set(`${entry.projectId}\0${entry.path}`, entry);
@@ -357,7 +357,7 @@ export function listProjectedManagedWorkspaces(input: {
 }
 
 function pruneArchivedManagedJjWorkspaces(input: {
-  readonly worktreesDir: string;
+  readonly workspacesDir: string;
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly projectVcs: ProjectVcsShape;
   readonly threads: ReadonlyArray<OrchestrationThread>;
@@ -365,7 +365,7 @@ function pruneArchivedManagedJjWorkspaces(input: {
   return Effect.gen(function* () {
     const inventory = (
       yield* listProjectedManagedWorkspaces({
-        worktreesDir: input.worktreesDir,
+        workspacesDir: input.workspacesDir,
         snapshotQuery: input.snapshotQuery,
         projectVcs: input.projectVcs,
       })
@@ -404,7 +404,7 @@ function pruneArchivedManagedJjWorkspaces(input: {
           value,
         ): value is {
           thread: OrchestrationThread;
-          entry: ServerManagedWorktree;
+          entry: ServerManagedWorkspace;
         } => value.entry !== null && !activePaths.has(value.entry.path),
       )
       .sort((left, right) =>

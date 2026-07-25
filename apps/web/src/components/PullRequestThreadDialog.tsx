@@ -163,13 +163,13 @@ function PullRequestThreadDialogContent({
     void preparePullRequestThreadMutation
       .mutateAsync({
         reference: parsedReference,
-        mode,
+        mode: mode === "worktree" ? "workspace" : "local",
       })
       .then((result) =>
         Promise.resolve(
           onPrepared({
             branch: result.branch,
-            worktreePath: result.worktreePath,
+            worktreePath: result.workspacePath,
             pullRequest: result.pullRequest,
           }),
         ).then(() => {

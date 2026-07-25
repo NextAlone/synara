@@ -659,7 +659,7 @@ export function createWsNativeApi(): NativeApi {
       // withProviderUpdateTimeout, which owns the client-side watchdog.
       updateProvider: (input) =>
         transport.request(WS_METHODS.serverUpdateProvider, input, { timeoutMs: null }),
-      listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
+      listWorkspaces: () => transport.request(WS_METHODS.serverListWorkspaces),
       listLocalServers: () => transport.request(WS_METHODS.serverListLocalServers),
       stopLocalServer: (input) => transport.request(WS_METHODS.serverStopLocalServer, input),
       getProviderUsageSnapshot: (input) =>

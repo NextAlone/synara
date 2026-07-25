@@ -1,5 +1,5 @@
 // FILE: ConversationStorageSettingsPanels.browser.tsx
-// Purpose: Browser characterization for worktree association and archived-thread grouping.
+// Purpose: Browser characterization for workspace association and archived-thread grouping.
 // Layer: Browser UI test
 
 import "../../index.css";
@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 const harness = vi.hoisted(() => ({
-  worktrees: [
+  workspaces: [
     {
       projectId: "project-1",
       backend: "git",
@@ -25,14 +25,14 @@ const harness = vi.hoisted(() => ({
 }));
 
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: () => ({ data: { worktrees: harness.worktrees }, isLoading: false, isError: false }),
+  useQuery: () => ({ data: { workspaces: harness.workspaces }, isLoading: false, isError: false }),
   useMutation: () => ({ isPending: false, mutateAsync: harness.mutateAsync }),
   useQueryClient: () => ({ invalidateQueries: harness.invalidateQueries }),
 }));
 
 vi.mock("~/lib/serverReactQuery", () => ({
-  serverQueryKeys: { worktrees: () => ["worktrees"] },
-  serverWorktreesQueryOptions: () => ({ queryKey: ["worktrees"] }),
+  serverQueryKeys: { workspaces: () => ["workspaces"] },
+  serverWorkspacesQueryOptions: () => ({ queryKey: ["workspaces"] }),
 }));
 
 vi.mock("~/lib/vcsReactQuery", () => ({
@@ -51,7 +51,7 @@ vi.mock("~/store", () => ({
     }),
 }));
 
-import { ArchivedSettingsPanel, WorktreesSettingsPanel } from "./ConversationStorageSettingsPanels";
+import { ArchivedSettingsPanel, WorkspacesSettingsPanel } from "./ConversationStorageSettingsPanels";
 
 function thread(overrides: Record<string, unknown>) {
   return {
@@ -88,7 +88,7 @@ describe("ConversationStorageSettingsPanels", () => {
       thread({ id: "other", title: "Other worktree", worktreePath: "/repo/.worktrees/other" }),
     ];
 
-    await render(<WorktreesSettingsPanel active />);
+    await render(<WorkspacesSettingsPanel active />);
 
     expect(document.body.textContent).toContain("Direct link");
     expect(document.body.textContent).toContain("Associated link");

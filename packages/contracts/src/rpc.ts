@@ -193,7 +193,7 @@ import {
   ServerLifecycleStreamEvent,
   ServerGetSettingsResult,
   ServerListLocalServersResult,
-  ServerListWorktreesResult,
+  ServerListWorkspacesResult,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerProviderUpdateResult,
@@ -883,9 +883,9 @@ export const WsServerRefreshExternalMcpPairingRpc = Rpc.make(
   },
 );
 
-export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees, {
+export const WsServerListWorkspacesRpc = Rpc.make(WS_METHODS.serverListWorkspaces, {
   payload: Schema.Struct({}),
-  success: ServerListWorktreesResult,
+  success: ServerListWorkspacesResult,
   error: WsRpcError,
 });
 
@@ -1213,7 +1213,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerCreateExternalMcpIntegrationRpc,
   WsServerRevokeExternalMcpIntegrationRpc,
   WsServerRefreshExternalMcpPairingRpc,
-  WsServerListWorktreesRpc,
+  WsServerListWorkspacesRpc,
   WsServerListLocalServersRpc,
   WsServerStopLocalServerRpc,
   WsServerGetProviderUsageSnapshotRpc,

@@ -60,7 +60,7 @@ export type VcsPullRequestSnapshotResult =
 export const VcsPreparePullRequestThreadInput = Schema.Struct({
   ...VcsProjectTarget.fields,
   reference: VcsPullRequestReference,
-  mode: Schema.Literals(["local", "worktree"]),
+  mode: Schema.Literals(["local", "workspace"]),
 });
 export type VcsPreparePullRequestThreadInput =
   typeof VcsPreparePullRequestThreadInput.Type;
@@ -70,7 +70,7 @@ export const VcsPreparePullRequestThreadResult = Schema.Struct({
   epoch: NonNegativeInt,
   pullRequest: VcsPullRequestStatus,
   branch: TrimmedNonEmptyString,
-  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  workspacePath: Schema.NullOr(TrimmedNonEmptyString),
 });
 export type VcsPreparePullRequestThreadResult =
   typeof VcsPreparePullRequestThreadResult.Type;

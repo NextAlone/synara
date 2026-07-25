@@ -75,7 +75,7 @@ export interface ServerDerivedPaths {
   readonly dbPath: string;
   readonly settingsPath: string;
   readonly keybindingsConfigPath: string;
-  readonly worktreesDir: string;
+  readonly workspacesDir: string;
   readonly attachmentsDir: string;
   readonly logsDir: string;
   readonly serverLogPath: string;
@@ -154,7 +154,9 @@ export const deriveServerPaths = Effect.fn(function* (
     dbPath,
     settingsPath: join(stateDir, "settings.json"),
     keybindingsConfigPath: join(stateDir, "keybindings.json"),
-    worktreesDir: join(baseDir, "worktrees"),
+    // Keep the on-disk directory stable for existing installations while the
+    // shared Git/JJ configuration uses backend-neutral workspace terminology.
+    workspacesDir: join(baseDir, "worktrees"),
     attachmentsDir,
     logsDir,
     serverLogPath: join(logsDir, "server.log"),

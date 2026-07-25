@@ -16,7 +16,7 @@ export const serverQueryKeys = {
   authSession: () => ["server", "auth", "session"] as const,
   environment: () => ["server", "environment"] as const,
   settings: () => ["server", "settings"] as const,
-  worktrees: () => ["server", "worktrees"] as const,
+  workspaces: () => ["server", "workspaces"] as const,
   localServers: () => ["server", "localServers"] as const,
   providerUsage: (provider: ProviderKind | null | undefined, homePath?: string | null) =>
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
@@ -67,12 +67,12 @@ export function serverSettingsQueryOptions() {
   });
 }
 
-export function serverWorktreesQueryOptions() {
+export function serverWorkspacesQueryOptions() {
   return queryOptions({
-    queryKey: serverQueryKeys.worktrees(),
+    queryKey: serverQueryKeys.workspaces(),
     queryFn: async () => {
       const api = ensureNativeApi();
-      return api.server.listWorktrees();
+      return api.server.listWorkspaces();
     },
     staleTime: 30_000,
     refetchOnWindowFocus: true,

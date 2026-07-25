@@ -170,7 +170,7 @@ import type {
   ServerListProviderUsageResult,
   ServerGetSettingsResult,
   ServerListLocalServersResult,
-  ServerListWorktreesResult,
+  ServerListWorkspacesResult,
   ServerProviderUpdateInput,
   ServerProviderUpdateResult,
   ServerRefreshProvidersResult,
@@ -732,7 +732,7 @@ export interface NativeApi {
     ) => Promise<ExternalMcpCreateIntegrationResult>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
-    listWorktrees: () => Promise<ServerListWorktreesResult>;
+    listWorkspaces: () => Promise<ServerListWorkspacesResult>;
     listLocalServers: () => Promise<ServerListLocalServersResult>;
     stopLocalServer: (input: ServerStopLocalServerInput) => Promise<ServerStopLocalServerResult>;
     getProviderUsageSnapshot: (

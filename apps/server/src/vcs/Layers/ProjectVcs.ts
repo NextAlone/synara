@@ -74,7 +74,7 @@ export interface ProjectVcsDependencies {
   readonly canonicalizePath: (path: string) => Promise<string>;
   readonly now: () => string;
   readonly makeCommandId: () => CommandId;
-  readonly worktreesDir: string;
+  readonly workspacesDir: string;
   readonly pathExists: (path: string) => Promise<boolean>;
   readonly makeDirectory: (path: string) => Promise<void>;
   readonly removeDirectory: (path: string) => Promise<void>;
@@ -1329,7 +1329,7 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
       try: async () => {
         for (let attempt = 0; attempt < 8; attempt += 1) {
           const token = dependencies.randomToken();
-          const parent = nodePath.join(dependencies.worktreesDir, token);
+          const parent = nodePath.join(dependencies.workspacesDir, token);
           const root = nodePath.join(parent, "synara");
           if (await dependencies.pathExists(root)) {
             continue;
@@ -1338,7 +1338,7 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
           return { root, name: `synara-${token}` };
         }
         const token = dependencies.randomToken();
-        const parent = nodePath.join(dependencies.worktreesDir, token);
+        const parent = nodePath.join(dependencies.workspacesDir, token);
         await dependencies.makeDirectory(parent);
         return { root: nodePath.join(parent, "synara"), name: `synara-${token}` };
       },
@@ -1601,7 +1601,8 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                     : workspaceRootForProjectPath(projectPath, target.binding);
                 const gitResult = yield* dependencies.gitManager.handoffThread({
                   cwd: primaryProjectCwd,
-                  targetMode: input.targetMode,
+                  targetMode:
+                    input.targetMode === "workspace" ? "worktree" : "local",
                   currentBranch: thread.branch,
                   worktreePath: toRepositoryWorkspacePath(thread.worktreePath),
                   associatedWorktreePath: toRepositoryWorkspacePath(
@@ -1618,30 +1619,36 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                     ? null
                     : workspaceProjectPath(workspacePath, target.binding);
                 return {
-                  ...gitResult,
                   backend: "git",
                   epoch: target.epoch,
-                  worktreePath: toProjectWorkspacePath(gitResult.worktreePath),
-                  associatedWorktreePath: toProjectWorkspacePath(
+                  targetMode: input.targetMode,
+                  branch: gitResult.branch,
+                  workspacePath: toProjectWorkspacePath(gitResult.worktreePath),
+                  associatedWorkspacePath: toProjectWorkspacePath(
                     gitResult.associatedWorktreePath,
                   ),
+                  associatedWorkspaceBranch: gitResult.associatedWorktreeBranch,
+                  associatedWorkspaceRef: gitResult.associatedWorktreeRef,
+                  changesTransferred: gitResult.changesTransferred,
+                  conflictsDetected: gitResult.conflictsDetected,
+                  message: gitResult.message,
                 } satisfies VcsHandoffThreadResult;
               }
 
-              if (input.targetMode === "worktree") {
+              if (input.targetMode === "workspace") {
                 if (thread.envMode === "worktree" && thread.worktreePath) {
                   const status = yield* dependencies.jj.status(thread.worktreePath);
                   return {
                     backend: "jj",
                     epoch: target.epoch,
-                    targetMode: "worktree",
+                    targetMode: "workspace",
                     branch: status.currentBookmark,
-                    worktreePath: thread.worktreePath,
-                    associatedWorktreePath:
+                    workspacePath: thread.worktreePath,
+                    associatedWorkspacePath:
                       thread.associatedWorktreePath ?? thread.worktreePath,
-                    associatedWorktreeBranch:
+                    associatedWorkspaceBranch:
                       thread.associatedWorktreeBranch ?? status.currentBookmark,
-                    associatedWorktreeRef:
+                    associatedWorkspaceRef:
                       thread.associatedWorktreeRef ?? status.revision.commitId,
                     changesTransferred: false,
                     conflictsDetected: status.hasConflicts,
@@ -1719,12 +1726,12 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                 return {
                   backend: "jj",
                   epoch: target.epoch,
-                  targetMode: "worktree",
+                  targetMode: "workspace",
                   branch: workspaceRef,
-                  worktreePath: created.workspace.path,
-                  associatedWorktreePath: created.workspace.path,
-                  associatedWorktreeBranch: workspaceRef,
-                  associatedWorktreeRef: workspaceStatus.revision.commitId,
+                  workspacePath: created.workspace.path,
+                  associatedWorkspacePath: created.workspace.path,
+                  associatedWorkspaceBranch: workspaceRef,
+                  associatedWorkspaceRef: workspaceStatus.revision.commitId,
                   changesTransferred:
                     sourceStatus.hasChanges || sourceStatus.hasConflicts,
                   conflictsDetected: workspaceStatus.hasConflicts,
@@ -1740,11 +1747,11 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                   epoch: target.epoch,
                   targetMode: "local",
                   branch: status.currentBookmark,
-                  worktreePath: null,
-                  associatedWorktreePath: thread.associatedWorktreePath ?? null,
-                  associatedWorktreeBranch:
+                  workspacePath: null,
+                  associatedWorkspacePath: thread.associatedWorktreePath ?? null,
+                  associatedWorkspaceBranch:
                     thread.associatedWorktreeBranch ?? status.currentBookmark,
-                  associatedWorktreeRef:
+                  associatedWorkspaceRef:
                     thread.associatedWorktreeRef ?? status.revision.commitId,
                   changesTransferred: false,
                   conflictsDetected: status.hasConflicts,
@@ -1787,12 +1794,12 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                 epoch: target.epoch,
                 targetMode: "local",
                 branch: localRef,
-                worktreePath: null,
-                associatedWorktreePath:
+                workspacePath: null,
+                associatedWorkspacePath:
                   thread.associatedWorktreePath ?? thread.worktreePath,
-                associatedWorktreeBranch:
+                associatedWorkspaceBranch:
                   thread.associatedWorktreeBranch ?? sourceStatus.currentBookmark,
-                associatedWorktreeRef:
+                associatedWorkspaceRef:
                   thread.associatedWorktreeRef ?? sourceStatus.revision.commitId,
                 changesTransferred:
                   sourceStatus.hasChanges || sourceStatus.hasConflicts,
@@ -2075,13 +2082,15 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
             .preparePullRequestThread({
               cwd: target.cwd,
               reference: input.reference,
-              mode: input.mode,
+              mode: input.mode === "workspace" ? "worktree" : "local",
             })
             .pipe(
               Effect.map((result) => ({
                 backend: "git" as const,
                 epoch: target.epoch,
-                ...result,
+                pullRequest: result.pullRequest,
+                branch: result.branch,
+                workspacePath: result.worktreePath,
               })),
             );
         }
@@ -2104,7 +2113,7 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
               epoch: target.epoch,
               pullRequest: materialized.pullRequest,
               branch: materialized.branch,
-              worktreePath: null,
+              workspacePath: null,
             } as const;
           }
 
@@ -2118,7 +2127,7 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
               epoch: target.epoch,
               pullRequest: materialized.pullRequest,
               branch: materialized.branch,
-              worktreePath: reusablePath,
+              workspacePath: reusablePath,
             } as const;
           }
 
@@ -2134,7 +2143,7 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
             epoch: target.epoch,
             pullRequest: materialized.pullRequest,
             branch: materialized.branch,
-            worktreePath: created.workspace.path,
+            workspacePath: created.workspace.path,
           } as const;
         });
       }),
@@ -2245,7 +2254,7 @@ export const makeProjectVcs = Effect.gen(function* () {
     now: () => new Date().toISOString(),
     makeCommandId: () =>
       CommandId.makeUnsafe(`server:vcs-binding:${Crypto.randomUUID()}`),
-    worktreesDir: config.worktreesDir,
+    workspacesDir: config.workspacesDir,
     pathExists: (path) =>
       nodeFs
         .access(path)

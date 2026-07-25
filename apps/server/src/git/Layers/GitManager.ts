@@ -812,7 +812,7 @@ export const makeGitManager = Effect.gen(function* () {
     );
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const { worktreesDir } = yield* ServerConfig;
+  const { workspacesDir: worktreesDir } = yield* ServerConfig;
 
   const tempDir = process.env.TMPDIR ?? process.env.TEMP ?? process.env.TMP ?? "/tmp";
 

@@ -123,7 +123,7 @@ function dependencies(input: {
       canonicalizePath: async (path: string) => path,
       now: () => NOW,
       makeCommandId: () => CommandId.makeUnsafe("cmd-project-vcs-service"),
-      worktreesDir: "/managed",
+      workspacesDir: "/managed",
       pathExists: input.pathExists ?? (async () => false),
       makeDirectory: async () => undefined,
       removeDirectory: input.removeDirectory ?? (async () => undefined),
@@ -1795,6 +1795,75 @@ describe("ProjectVcs", () => {
     expect(removeDirectory).not.toHaveBeenCalled();
   });
 
+  it("maps workspace-shaped VCS handoffs to the native Git worktree API", async () => {
+    const gitHandoff = vi.fn(() =>
+      Effect.succeed({
+        targetMode: "worktree" as const,
+        branch: "feature",
+        worktreePath: "/managed/feature",
+        associatedWorktreePath: "/managed/feature",
+        associatedWorktreeBranch: "feature",
+        associatedWorktreeRef: "feature",
+        changesTransferred: true,
+        conflictsDetected: false,
+        message: "Moved",
+      }),
+    );
+    const deps = dependencies({
+      project: project({
+        epoch: 7,
+        binding: { ...jjBinding, backend: "git" },
+      }),
+      thread: {
+        id: THREAD_ID,
+        projectId: PROJECT_ID,
+        envMode: "local",
+        branch: "main",
+        worktreePath: null,
+        associatedWorktreePath: null,
+        associatedWorktreeBranch: null,
+        associatedWorktreeRef: null,
+      },
+      gitManager: { handoffThread: gitHandoff },
+    });
+    const service = makeProjectVcsWith(deps.value);
+
+    const result = await Effect.runPromise(
+      service.handoffThread({
+        commandId: CommandId.makeUnsafe("cmd-git-handoff-workspace"),
+        projectId: PROJECT_ID,
+        threadId: THREAD_ID,
+        expectedEpoch: 7,
+        targetMode: "workspace",
+        preferredLocalReference: null,
+        preferredWorkspaceBaseReference: "main",
+        preferredNewWorkspaceName: "feature",
+      }),
+    );
+
+    expect(gitHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/repo/app",
+        targetMode: "worktree",
+        preferredWorktreeBaseBranch: "main",
+        preferredNewWorktreeName: "feature",
+      }),
+    );
+    expect(result).toEqual({
+      backend: "git",
+      epoch: 7,
+      targetMode: "workspace",
+      branch: "feature",
+      workspacePath: "/managed/feature/app",
+      associatedWorkspacePath: "/managed/feature/app",
+      associatedWorkspaceBranch: "feature",
+      associatedWorkspaceRef: "feature",
+      changesTransferred: true,
+      conflictsDetected: false,
+      message: "Moved",
+    });
+  });
+
   it("hands a local thread into a JJ workspace without invoking Git", async () => {
     const createBookmark = vi.fn(() => Effect.void);
     const startNewChange = vi.fn(() =>
@@ -1872,7 +1941,7 @@ describe("ProjectVcs", () => {
         projectId: PROJECT_ID,
         threadId: THREAD_ID,
         expectedEpoch: 8,
-        targetMode: "worktree",
+        targetMode: "workspace",
         preferredLocalReference: null,
         preferredWorkspaceBaseReference: "feature",
         preferredNewWorkspaceName: "feature",
@@ -1893,10 +1962,10 @@ describe("ProjectVcs", () => {
     expect(result).toMatchObject({
       backend: "jj",
       epoch: 8,
-      targetMode: "worktree",
+      targetMode: "workspace",
       branch: "feature",
-      worktreePath: "/managed/abc123/synara/app",
-      associatedWorktreeRef: "workspace-commit",
+      workspacePath: "/managed/abc123/synara/app",
+      associatedWorkspaceRef: "workspace-commit",
       changesTransferred: true,
       conflictsDetected: false,
     });
@@ -2004,10 +2073,50 @@ describe("ProjectVcs", () => {
       backend: "jj",
       epoch: 9,
       targetMode: "local",
-      worktreePath: null,
-      associatedWorktreePath: "/workspaces/feature/app",
+      workspacePath: null,
+      associatedWorkspacePath: "/workspaces/feature/app",
       changesTransferred: true,
       conflictsDetected: false,
+    });
+  });
+
+  it("maps workspace-shaped PR preparation to the native Git worktree API", async () => {
+    const preparePullRequestThread = vi.fn(() =>
+      Effect.succeed({
+        pullRequest,
+        branch: "feature/jj",
+        worktreePath: "/managed/pr/app",
+      }),
+    );
+    const deps = dependencies({
+      project: project({
+        epoch: 10,
+        binding: { ...jjBinding, backend: "git" },
+      }),
+      gitManager: { preparePullRequestThread },
+    });
+    const service = makeProjectVcsWith(deps.value);
+
+    const result = await Effect.runPromise(
+      service.preparePullRequestThread({
+        projectId: PROJECT_ID,
+        expectedEpoch: 10,
+        reference: "#42",
+        mode: "workspace",
+      }),
+    );
+
+    expect(preparePullRequestThread).toHaveBeenCalledWith({
+      cwd: "/repo/app",
+      reference: "#42",
+      mode: "worktree",
+    });
+    expect(result).toEqual({
+      backend: "git",
+      epoch: 10,
+      pullRequest,
+      branch: "feature/jj",
+      workspacePath: "/managed/pr/app",
     });
   });
 
@@ -2150,7 +2259,7 @@ describe("ProjectVcs", () => {
       epoch: 11,
       pullRequest,
       branch: "feature/jj",
-      worktreePath: null,
+      workspacePath: null,
     });
   });
 
@@ -2273,7 +2382,7 @@ describe("ProjectVcs", () => {
       epoch: 11,
       pullRequest: crossForkPullRequest,
       branch: "feature/fork",
-      worktreePath: null,
+      workspacePath: null,
     });
   });
 
@@ -2361,7 +2470,7 @@ describe("ProjectVcs", () => {
         projectId: PROJECT_ID,
         expectedEpoch: 12,
         reference: "#42",
-        mode: "worktree",
+        mode: "workspace",
       }),
     );
 
@@ -2371,7 +2480,7 @@ describe("ProjectVcs", () => {
       epoch: 12,
       pullRequest,
       branch: "feature/jj",
-      worktreePath: "/workspaces/pr/app",
+      workspacePath: "/workspaces/pr/app",
     });
   });
 

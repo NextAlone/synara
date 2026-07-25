@@ -676,7 +676,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                 : sourceJjStatus!.revision.commitId;
             copyChangesFrom = sourceHead === worktreeRef ? sourceCwd : null;
             const plannedRepositoryWorkspacePath = join(
-              serverConfig.worktreesDir,
+              serverConfig.workspacesDir,
               stableGatewayDigest({ operationId, index }, 12),
             );
             plannedWorktreePath =

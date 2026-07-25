@@ -72,7 +72,7 @@ import { createLocalPreviewGrant } from "./localImageFiles";
 import { listLocalServers, stopLocalServer } from "./localServerMonitor";
 import {
   listProjectedManagedWorkspaces,
-  pruneProjectedArchivedManagedWorktrees,
+  pruneProjectedArchivedManagedWorkspaces,
 } from "./managedWorktrees";
 import {
   attachmentPrincipalForSession,
@@ -620,7 +620,7 @@ const makeWsRpcHandlersLayer = () =>
           homeDir: config.homeDir,
           chatWorkspaceRoot: config.chatWorkspaceRoot,
           studioWorkspaceRoot: config.studioWorkspaceRoot,
-          worktreesDir: config.worktreesDir,
+          workspacesDir: config.workspacesDir,
           keybindingsConfigPath: config.keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
@@ -657,13 +657,13 @@ const makeWsRpcHandlersLayer = () =>
       ) => assertLegacyGitBackendAllowed({ method, cwd }).pipe(Effect.andThen(effect));
 
       const listManagedWorkspaces = listProjectedManagedWorkspaces({
-        worktreesDir: config.worktreesDir,
+        workspacesDir: config.workspacesDir,
         snapshotQuery: projectionReadModelQuery,
         projectVcs,
       });
-      const pruneManagedWorktrees = pruneProjectedArchivedManagedWorktrees({
+      const pruneManagedWorkspaces = pruneProjectedArchivedManagedWorkspaces({
         homeDir: config.homeDir,
-        worktreesDir: config.worktreesDir,
+        workspacesDir: config.workspacesDir,
         snapshotQuery: projectionReadModelQuery,
         git,
         projectVcs,
@@ -791,7 +791,7 @@ const makeWsRpcHandlersLayer = () =>
                 yield* prepareWorkspaceRoot;
               }
               if (normalizedCommand.type === "thread.archive") {
-                yield* Effect.forkDetach(pruneManagedWorktrees);
+                yield* Effect.forkDetach(pruneManagedWorkspaces);
               }
               return result;
             }),
@@ -1612,10 +1612,10 @@ const makeWsRpcHandlersLayer = () =>
             requireOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
             "Failed to refresh external MCP pairing",
           ),
-        [WS_METHODS.serverListWorktrees]: () =>
+        [WS_METHODS.serverListWorkspaces]: () =>
           rpcEffect(
-            pruneManagedWorktrees.pipe(Effect.map((worktrees) => ({ worktrees }))),
-            "Failed to list managed worktrees",
+            pruneManagedWorkspaces.pipe(Effect.map((workspaces) => ({ workspaces }))),
+            "Failed to list managed workspaces",
           ),
         [WS_METHODS.serverListLocalServers]: () =>
           rpcEffect(

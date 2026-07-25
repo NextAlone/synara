@@ -122,7 +122,7 @@ describe("managed worktrees", () => {
     await expect(
       Effect.runPromise(
         listProjectedManagedWorkspaces({
-          worktreesDir: root,
+          workspacesDir: root,
           snapshotQuery,
           projectVcs,
         }),

@@ -232,12 +232,15 @@ export function PullRequestDetailPanel({
     setPreparingThread(kind);
     const mode = settings.defaultThreadEnvMode;
     void prepareThreadMutation
-      .mutateAsync({ reference: detail.url, mode })
+      .mutateAsync({
+        reference: detail.url,
+        mode: mode === "worktree" ? "workspace" : "local",
+      })
       .then((prepared) =>
         Promise.resolve(
           handleNewThread(detail.projectId, {
             branch: prepared.branch,
-            worktreePath: prepared.worktreePath,
+            worktreePath: prepared.workspacePath,
             envMode: mode,
             // This action is an explicit handoff from the PR browser. Reusing the project's
             // existing draft can leave the user on the PR route and insert the prompt into a

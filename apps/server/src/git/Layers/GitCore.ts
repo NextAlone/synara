@@ -558,7 +558,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const { worktreesDir } = yield* ServerConfig;
+    const { workspacesDir: worktreesDir } = yield* ServerConfig;
 
     const buildGeneratedDetachedWorktreePath = () =>
       Effect.gen(function* () {

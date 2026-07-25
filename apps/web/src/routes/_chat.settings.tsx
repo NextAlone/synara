@@ -28,7 +28,7 @@ import { APP_VERSION } from "../branding";
 import { AdvancedSettingsPanel } from "~/components/settings/AdvancedSettingsPanel";
 import {
   ArchivedSettingsPanel,
-  WorktreesSettingsPanel,
+  WorkspacesSettingsPanel,
 } from "~/components/settings/ConversationStorageSettingsPanels";
 import {
   AppSnapSettingsPanel,
@@ -1108,7 +1108,7 @@ function SettingsRouteView() {
                   defaults={defaults}
                   updateSettings={updateSettings}
                 />
-                <WorktreesSettingsPanel active={activeSection === "worktrees"} />
+                <WorkspacesSettingsPanel active={activeSection === "workspaces"} />
                 <ArchivedSettingsPanel active={activeSection === "archived"} />
                 <ModelsSettingsPanel
                   active={activeSection === "models"}

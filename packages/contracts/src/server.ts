@@ -91,7 +91,7 @@ export const ServerConfig = Schema.Struct({
   homeDir: Schema.optional(TrimmedNonEmptyString),
   chatWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
   studioWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
-  worktreesDir: TrimmedNonEmptyString,
+  workspacesDir: TrimmedNonEmptyString,
   keybindingsConfigPath: TrimmedNonEmptyString,
   keybindings: ResolvedKeybindingsConfig,
   issues: ServerConfigIssues,
@@ -100,19 +100,19 @@ export const ServerConfig = Schema.Struct({
 });
 export type ServerConfig = typeof ServerConfig.Type;
 
-export const ServerManagedWorktree = Schema.Struct({
+export const ServerManagedWorkspace = Schema.Struct({
   projectId: ProjectId,
   backend: VcsBackend,
   epoch: NonNegativeInt,
   path: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
 });
-export type ServerManagedWorktree = typeof ServerManagedWorktree.Type;
+export type ServerManagedWorkspace = typeof ServerManagedWorkspace.Type;
 
-export const ServerListWorktreesResult = Schema.Struct({
-  worktrees: Schema.Array(ServerManagedWorktree),
+export const ServerListWorkspacesResult = Schema.Struct({
+  workspaces: Schema.Array(ServerManagedWorkspace),
 });
-export type ServerListWorktreesResult = typeof ServerListWorktreesResult.Type;
+export type ServerListWorkspacesResult = typeof ServerListWorkspacesResult.Type;
 
 export const ServerProviderUsageLimit = Schema.Struct({
   window: TrimmedNonEmptyString,

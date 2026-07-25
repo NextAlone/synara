@@ -69,7 +69,7 @@ import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
-import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
+import { pruneProjectedArchivedManagedWorkspaces } from "../../managedWorktrees.ts";
 import { JjCore } from "../../vcs/Services/JjCore.ts";
 import { ProjectVcs } from "../../vcs/Services/ProjectVcs.ts";
 
@@ -533,9 +533,9 @@ export const makeAgentGateway = Effect.gen(function* () {
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
         if (archived) {
           yield* Effect.forkDetach(
-            pruneProjectedArchivedManagedWorktrees({
+            pruneProjectedArchivedManagedWorkspaces({
               homeDir: serverConfig.homeDir,
-              worktreesDir: serverConfig.worktreesDir,
+              workspacesDir: serverConfig.workspacesDir,
               snapshotQuery,
               git,
               projectVcs,

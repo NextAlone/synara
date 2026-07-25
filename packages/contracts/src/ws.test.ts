@@ -117,7 +117,7 @@ it.effect("accepts project-scoped VCS pull request preparation", () =>
         projectId: "project-1",
         expectedEpoch: 2,
         reference: "#42",
-        mode: "worktree",
+        mode: "workspace",
       },
     });
 

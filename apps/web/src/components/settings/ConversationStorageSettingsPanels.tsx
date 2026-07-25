@@ -1,7 +1,7 @@
 // FILE: ConversationStorageSettingsPanels.tsx
-// Purpose: Own settings panels for managed worktrees and archived conversations.
+// Purpose: Own settings panels for managed workspaces and archived conversations.
 // Layer: Settings UI components
-// Exports: WorktreesSettingsPanel, ArchivedSettingsPanel
+// Exports: WorkspacesSettingsPanel, ArchivedSettingsPanel
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
@@ -16,7 +16,7 @@ import {
   deleteArchivedThreadsFromClient,
 } from "~/lib/archivedThreadDelete";
 import { formatRelativeTime } from "~/lib/relativeTime";
-import { serverQueryKeys, serverWorktreesQueryOptions } from "~/lib/serverReactQuery";
+import { serverQueryKeys, serverWorkspacesQueryOptions } from "~/lib/serverReactQuery";
 import { unarchiveThreadFromClient } from "~/lib/threadArchive";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi, readNativeApi } from "~/nativeApi";
@@ -42,13 +42,13 @@ type ArchivedSortableThread = {
   createdAt: string;
 };
 
-function isThreadAssociatedWithWorktree(
+function isThreadAssociatedWithWorkspace(
   thread: WorktreeAssociation,
-  worktreePath: string,
+  workspacePath: string,
 ): boolean {
   return [thread.worktreePath, thread.associatedWorktreePath].some((candidate) => {
     const normalized = candidate?.trim();
-    return Boolean(normalized) && normalized === worktreePath;
+    return Boolean(normalized) && normalized === workspacePath;
   });
 }
 
@@ -58,7 +58,7 @@ function compareArchivedThreads(left: ArchivedSortableThread, right: ArchivedSor
   return rightKey.localeCompare(leftKey) || right.id.localeCompare(left.id);
 }
 
-function WorktreesStatus(props: { children: string; error?: boolean }) {
+function WorkspacesStatus(props: { children: string; error?: boolean }) {
   return (
     <div
       className={cn(
@@ -74,20 +74,20 @@ function WorktreesStatus(props: { children: string; error?: boolean }) {
   );
 }
 
-export function WorktreesSettingsPanel({ active }: { readonly active: boolean }) {
+export function WorkspacesSettingsPanel({ active }: { readonly active: boolean }) {
   const queryClient = useQueryClient();
-  const worktreesQuery = useQuery(serverWorktreesQueryOptions());
-  const removeWorktreeMutation = useMutation(vcsRemoveWorkspaceMutationOptions({ queryClient }));
+  const workspacesQuery = useQuery(serverWorkspacesQueryOptions());
+  const removeWorkspaceMutation = useMutation(vcsRemoveWorkspaceMutationOptions({ queryClient }));
   const removeDeletedThreadFromClientState = useStore(
     (store) => store.removeDeletedThreadFromClientState,
   );
   // Shell metadata is enough for association labels and avoids rerendering on transcript ticks.
   const threadShells = useStore(useMemo(() => createThreadShellsSelector(), []));
 
-  const worktreesByWorkspaceRoot = useMemo(() => {
-    type WorktreeGroup = {
+  const workspacesByWorkspaceRoot = useMemo(() => {
+    type WorkspaceGroup = {
       workspaceRoot: string;
-      worktrees: Array<{
+      workspaces: Array<{
         projectId: ProjectId;
         backend: "git" | "jj";
         epoch: number;
@@ -95,41 +95,43 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
         linkedThreads: typeof threadShells;
       }>;
     };
-    const groups: WorktreeGroup[] = [];
-    const groupByRoot = new Map<string, WorktreeGroup>();
-    for (const worktree of worktreesQuery.data?.worktrees ?? []) {
-      const nextWorktree = {
-        projectId: worktree.projectId,
-        backend: worktree.backend,
-        epoch: worktree.epoch,
-        path: worktree.path,
+    const groups: WorkspaceGroup[] = [];
+    const groupByRoot = new Map<string, WorkspaceGroup>();
+    for (const workspace of workspacesQuery.data?.workspaces ?? []) {
+      const nextWorkspace = {
+        projectId: workspace.projectId,
+        backend: workspace.backend,
+        epoch: workspace.epoch,
+        path: workspace.path,
         linkedThreads: threadShells.filter((thread) =>
-          isThreadAssociatedWithWorktree(thread, worktree.path),
+          isThreadAssociatedWithWorkspace(thread, workspace.path),
         ),
       };
-      const existingGroup = groupByRoot.get(worktree.workspaceRoot);
+      const existingGroup = groupByRoot.get(workspace.workspaceRoot);
       if (existingGroup) {
-        existingGroup.worktrees.push(nextWorktree);
+        existingGroup.workspaces.push(nextWorkspace);
         continue;
       }
-      const group: WorktreeGroup = {
-        workspaceRoot: worktree.workspaceRoot,
-        worktrees: [nextWorktree],
+      const group: WorkspaceGroup = {
+        workspaceRoot: workspace.workspaceRoot,
+        workspaces: [nextWorkspace],
       };
       groups.push(group);
-      groupByRoot.set(worktree.workspaceRoot, group);
+      groupByRoot.set(workspace.workspaceRoot, group);
     }
     return groups;
-  }, [threadShells, worktreesQuery.data?.worktrees]);
+  }, [threadShells, workspacesQuery.data?.workspaces]);
 
-  const deleteManagedWorktree = useCallback(
+  const deleteManagedWorkspace = useCallback(
     async (input: {
       projectId: ProjectId;
+      backend: "git" | "jj";
       epoch: number;
-      worktreePath: string;
+      workspacePath: string;
     }) => {
       const api = readNativeApi() ?? ensureNativeApi();
-      const displayName = formatWorktreePathForDisplay(input.worktreePath);
+      const displayName = formatWorktreePathForDisplay(input.workspacePath);
+      const workspaceKind = input.backend === "jj" ? "workspace" : "worktree";
       const snapshot = await api.orchestration.getShellSnapshot().catch(() => null);
       if (snapshot === null) {
         toastManager.add({
@@ -141,7 +143,7 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
       }
 
       const linkedThreads = snapshot.threads.filter((thread) =>
-        isThreadAssociatedWithWorktree(thread, input.worktreePath),
+        isThreadAssociatedWithWorkspace(thread, input.workspacePath),
       );
       const linkedArchivedThreadIds = linkedThreads
         .filter((thread) => (thread.archivedAt ?? null) !== null)
@@ -151,14 +153,14 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
       const confirmed = await api.dialogs.confirm(
         linkedConversationCount > 0
           ? [
-              `Delete worktree "${displayName}"?`,
+              `Delete ${workspaceKind} "${displayName}"?`,
               "",
-              `${linkedActiveThreadCount} active and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedConversationCount, "conversation is", "conversations are")} linked to this worktree.`,
+              `${linkedActiveThreadCount} active and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedConversationCount, "conversation is", "conversations are")} linked to this ${workspaceKind}.`,
               linkedArchivedThreadIds.length > 0
                 ? "Archived conversations will be deleted first."
                 : "Deleting it can break reopening those chats in the same workspace.",
               "",
-              "Delete the worktree anyway?",
+              `Delete the ${workspaceKind} anyway?`,
             ].join("\n")
           : [`Delete workspace "${displayName}"?`, "This removes the VCS workspace from disk."].join(
               "\n",
@@ -172,13 +174,13 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
           threadIds: linkedArchivedThreadIds,
           removeDeletedThreadFromClientState,
         });
-        await removeWorktreeMutation.mutateAsync({
+        await removeWorkspaceMutation.mutateAsync({
           projectId: input.projectId,
           expectedEpoch: input.epoch,
-          path: input.worktreePath,
+          path: input.workspacePath,
           force: true,
         });
-        await queryClient.invalidateQueries({ queryKey: serverQueryKeys.worktrees() });
+        await queryClient.invalidateQueries({ queryKey: serverQueryKeys.workspaces() });
         toastManager.add({
           type: "success",
           title: "Workspace deleted",
@@ -195,50 +197,50 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
         });
       }
     },
-    [queryClient, removeDeletedThreadFromClientState, removeWorktreeMutation],
+    [queryClient, removeDeletedThreadFromClientState, removeWorkspaceMutation],
   );
 
   if (!active) return null;
 
-  if (worktreesQuery.isLoading) {
-    return <WorktreesStatus>Loading managed workspaces...</WorktreesStatus>;
+  if (workspacesQuery.isLoading) {
+    return <WorkspacesStatus>Loading managed workspaces...</WorkspacesStatus>;
   }
-  if (worktreesQuery.isError) {
+  if (workspacesQuery.isError) {
     return (
-      <WorktreesStatus error>
-        {worktreesQuery.error instanceof Error
-          ? worktreesQuery.error.message
+      <WorkspacesStatus error>
+        {workspacesQuery.error instanceof Error
+          ? workspacesQuery.error.message
           : "Unable to load workspaces."}
-      </WorktreesStatus>
+      </WorkspacesStatus>
     );
   }
-  if (worktreesByWorkspaceRoot.length === 0) {
-    return <WorktreesStatus>No app-managed workspaces found yet.</WorktreesStatus>;
+  if (workspacesByWorkspaceRoot.length === 0) {
+    return <WorkspacesStatus>No app-managed workspaces found yet.</WorkspacesStatus>;
   }
 
   return (
     <div className="space-y-6">
-      {worktreesByWorkspaceRoot.map((group) => (
+      {workspacesByWorkspaceRoot.map((group) => (
         <SettingsSection key={group.workspaceRoot} title={group.workspaceRoot}>
-          {group.worktrees.map((worktree) => (
+          {group.workspaces.map((workspace) => (
             <SettingsListRow
-              key={worktree.path}
+              key={workspace.path}
               align="start"
-              title={worktree.backend === "jj" ? "JJ workspace" : "Git worktree"}
+              title={workspace.backend === "jj" ? "JJ workspace" : "Git worktree"}
               description={
                 <div className="space-y-2">
                   <div
                     className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "truncate font-mono")}
                   >
-                    {worktree.path}
+                    {workspace.path}
                   </div>
                   <div className="space-y-1">
                     <div className="text-[11px] font-medium text-muted-foreground">
                       Conversations
                     </div>
-                    {worktree.linkedThreads.length > 0 ? (
+                    {workspace.linkedThreads.length > 0 ? (
                       <div className="space-y-1">
-                        {worktree.linkedThreads.map((thread) => (
+                        {workspace.linkedThreads.map((thread) => (
                           <div
                             key={thread.id}
                             className={cn(
@@ -252,7 +254,7 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
                       </div>
                     ) : (
                       <div className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-                        No conversations linked to this worktree.
+                        No conversations linked to this workspace.
                       </div>
                     )}
                   </div>
@@ -263,18 +265,19 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
                   <Button
                     size="xs"
                     variant="destructive"
-                    disabled={removeWorktreeMutation.isPending}
+                    disabled={removeWorkspaceMutation.isPending}
                     onClick={() =>
-                      void deleteManagedWorktree({
-                        projectId: worktree.projectId,
-                        epoch: worktree.epoch,
-                        worktreePath: worktree.path,
+                      void deleteManagedWorkspace({
+                        projectId: workspace.projectId,
+                        backend: workspace.backend,
+                        epoch: workspace.epoch,
+                        workspacePath: workspace.path,
                       })
                     }
                   >
                     Delete
                   </Button>
-                  {worktree.linkedThreads.length > 0 ? (
+                  {workspace.linkedThreads.length > 0 ? (
                     <p
                       className={cn(
                         SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,

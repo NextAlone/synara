@@ -48,9 +48,46 @@ const parseResult = (row: HandoffRow) =>
     catch: operationError(`Invalid persisted Git handoff result for ${row.commandId}.`),
   });
 
+const normalizePersistedVcsHandoffMode = (value: unknown): unknown =>
+  value === "worktree" ? "workspace" : value;
+
+const normalizePersistedVcsHandoffInput = (value: unknown): unknown =>
+  typeof value === "object" && value !== null && "targetMode" in value
+    ? {
+        ...value,
+        targetMode: normalizePersistedVcsHandoffMode(value.targetMode),
+      }
+    : value;
+
+const normalizePersistedVcsHandoffResult = (value: unknown): unknown => {
+  if (typeof value !== "object" || value === null || !("targetMode" in value)) {
+    return value;
+  }
+  if ("workspacePath" in value) {
+    return {
+      ...value,
+      targetMode: normalizePersistedVcsHandoffMode(value.targetMode),
+    };
+  }
+  return {
+    ...value,
+    targetMode: normalizePersistedVcsHandoffMode(value.targetMode),
+    workspacePath: "worktreePath" in value ? value.worktreePath : undefined,
+    associatedWorkspacePath:
+      "associatedWorktreePath" in value ? value.associatedWorktreePath : undefined,
+    associatedWorkspaceBranch:
+      "associatedWorktreeBranch" in value ? value.associatedWorktreeBranch : undefined,
+    associatedWorkspaceRef:
+      "associatedWorktreeRef" in value ? value.associatedWorktreeRef : undefined,
+  };
+};
+
 const parseVcsResult = (row: HandoffRow) =>
   Effect.try({
-    try: () => Schema.decodeUnknownSync(VcsHandoffThreadResult)(JSON.parse(row.resultJson ?? "")),
+    try: () =>
+      Schema.decodeUnknownSync(VcsHandoffThreadResult)(
+        normalizePersistedVcsHandoffResult(JSON.parse(row.resultJson ?? "")),
+      ),
     catch: operationError(`Invalid persisted VCS handoff result for ${row.commandId}.`),
   });
 
@@ -126,7 +163,10 @@ export const beginVcsHandoff = (input: VcsHandoffThreadInput) =>
       : yield* decodeVcsOperation(begun.row);
   });
 
-export const recordGitHandoffResult = (commandId: string, result: GitHandoffThreadResult) =>
+const recordHandoffResult = (
+  commandId: string,
+  result: GitHandoffThreadResult | VcsHandoffThreadResult,
+) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const resultJson = JSON.stringify(result);
@@ -135,14 +175,18 @@ export const recordGitHandoffResult = (commandId: string, result: GitHandoffThre
       UPDATE git_handoff_operations
       SET phase = 'git_applied', result_json = ${resultJson}, updated_at = ${now}
       WHERE command_id = ${commandId} AND phase = 'pending'
-    `.pipe(Effect.mapError(operationError("Failed to persist applied Git handoff result.")));
+    `.pipe(Effect.mapError(operationError("Failed to persist applied VCS handoff result.")));
   });
+
+export const recordGitHandoffResult = (
+  commandId: string,
+  result: GitHandoffThreadResult,
+) => recordHandoffResult(commandId, result);
 
 export const recordVcsHandoffResult = (
   commandId: string,
   result: VcsHandoffThreadResult,
-) =>
-  recordGitHandoffResult(commandId, result);
+) => recordHandoffResult(commandId, result);
 
 export const completeGitHandoff = (commandId: string) =>
   Effect.gen(function* () {
@@ -186,13 +230,13 @@ export const vcsHandoffMetadataCommand = (
   type: "thread.meta.update",
   commandId: input.commandId,
   threadId: input.threadId,
-  envMode: result.targetMode,
+  envMode: result.targetMode === "workspace" ? "worktree" : "local",
   branch: result.branch,
-  worktreePath: result.worktreePath,
-  associatedWorktreePath: result.associatedWorktreePath,
-  associatedWorktreeBranch: result.associatedWorktreeBranch,
-  associatedWorktreeRef: result.associatedWorktreeRef,
-  ...(result.targetMode === "worktree" ? { createBranchFlowCompleted: false } : {}),
+  worktreePath: result.workspacePath,
+  associatedWorktreePath: result.associatedWorkspacePath,
+  associatedWorktreeBranch: result.associatedWorkspaceBranch,
+  associatedWorktreeRef: result.associatedWorkspaceRef,
+  ...(result.targetMode === "workspace" ? { createBranchFlowCompleted: false } : {}),
 });
 
 export const recoverGitHandoffOperations = (
@@ -235,7 +279,10 @@ export const recoverGitHandoffOperations = (
         "projectId" in rawInput
       ) {
         const input = yield* Effect.try({
-          try: () => Schema.decodeUnknownSync(VcsHandoffThreadInput)(rawInput),
+          try: () =>
+            Schema.decodeUnknownSync(VcsHandoffThreadInput)(
+              normalizePersistedVcsHandoffInput(rawInput),
+            ),
           catch: operationError(`Invalid persisted VCS handoff input for ${row.commandId}.`),
         });
         const result = yield* parseVcsResult(row);

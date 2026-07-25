@@ -278,7 +278,7 @@ export const VcsRemoveWorkspaceResult = Schema.Struct({
 });
 export type VcsRemoveWorkspaceResult = typeof VcsRemoveWorkspaceResult.Type;
 
-export const VcsHandoffThreadMode = Schema.Literals(["local", "worktree"]);
+export const VcsHandoffThreadMode = Schema.Literals(["local", "workspace"]);
 export type VcsHandoffThreadMode = typeof VcsHandoffThreadMode.Type;
 
 export const VcsHandoffThreadInput = Schema.Struct({
@@ -298,10 +298,10 @@ export const VcsHandoffThreadResult = Schema.Struct({
   epoch: NonNegativeInt,
   targetMode: VcsHandoffThreadMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
-  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
-  associatedWorktreePath: Schema.NullOr(TrimmedNonEmptyString),
-  associatedWorktreeBranch: Schema.NullOr(TrimmedNonEmptyString),
-  associatedWorktreeRef: Schema.NullOr(TrimmedNonEmptyString),
+  workspacePath: Schema.NullOr(TrimmedNonEmptyString),
+  associatedWorkspacePath: Schema.NullOr(TrimmedNonEmptyString),
+  associatedWorkspaceBranch: Schema.NullOr(TrimmedNonEmptyString),
+  associatedWorkspaceRef: Schema.NullOr(TrimmedNonEmptyString),
   changesTransferred: Schema.Boolean,
   conflictsDetected: Schema.Boolean,
   message: Schema.NullOr(Schema.String),

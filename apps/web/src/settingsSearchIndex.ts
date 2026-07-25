@@ -293,12 +293,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     target: null,
   },
 
-  // ── Worktrees ─────────────────────────────────────────────────────────────────
+  // ── Workspaces ────────────────────────────────────────────────────────────────
   {
-    id: "worktrees:managed-worktrees",
-    section: "worktrees",
-    title: "Managed worktrees",
-    keywords: "Review and clean up the worktrees created by Synara. git branch remove",
+    id: "workspaces:managed-workspaces",
+    section: "workspaces",
+    title: "Managed workspaces",
+    keywords: "Review and clean up the VCS workspaces created by Synara. git jj branch remove",
     target: null,
   },
 

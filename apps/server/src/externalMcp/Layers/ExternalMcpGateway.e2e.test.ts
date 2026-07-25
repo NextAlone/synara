@@ -124,9 +124,9 @@ describe("external MCP gateway stdio flow", () => {
     const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-external-e2e-"));
     temporaryDirectories.push(baseDir);
     const workspaceRoot = path.join(baseDir, "project");
-    const worktreesDir = path.join(baseDir, "worktrees");
+    const workspacesDir = path.join(baseDir, "worktrees");
     fs.mkdirSync(workspaceRoot, { recursive: true });
-    fs.mkdirSync(worktreesDir, { recursive: true });
+    fs.mkdirSync(workspacesDir, { recursive: true });
 
     const project = projectShell(workspaceRoot);
     const threads = new Map<string, OrchestrationThreadShell>();
@@ -255,7 +255,7 @@ describe("external MCP gateway stdio flow", () => {
           worktreeCreates.push(input);
           return {
             worktree: {
-              path: input.path ?? path.join(worktreesDir, "generated"),
+              path: input.path ?? path.join(workspacesDir, "generated"),
               ref: input.ref,
               branch: null,
             },
@@ -316,7 +316,7 @@ describe("external MCP gateway stdio flow", () => {
     } as never);
     const configLayer = Layer.succeed(ServerConfig, {
       baseDir,
-      worktreesDir,
+      workspacesDir,
       host: "127.0.0.1",
       publicUrl: undefined,
     } as never);
