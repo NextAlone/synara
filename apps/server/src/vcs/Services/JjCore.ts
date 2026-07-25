@@ -44,6 +44,10 @@ export interface JjWorkingCopyStatus {
   readonly revision: JjRevisionIdentity;
   /** Nearest local bookmark at or behind the working-copy change. */
   readonly currentBookmark: string | null;
+  readonly nearestBookmarkDistance: {
+    readonly bookmark: string;
+    readonly nonEmptyChangeCount: number;
+  } | null;
   readonly upstreamBookmark: string | null;
   readonly aheadCount: number;
   readonly behindCount: number;

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
+  getJjChangeDistancePresentation,
   getJjWorktreeBaseSpecialItems,
   isJjLocalDefaultWorkspaceMode,
   isJjSyntheticWorktreeBaseRef,
@@ -12,6 +13,7 @@ import {
   resolveDraftEnvModeAfterBranchChange,
   resolveFixedLocalWorkspacePatch,
   resolveBranchToolbarValue,
+  shouldShowJjChangeDistance,
   shouldSyncLocalThreadBranch,
 } from "./BranchToolbar.logic";
 
@@ -149,7 +151,7 @@ describe("resolveBranchToolbarValue", () => {
     ).toBe("feature/selected");
   });
 
-  it("shows @ for local JJ default workspace mode", () => {
+  it("uses @ for local JJ default workspace mode", () => {
     expect(
       resolveBranchToolbarValue({
         envMode: "local",
@@ -174,6 +176,63 @@ describe("resolveBranchToolbarValue", () => {
   });
 });
 
+describe("getJjChangeDistancePresentation", () => {
+  it("shows non-empty changes since the nearest bookmark", () => {
+    expect(
+      getJjChangeDistancePresentation({
+        distance: {
+          bookmark: "main",
+          nonEmptyChangeCount: 5,
+        },
+        isLoading: false,
+        hasError: false,
+      }),
+    ).toEqual({
+      label: "5 changes",
+      trailing: "since main",
+      title:
+        "5 non-empty changes between nearest bookmark main and working copy @. Empty changes are excluded.",
+    });
+  });
+
+  it("uses singular copy for one change", () => {
+    expect(
+      getJjChangeDistancePresentation({
+        distance: {
+          bookmark: "feature",
+          nonEmptyChangeCount: 1,
+        },
+        isLoading: false,
+        hasError: false,
+      }).label,
+    ).toBe("1 change");
+  });
+
+  it("distinguishes loading, errors, and a missing bookmark ancestor", () => {
+    expect(
+      getJjChangeDistancePresentation({
+        distance: undefined,
+        isLoading: true,
+        hasError: false,
+      }).label,
+    ).toBe("Counting changes");
+    expect(
+      getJjChangeDistancePresentation({
+        distance: undefined,
+        isLoading: false,
+        hasError: true,
+      }).label,
+    ).toBe("Change count unavailable");
+    expect(
+      getJjChangeDistancePresentation({
+        distance: null,
+        isLoading: false,
+        hasError: false,
+      }).label,
+    ).toBe("No bookmark ancestor");
+  });
+});
+
 describe("jj local vs worktree base helpers", () => {
   it("treats local JJ without a workspace as default-workspace mode", () => {
     expect(
@@ -195,6 +254,37 @@ describe("jj local vs worktree base helpers", () => {
         backend: "git",
         envMode: "local",
         activeWorktreePath: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("shows change distance for existing JJ working copies, but not a pending workspace base", () => {
+    expect(
+      shouldShowJjChangeDistance({
+        backend: "jj",
+        envMode: "local",
+        activeWorktreePath: null,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowJjChangeDistance({
+        backend: "jj",
+        envMode: "worktree",
+        activeWorktreePath: "/repo/.jj/workspaces/feature",
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowJjChangeDistance({
+        backend: "jj",
+        envMode: "worktree",
+        activeWorktreePath: null,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowJjChangeDistance({
+        backend: "git",
+        envMode: "worktree",
+        activeWorktreePath: "/repo/.worktrees/feature",
       }),
     ).toBe(false);
   });

@@ -27,6 +27,7 @@ function workingCopy(overrides: Partial<JjWorkingCopyStatus> = {}): JjWorkingCop
       description: "",
     },
     currentBookmark: "feature",
+    nearestBookmarkDistance: null,
     upstreamBookmark: "feature@origin",
     aheadCount: 0,
     behindCount: 0,
@@ -58,6 +59,7 @@ function crossForkWorkingCopy(synced: boolean): JjWorkingCopyStatus {
   const localTarget = "change-local";
   return workingCopy({
     currentBookmark: "synara/pr-42/main",
+    nearestBookmarkDistance: null,
     upstreamBookmark: null,
     bookmarks: [
       {
@@ -119,6 +121,7 @@ describe("JJ actions", () => {
     const pushBookmark = vi.fn(() => Effect.void);
     const before = workingCopy({
       currentBookmark: "main",
+      nearestBookmarkDistance: null,
       upstreamBookmark: null,
       bookmarks: [
         {
@@ -141,6 +144,7 @@ describe("JJ actions", () => {
     });
     const after = workingCopy({
       currentBookmark: "main",
+      nearestBookmarkDistance: null,
       upstreamBookmark: null,
       bookmarks: [
         before.bookmarks[0]!,
@@ -383,11 +387,13 @@ describe("JJ actions", () => {
     const pushBookmark = vi.fn(() => Effect.void);
     const initial = workingCopy({
       currentBookmark: null,
+      nearestBookmarkDistance: null,
       upstreamBookmark: null,
       bookmarks: [],
     });
     const afterCreate = workingCopy({
       currentBookmark: "feature/feat-generated",
+      nearestBookmarkDistance: null,
       upstreamBookmark: null,
       bookmarks: [
         {
@@ -402,6 +408,7 @@ describe("JJ actions", () => {
     });
     const afterPush = workingCopy({
       currentBookmark: "feature/feat-generated",
+      nearestBookmarkDistance: null,
       upstreamBookmark: "feature/feat-generated@origin",
       bookmarks: [
         {
@@ -545,6 +552,7 @@ describe("JJ actions", () => {
   it("uses owner-qualified GitHub selectors for a tracked fork bookmark", async () => {
     const fork = workingCopy({
       currentBookmark: "feature/fork",
+      nearestBookmarkDistance: null,
       upstreamBookmark: "feature/fork@alice",
       bookmarks: [
         {
@@ -607,6 +615,7 @@ describe("JJ actions", () => {
   it("diffs a fork PR against the base repository remote", async () => {
     const fork = workingCopy({
       currentBookmark: "feature/fork",
+      nearestBookmarkDistance: null,
       upstreamBookmark: "feature/fork@alice",
       bookmarks: [
         {

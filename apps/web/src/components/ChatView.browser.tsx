@@ -4297,7 +4297,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             ),
           ).toBe(true);
           expect(document.body.textContent).toContain("Changes");
-          expect(document.body.textContent).toContain("Commit and Push");
+          expect(document.body.textContent).toContain("VCS Actions");
           expect(
             wsRequests.some(
               (request) =>

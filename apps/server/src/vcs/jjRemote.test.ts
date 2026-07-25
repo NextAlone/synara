@@ -18,6 +18,7 @@ function crossForkStatus(): JjWorkingCopyStatus {
       description: "",
     },
     currentBookmark: "synara/pr-42/main",
+    nearestBookmarkDistance: null,
     upstreamBookmark: null,
     aheadCount: 0,
     behindCount: 0,

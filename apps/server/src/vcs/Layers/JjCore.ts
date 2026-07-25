@@ -302,7 +302,7 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
       run(
         operation,
         cwd,
-        ["--ignore-working-copy", "log", "--no-graph", "-r", revset, "-T", 'commit_id ++ "\\n"'],
+        ["--ignore-working-copy", "log", "--no-graph", "-r", revset, "-T", '"x\\n"'],
         { maxOutputBytes: 4 * 1024 * 1024 },
       ).pipe(
         Effect.map((result) => result.stdout.split("\n").filter((line) => line.length > 0).length),
@@ -384,34 +384,49 @@ export const makeJjCore = (options?: { executeOverride?: JjCoreShape["execute"] 
           )[0];
         const upstreamBookmark =
           currentBookmark && upstreamRemote ? `${currentBookmark}@${upstreamRemote.name}` : null;
-        const [aheadCount, behindCount] =
-          currentBookmark && upstreamRemote
-            ? yield* Effect.all(
-                [
-                  countRevisions(
-                    cwd,
-                    "JjCore.status.ahead",
-                    `remote_bookmarks(exact:${JSON.stringify(currentBookmark)}, exact:${JSON.stringify(
-                      upstreamRemote.name,
-                    )})..bookmarks(exact:${JSON.stringify(currentBookmark)})`,
-                  ),
-                  countRevisions(
-                    cwd,
-                    "JjCore.status.behind",
-                    `bookmarks(exact:${JSON.stringify(
-                      currentBookmark,
-                    )})..remote_bookmarks(exact:${JSON.stringify(
-                      currentBookmark,
-                    )}, exact:${JSON.stringify(upstreamRemote.name)})`,
-                  ),
-                ],
-                { concurrency: 2 },
-              )
-            : [0, 0];
+        const [nearestBookmarkChangeCount, aheadCount, behindCount] = yield* Effect.all(
+          [
+            currentBookmark
+              ? countRevisions(
+                  cwd,
+                  "JjCore.status.nearestBookmarkDistance",
+                  `bookmarks(exact:${JSON.stringify(currentBookmark)})..@ & ~empty()`,
+                )
+              : Effect.succeed(null),
+            currentBookmark && upstreamRemote
+              ? countRevisions(
+                  cwd,
+                  "JjCore.status.ahead",
+                  `remote_bookmarks(exact:${JSON.stringify(currentBookmark)}, exact:${JSON.stringify(
+                    upstreamRemote.name,
+                  )})..bookmarks(exact:${JSON.stringify(currentBookmark)})`,
+                )
+              : Effect.succeed(0),
+            currentBookmark && upstreamRemote
+              ? countRevisions(
+                  cwd,
+                  "JjCore.status.behind",
+                  `bookmarks(exact:${JSON.stringify(
+                    currentBookmark,
+                  )})..remote_bookmarks(exact:${JSON.stringify(
+                    currentBookmark,
+                  )}, exact:${JSON.stringify(upstreamRemote.name)})`,
+                )
+              : Effect.succeed(0),
+          ],
+          { concurrency: 3 },
+        );
         return {
           repository,
           revision,
           currentBookmark,
+          nearestBookmarkDistance:
+            currentBookmark !== null && nearestBookmarkChangeCount !== null
+              ? {
+                  bookmark: currentBookmark,
+                  nonEmptyChangeCount: nearestBookmarkChangeCount,
+                }
+              : null,
           upstreamBookmark,
           aheadCount,
           behindCount,

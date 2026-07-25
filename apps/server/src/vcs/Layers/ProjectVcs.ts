@@ -784,6 +784,7 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                             behindCount: result.behindCount,
                           }
                         : null,
+                    nearestBookmarkDistance: null,
                     pullRequest: result.pr,
                     capabilities: capabilitiesFor("git"),
                   }),
@@ -885,6 +886,7 @@ export function makeProjectVcsWith(dependencies: ProjectVcsDependencies): Projec
                           behindCount: remoteComparison.behindCount,
                         }
                       : null,
+                  nearestBookmarkDistance: result.nearestBookmarkDistance,
                   pullRequest,
                   capabilities: capabilitiesFor("jj"),
                 } satisfies VcsStatusResult;

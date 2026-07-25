@@ -74,6 +74,9 @@ describe("JjCore", () => {
       if (input.operation === "JjCore.resolveNearestBookmark") {
         return Effect.succeed(result('{"name":"feature"}\n'));
       }
+      if (input.operation === "JjCore.status.nearestBookmarkDistance") {
+        return Effect.succeed(result("change-2\nchange-3\n"));
+      }
       return Effect.die(new Error(`Unexpected operation ${input.operation}`));
     };
     const core = await Effect.runPromise(makeJjCore({ executeOverride }));
@@ -83,6 +86,10 @@ describe("JjCore", () => {
     expect(status).toMatchObject({
       revision: { changeId: "change-1", commitId: "commit-1" },
       currentBookmark: "feature",
+      nearestBookmarkDistance: {
+        bookmark: "feature",
+        nonEmptyChangeCount: 2,
+      },
       upstreamBookmark: null,
       aheadCount: 0,
       behindCount: 0,
@@ -101,6 +108,11 @@ describe("JjCore", () => {
       ?.args.join(" ");
     expect(nearestBookmarkRevset).toContain("synara-checkpoint/*");
     expect(nearestBookmarkRevset).toContain("synara-snapshot/*");
+    expect(
+      calls
+        .find((call) => call.operation === "JjCore.status.nearestBookmarkDistance")
+        ?.args.join(" "),
+    ).toContain('bookmarks(exact:"feature")..@ & ~empty()');
   });
 
   it("reads the patch from the same snapshot as its file list", async () => {
@@ -165,6 +177,8 @@ describe("JjCore", () => {
           );
         case "JjCore.resolveNearestBookmark":
           return Effect.succeed(result('{"name":"feature"}\n'));
+        case "JjCore.status.nearestBookmarkDistance":
+          return Effect.succeed(result("change-1\n"));
         case "JjCore.status.ahead":
           return Effect.succeed(result("ahead-1\nahead-2\n"));
         case "JjCore.status.behind":
@@ -179,6 +193,10 @@ describe("JjCore", () => {
 
     expect(status).toMatchObject({
       currentBookmark: "feature",
+      nearestBookmarkDistance: {
+        bookmark: "feature",
+        nonEmptyChangeCount: 1,
+      },
       upstreamBookmark: "feature@origin",
       aheadCount: 2,
       behindCount: 1,

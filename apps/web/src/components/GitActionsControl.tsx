@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDownIcon,
   CloudSyncIcon,
+  EllipsisIcon,
   GitBranchIcon,
   GitCommitIcon,
   InfoIcon,
@@ -112,8 +113,8 @@ interface GitActionsControlProps {
   gitCwd: string | null;
   activeThreadId: ThreadId | null;
   hideQuickActionLabel?: boolean;
-  // `header` renders the split quick-action button; `panel` collapses every git
-  // action into a single "Commit and Push" Environment panel row + dropdown.
+  // `header` renders the split quick-action button; `panel` collapses every VCS
+  // action into a single Environment panel menu.
   variant?: "header" | "panel";
   // Lets a parent capture "run commit & push for this instance's repo" so a global
   // keyboard shortcut can trigger it without duplicating the action logic. Called with
@@ -322,8 +323,8 @@ function GitQuickActionIcon({ quickAction }: { quickAction: GitQuickAction }) {
 
 // The commit-and-push behavior moves between menu items with git state: on a feature
 // branch with pending changes it is the `commit_push` item, while on the default branch
-// (or with ahead-only commits) it lives under the `push` item. Both the panel row's
-// enabled state and the global shortcut resolve their target through this one rule.
+// (or with ahead-only commits) it lives under the `push` item. The global shortcut
+// resolves its target through this one rule.
 function findRunnableCommitPushMenuItem(items: GitActionMenuItem[]): GitActionMenuItem | null {
   return (
     items.find((item) => (item.id === "commit_push" || item.id === "push") && !item.disabled) ??
@@ -1425,11 +1426,8 @@ export default function GitActionsControl({
 
   if (!gitCwd) return null;
 
-  const hasRunnableCommitPushAction = findRunnableCommitPushMenuItem(gitActionMenuItems) !== null;
-  const shouldDimPanelCommitPushRow = isGitActionRunning || !hasRunnableCommitPushAction;
-
   // Shared dropdown body — the picker rows plus the contextual git-status warnings.
-  // Rendered identically by the header split button and the panel "Commit and Push" row.
+  // Rendered identically by the header split button and the panel actions row.
   const gitMenuContent = (
     <>
       <MenuGroup>
@@ -1800,26 +1798,15 @@ export default function GitActionsControl({
             render={
               <button
                 type="button"
-                className={cn(
-                  ENVIRONMENT_ROW_CLASS_NAME,
-                  shouldDimPanelCommitPushRow && "opacity-55",
-                )}
-                aria-label={
-                  shouldDimPanelCommitPushRow
-                    ? `Commit and Push unavailable; open ${isJjBackend ? "JJ" : "Git"} actions menu`
-                    : "Commit and Push"
-                }
-                title={
-                  shouldDimPanelCommitPushRow
-                    ? `Commit and Push unavailable. Open for more ${isJjBackend ? "JJ" : "Git"} actions.`
-                    : "Commit and Push"
-                }
+                className={ENVIRONMENT_ROW_CLASS_NAME}
+                aria-label="Open VCS Actions"
+                title="Open VCS Actions"
               />
             }
           >
             <EnvironmentRowBody
-              icon={<GitActionGlyph name="push" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-              label="Commit and Push"
+              icon={<EllipsisIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+              label="VCS Actions"
               trailing={<EnvironmentRowChevron />}
             />
           </MenuTrigger>

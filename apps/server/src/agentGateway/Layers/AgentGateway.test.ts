@@ -843,6 +843,7 @@ function makeHarnessLayer(
             description: "",
           },
           currentBookmark: null,
+          nearestBookmarkDistance: null,
           upstreamBookmark: null,
           aheadCount: 0,
           behindCount: 0,

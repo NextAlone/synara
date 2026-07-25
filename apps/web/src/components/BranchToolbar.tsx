@@ -3,7 +3,7 @@
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
 import type { ThreadId, RuntimeMode } from "@synara/contracts";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckIcon, ChevronDownIcon, GitBranchIcon, HandoffIcon, WorktreeIcon } from "~/lib/icons";
+import { CheckIcon, ChevronDownIcon, HandoffIcon, WorktreeIcon } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
@@ -486,26 +486,6 @@ export default function BranchToolbar({
       )}
     >
       <div className={isPanel ? "flex flex-col gap-0.5" : "flex items-center gap-2"}>
-        {activeProject.kind === "project" ? (
-          isPanel ? (
-            <div className={cn(ENVIRONMENT_ROW_CLASS_NAME, "cursor-default hover:bg-transparent")}>
-              <EnvironmentRowBody
-                icon={<GitBranchIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-                label="Source control"
-                trailing={settings.vcsBackend === "jj" ? "JJ" : "Git"}
-              />
-            </div>
-          ) : (
-            <span
-              className="inline-flex items-center gap-1.5 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)]"
-              title="Source control backend is configured globally in Settings"
-            >
-              <GitBranchIcon className="size-3.5" />
-              {settings.vcsBackend === "jj" ? "JJ" : "Git"}
-            </span>
-          )
-        ) : null}
-
         {showEnvPicker ? (
           <Menu open={envPickerOpen} onOpenChange={setEnvPickerOpen}>
             <MenuTrigger

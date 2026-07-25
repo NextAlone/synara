@@ -104,6 +104,12 @@ export const VcsRemoteStatus = Schema.Struct({
 });
 export type VcsRemoteStatus = typeof VcsRemoteStatus.Type;
 
+export const VcsNearestBookmarkDistance = Schema.Struct({
+  bookmark: TrimmedNonEmptyString,
+  nonEmptyChangeCount: NonNegativeInt,
+});
+export type VcsNearestBookmarkDistance = typeof VcsNearestBookmarkDistance.Type;
+
 export const VcsCapabilities = Schema.Struct({
   staging: Schema.Boolean,
   stash: Schema.Boolean,
@@ -141,6 +147,7 @@ export const VcsStatusResult = Schema.Struct({
   insertions: NonNegativeInt,
   deletions: NonNegativeInt,
   remote: Schema.NullOr(VcsRemoteStatus),
+  nearestBookmarkDistance: Schema.NullOr(VcsNearestBookmarkDistance),
   pullRequest: Schema.NullOr(VcsPullRequestStatus),
   capabilities: VcsCapabilities,
 });

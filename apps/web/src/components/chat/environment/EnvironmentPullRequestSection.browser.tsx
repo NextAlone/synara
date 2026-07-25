@@ -63,6 +63,7 @@ function createQueryClient() {
       aheadCount: 0,
       behindCount: 0,
     },
+    nearestBookmarkDistance: null,
     pullRequest,
     capabilities: {
       staging: true,

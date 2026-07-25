@@ -45,11 +45,13 @@ import {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
   EnvMode,
+  getJjChangeDistancePresentation,
   getJjWorktreeBaseSpecialItems,
   isJjLocalDefaultWorkspaceMode,
   resolveBranchSelectionTarget,
   resolveBranchToolbarValue,
   resolveDefaultWorktreeBaseRef,
+  shouldShowJjChangeDistance,
   shouldSyncLocalThreadBranch,
 } from "./BranchToolbar.logic";
 import { cn } from "../lib/utils";
@@ -448,6 +450,16 @@ export function BranchToolbarBranchSelector({
     enabled: !jjLocalDefaultWorkspace,
   });
   const branchStatusQuery = useQuery(vcsStatusQueryOptions(vcsTarget));
+  const showJjChangeDistance = shouldShowJjChangeDistance({
+    backend: activeBackend,
+    envMode: effectiveEnvMode,
+    activeWorktreePath,
+  });
+  const jjChangeDistance = getJjChangeDistancePresentation({
+    distance: branchStatusQuery.data?.nearestBookmarkDistance,
+    isLoading: branchStatusQuery.isLoading,
+    hasError: branchStatusQuery.isError,
+  });
   const branches = useMemo(
     () =>
       dedupeRemoteBranchesWithLocalMatches(
@@ -1000,23 +1012,19 @@ export function BranchToolbarBranchSelector({
 
   // JJ Local always tracks the default workspace `@` — no bookmark switcher.
   if (jjLocalDefaultWorkspace) {
-    const nearestBookmark = currentGitBranch;
-    const localTitle = nearestBookmark
-      ? `Default workspace working copy (@). Nearest bookmark: ${nearestBookmark}.`
-      : "Default workspace working copy (@). Switch to Worktree to base a new workspace on a bookmark, @, or @-.";
     if (isPanel) {
       return (
         <div
           className={cn(ENVIRONMENT_ROW_CLASS_NAME, "cursor-default hover:bg-transparent")}
-          title={localTitle}
+          title={jjChangeDistance.title}
         >
           <EnvironmentRowBody
             icon={<CentralIcon name="branch" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-            label="@"
+            label={jjChangeDistance.label}
             trailing={
-              nearestBookmark ? (
+              jjChangeDistance.trailing ? (
                 <span className="max-w-[10rem] truncate text-[11px] text-muted-foreground">
-                  {nearestBookmark}
+                  {jjChangeDistance.trailing}
                 </span>
               ) : null
             }
@@ -1027,16 +1035,18 @@ export function BranchToolbarBranchSelector({
     return (
       <span
         className="inline-flex items-center gap-1.5 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)]"
-        title={localTitle}
+        title={jjChangeDistance.title}
       >
         <CentralIcon name="branch" className="size-3.5 shrink-0" />
-        <span className="max-w-[240px] truncate">@</span>
-        {nearestBookmark ? (
-          <span className="max-w-[120px] truncate opacity-60">{nearestBookmark}</span>
+        <span className="max-w-[240px] truncate">{jjChangeDistance.label}</span>
+        {jjChangeDistance.trailing ? (
+          <span className="max-w-[120px] truncate opacity-60">{jjChangeDistance.trailing}</span>
         ) : null}
       </span>
     );
   }
+
+  const workspaceChangeDistance = showJjChangeDistance ? jjChangeDistance : null;
 
   return (
     <Combobox
@@ -1059,17 +1069,34 @@ export function BranchToolbarBranchSelector({
             : `${COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME} disabled:cursor-not-allowed disabled:opacity-50`
         }
         disabled={(branchesQuery.isLoading && branches.length === 0) || isBranchActionPending}
+        title={workspaceChangeDistance?.title}
       >
         {isPanel ? (
           <EnvironmentRowBody
             icon={<CentralIcon name="branch" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-            label={triggerLabel}
-            trailing={<EnvironmentRowChevron />}
+            label={workspaceChangeDistance?.label ?? triggerLabel}
+            trailing={
+              <>
+                {workspaceChangeDistance?.trailing ? (
+                  <span className="max-w-[10rem] truncate text-[11px] text-muted-foreground">
+                    {workspaceChangeDistance.trailing}
+                  </span>
+                ) : null}
+                <EnvironmentRowChevron />
+              </>
+            }
           />
         ) : (
           <>
             <CentralIcon name="branch" className="size-3.5 shrink-0" />
-            <span className="max-w-[240px] truncate">{triggerLabel}</span>
+            <span className="max-w-[240px] truncate">
+              {workspaceChangeDistance?.label ?? triggerLabel}
+            </span>
+            {workspaceChangeDistance?.trailing ? (
+              <span className="max-w-[120px] truncate opacity-60">
+                {workspaceChangeDistance.trailing}
+              </span>
+            ) : null}
             <ChevronDownIcon className="size-3 opacity-60" />
           </>
         )}

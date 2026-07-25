@@ -48,6 +48,10 @@ describe("VCS action adapters", () => {
         aheadCount: 2,
         behindCount: 0,
       },
+      nearestBookmarkDistance: {
+        bookmark: "feature/test",
+        nonEmptyChangeCount: 1,
+      },
       pullRequest: null,
       capabilities: {
         staging: false,

@@ -1,4 +1,4 @@
-import type { GitBranch } from "@synara/contracts";
+import type { GitBranch, VcsNearestBookmarkDistance } from "@synara/contracts";
 import {
   deriveAssociatedWorktreeMetadata,
   type AssociatedWorktreeMetadata,
@@ -29,6 +29,22 @@ export function isJjLocalDefaultWorkspaceMode(input: {
   activeWorktreePath: string | null;
 }): boolean {
   return input.backend === "jj" && input.envMode === "local" && input.activeWorktreePath === null;
+}
+
+/**
+ * A JJ working copy exists in both Local mode and an attached Workspace.
+ * A pending Workspace has no working copy yet, so it still presents its selected base.
+ */
+export function shouldShowJjChangeDistance(input: {
+  backend: VcsToolbarBackend | null | undefined;
+  envMode: EnvMode;
+  activeWorktreePath: string | null;
+}): boolean {
+  if (input.backend !== "jj") return false;
+  return (
+    (input.envMode === "local" && input.activeWorktreePath === null) ||
+    (input.envMode === "worktree" && input.activeWorktreePath !== null)
+  );
 }
 
 export function resolveDefaultWorktreeBaseRef(input: {
@@ -121,7 +137,7 @@ export function resolveBranchToolbarValue(input: {
   activeThreadBranch: string | null;
   currentGitBranch: string | null;
   preferActiveThreadBranch?: boolean;
-  /** When true, Local JJ always displays `@` (default workspace working copy). */
+  /** When true, Local JJ always uses `@` as the default workspace value. */
   jjLocalDefaultWorkspace?: boolean;
 }): string | null {
   const {
@@ -142,6 +158,47 @@ export function resolveBranchToolbarValue(input: {
     return activeThreadBranch ?? currentGitBranch;
   }
   return currentGitBranch ?? activeThreadBranch;
+}
+
+export interface JjChangeDistancePresentation {
+  readonly label: string;
+  readonly trailing: string | null;
+  readonly title: string;
+}
+
+export function getJjChangeDistancePresentation(input: {
+  distance: VcsNearestBookmarkDistance | null | undefined;
+  isLoading: boolean;
+  hasError: boolean;
+}): JjChangeDistancePresentation {
+  if (input.distance) {
+    const { bookmark, nonEmptyChangeCount } = input.distance;
+    const changeLabel = nonEmptyChangeCount === 1 ? "change" : "changes";
+    return {
+      label: `${nonEmptyChangeCount} ${changeLabel}`,
+      trailing: `since ${bookmark}`,
+      title: `${nonEmptyChangeCount} non-empty ${changeLabel} between nearest bookmark ${bookmark} and working copy @. Empty changes are excluded.`,
+    };
+  }
+  if (input.isLoading) {
+    return {
+      label: "Counting changes",
+      trailing: null,
+      title: "Counting non-empty changes since the nearest bookmark.",
+    };
+  }
+  if (input.hasError) {
+    return {
+      label: "Change count unavailable",
+      trailing: null,
+      title: "Could not read the non-empty change count from JJ.",
+    };
+  }
+  return {
+    label: "No bookmark ancestor",
+    trailing: null,
+    title: "No local bookmark exists at or behind working copy @.",
+  };
 }
 
 // Local Git threads should mirror the concrete checkout; stale thread metadata makes
