@@ -284,6 +284,76 @@ describe("CheckpointStoreLive", () => {
     expect(commands.at(-1)).toMatch(/^apply --whitespace=nowarn -- /);
   });
 
+  it("copies a JJ checkpoint ref without taking another filesystem snapshot", async () => {
+    const fromCheckpointRef = CheckpointRef.makeUnsafe(
+      "refs/synara-checkpoints/thread/jj-message-start",
+    );
+    const toCheckpointRef = CheckpointRef.makeUnsafe(
+      "refs/synara-checkpoints/thread/jj-turn-start",
+    );
+    const execute = vi.fn<JjCoreShape["execute"]>((input) =>
+      Effect.succeed({
+        code: 0,
+        stdout:
+          input.operation === "CheckpointStore.resolveJjCheckpointRevision"
+            ? "checkpoint-commit\n"
+            : "",
+        stderr: "",
+      }),
+    );
+    const jj = {
+      execute,
+      withMutation: <A, E, R>(
+        _cwd: string,
+        effect: Effect.Effect<A, E, R>,
+      ) => effect,
+    } as unknown as JjCoreShape;
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(
+        Layer.succeed(GitCore, {
+          execute: () => Effect.die("unexpected Git call"),
+        } as unknown as GitCoreShape),
+      ),
+      Layer.provide(Layer.succeed(JjCore, jj)),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    const copied = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        return yield* store.copyCheckpointRef({
+          cwd: "/repo",
+          backend: "jj",
+          fromCheckpointRef,
+          toCheckpointRef,
+        });
+      }),
+    );
+
+    expect(copied).toBe(true);
+    expect(
+      execute.mock.calls
+        .map(([input]) => input)
+        .find((input) => input.operation === "CheckpointStore.copyCheckpointRef.jj")
+        ?.args,
+    ).toEqual([
+      "bookmark",
+      "set",
+      "--allow-backwards",
+      "--revision",
+      "checkpoint-commit",
+      jjCheckpointBookmark(toCheckpointRef),
+    ]);
+    expect(
+      execute.mock.calls.some(
+        ([input]) =>
+          input.operation === "CheckpointStore.captureCheckpoint.jjSnapshot" ||
+          input.operation === "CheckpointStore.captureCheckpoint.jjDuplicate",
+      ),
+    ).toBe(false);
+  });
+
   it("captures a JJ checkpoint without advancing the working copy", async () => {
     const checkpointRef = CheckpointRef.makeUnsafe(
       "refs/synara-checkpoints/thread/jj-message",

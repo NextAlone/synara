@@ -327,6 +327,7 @@ describe("CheckpointReactor", () => {
       await runtime!.runPromise(
         checkpointStore.captureCheckpoint({
           cwd,
+          backend: "git",
           checkpointRef: checkpointRefForThreadMessageStart(threadId, messageId),
         }),
       );
@@ -630,6 +631,7 @@ describe("CheckpointReactor", () => {
     await runtime!.runPromise(
       harness.checkpointStore.captureCheckpoint({
         cwd: harness.cwd,
+        backend: "git",
         checkpointRef: messageStartRef,
       }),
     );

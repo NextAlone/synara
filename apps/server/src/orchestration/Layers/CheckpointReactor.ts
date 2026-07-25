@@ -487,6 +487,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly workspace: { readonly cwd: string; readonly backend: VcsBackend };
     readonly turnCount: number;
+    readonly fromCheckpointRef: CheckpointRef;
     readonly createdAt: string;
   }) {
     const legacyBaselineRef = checkpointRefForThreadTurn(input.threadId, input.turnCount);
@@ -498,10 +499,14 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* checkpointStore.captureCheckpoint({
+    const copied = yield* checkpointStore.copyCheckpointRef({
       ...input.workspace,
-      checkpointRef: legacyBaselineRef,
+      fromCheckpointRef: input.fromCheckpointRef,
+      toCheckpointRef: legacyBaselineRef,
     });
+    if (!copied) {
+      return;
+    }
     yield* receiptBus.publish({
       type: "checkpoint.baseline.captured",
       threadId: input.threadId,
@@ -778,22 +783,14 @@ const make = Effect.gen(function* () {
         fromCheckpointRef: messageStartCheckpointRef,
         toCheckpointRef: turnStartCheckpointRef,
       });
-      let copied = yield* copyMessageStartBaseline;
-      if (!copied) {
-        // Startup and domain-event backup paths can still leave the message
-        // baseline missing. Capture it with first-writer-wins semantics before
-        // aliasing the provider turn-start ref.
-        yield* checkpointStore.captureCheckpoint({
-          ...checkpointWorkspace,
-          checkpointRef: messageStartCheckpointRef,
-          skipIfExists: true,
-        });
-        copied = yield* copyMessageStartBaseline;
-      }
+      const copied = yield* copyMessageStartBaseline;
       hasTurnStartBaseline = copied;
       pendingMessageStartByThread.delete(thread.id);
       if (!copied) {
-        yield* Effect.logWarning("checkpoint turn start baseline alias missing message baseline", {
+        // ProviderCommandReactor owns the only pre-dispatch filesystem scan.
+        // Retrying here happens after provider execution began and would both
+        // block the checkpoint worker and capture an invalid late baseline.
+        yield* Effect.logWarning("checkpoint turn start baseline unavailable", {
           threadId: thread.id,
           turnId,
           messageId,
@@ -805,93 +802,42 @@ const make = Effect.gen(function* () {
         ...checkpointWorkspace,
         checkpointRef: turnStartCheckpointRef,
       });
-      if (!existingTurnStartBaseline) {
+      if (existingTurnStartBaseline) {
+        hasTurnStartBaseline = true;
+      } else if (messageId === undefined) {
+        // Runtime-only startup paths have no deterministic pre-dispatch hook.
+        // Preserve their legacy fallback without retrying normal message turns.
         yield* checkpointStore.captureCheckpoint({
           ...checkpointWorkspace,
           checkpointRef: turnStartCheckpointRef,
         });
+        hasTurnStartBaseline = true;
       }
     }
 
-    const currentTurnCount = thread.checkpoints.reduce(
-      (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
-      0,
-    );
-    yield* ensureLegacyBaselineCheckpoint({
-      threadId: thread.id,
-      workspace: checkpointWorkspace,
-      turnCount: currentTurnCount,
-      createdAt: event.createdAt,
-    });
+    if (hasTurnStartBaseline) {
+      const currentTurnCount = thread.checkpoints.reduce(
+        (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
+        0,
+      );
+      yield* ensureLegacyBaselineCheckpoint({
+        threadId: thread.id,
+        workspace: checkpointWorkspace,
+        turnCount: currentTurnCount,
+        fromCheckpointRef: turnStartCheckpointRef,
+        createdAt: event.createdAt,
+      });
+    }
   });
 
   const ensurePreTurnBaselineFromDomainTurnStart = Effect.fnUntraced(function* (
-    event: Extract<
-      OrchestrationEvent,
-      { type: "thread.turn-start-requested" | "thread.message-sent" }
-    >,
+    event: Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>,
   ) {
-    if (event.type === "thread.message-sent") {
-      if (
-        event.payload.role !== "user" ||
-        event.payload.streaming ||
-        event.payload.turnId !== null
-      ) {
-        return;
-      }
-    }
-
     const threadId = event.payload.threadId;
-    const thread = yield* getThreadDetail(threadId);
-    if (!thread) {
-      return;
-    }
-    const project = yield* getProjectShell(thread.projectId);
-    if (!project) {
-      return;
-    }
-
-    const checkpointWorkspace = yield* resolveCheckpointWorkspace({
-      threadId,
-      thread,
-      project,
-      preferSessionRuntime: false,
-    });
-    if (!checkpointWorkspace) {
-      return;
-    }
-
-    if (event.type === "thread.turn-start-requested") {
-      pendingMessageStartByThread.set(threadId, event.payload.messageId);
-      // Backup capture for startup paths that bypass ProviderCommandReactor's
-      // pre-send hook, while the pre-send hook remains the deterministic path.
-      const messageStartCheckpointRef = checkpointRefForThreadMessageStart(
-        threadId,
-        event.payload.messageId,
-      );
-      const messageStartCheckpointExists = yield* checkpointStore.hasCheckpointRef({
-        ...checkpointWorkspace,
-        checkpointRef: messageStartCheckpointRef,
-      });
-      if (!messageStartCheckpointExists) {
-        yield* checkpointStore.captureCheckpoint({
-          ...checkpointWorkspace,
-          checkpointRef: messageStartCheckpointRef,
-          skipIfExists: true,
-        });
-      }
-    }
-
-    const currentTurnCount = thread.checkpoints.reduce(
-      (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
-      0,
-    );
-    yield* ensureLegacyBaselineCheckpoint({
-      threadId,
-      workspace: checkpointWorkspace,
-      turnCount: currentTurnCount,
-      createdAt: event.occurredAt,
-    });
+    // ProviderCommandReactor owns the pre-dispatch capture. This reactor only
+    // remembers which message baseline should be aliased once turn.started
+    // supplies the provider turn id.
+    pendingMessageStartByThread.set(threadId, event.payload.messageId);
   });
 
   const handleRevertRequestedWithoutLease = Effect.fnUntraced(function* (
@@ -1235,7 +1181,7 @@ const make = Effect.gen(function* () {
     });
 
   const processDomainEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
-    if (event.type === "thread.turn-start-requested" || event.type === "thread.message-sent") {
+    if (event.type === "thread.turn-start-requested") {
       yield* ensurePreTurnBaselineFromDomainTurnStart(event);
       return;
     }
@@ -1324,7 +1270,6 @@ const make = Effect.gen(function* () {
         Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
           if (
             event.type !== "thread.turn-start-requested" &&
-            event.type !== "thread.message-sent" &&
             event.type !== "thread.checkpoint-revert-requested" &&
             event.type !== "thread.turn-diff-completed"
           ) {

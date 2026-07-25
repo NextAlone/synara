@@ -3489,105 +3489,138 @@ describe("ProviderCommandReactor", () => {
     expect(captureCheckpoint.mock.calls[0]?.[0].checkpointRef).toContain("/message-start/");
   });
 
-  it("continues provider dispatch when the message-start checkpoint exceeds its budget", async () => {
-    const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(() => Effect.never);
-    const harness = await createHarness({
-      checkpointStore: {
-        isGitRepository: vi.fn<CheckpointStoreShape["isGitRepository"]>(() => Effect.succeed(true)),
-        captureCheckpoint,
-      },
+  for (const backend of ["git", "jj"] as const) {
+    it(`continues provider dispatch when the ${backend} message-start checkpoint exceeds its budget`, async () => {
+      const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(
+        () => Effect.never,
+      );
+      const harness = await createHarness({
+        vcsBackend: backend,
+        checkpointStore: {
+          isRepository: vi.fn<CheckpointStoreShape["isRepository"]>(
+            () => Effect.succeed(true),
+          ),
+          captureCheckpoint,
+        },
+      });
+      const now = new Date().toISOString();
+
+      const dispatch = Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(
+            `cmd-turn-start-stuck-${backend}-checkpoint`,
+          ),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          message: {
+            messageId: asMessageId(
+              `user-message-stuck-${backend}-checkpoint`,
+            ),
+            role: "user",
+            text: "hello despite stuck checkpoint",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+
+      await waitFor(() => captureCheckpoint.mock.calls.length === 1);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1, 4_000);
+      await dispatch;
+      expect(captureCheckpoint.mock.calls).toHaveLength(1);
+      expect(captureCheckpoint.mock.calls[0]?.[0]).toMatchObject({
+        backend,
+        cwd: "/tmp/provider-project",
+      });
     });
-    const now = new Date().toISOString();
 
-    const dispatch = Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-stuck-checkpoint"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-stuck-checkpoint"),
-          role: "user",
-          text: "hello despite stuck git",
-          attachments: [],
+    it(`skips repeated ${backend} checkpoint scans during the workspace cooldown`, async () => {
+      const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(
+        () => Effect.never,
+      );
+      const harness = await createHarness({
+        vcsBackend: backend,
+        checkpointStore: {
+          isRepository: vi.fn<CheckpointStoreShape["isRepository"]>(
+            () => Effect.succeed(true),
+          ),
+          captureCheckpoint,
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+      });
+      const now = new Date().toISOString();
 
-    await waitFor(() => captureCheckpoint.mock.calls.length === 1);
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1, 4_000);
-    await dispatch;
-    expect(captureCheckpoint.mock.calls.length).toBe(1);
-  });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(
+            `cmd-turn-start-${backend}-checkpoint-cooldown-first`,
+          ),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          message: {
+            messageId: asMessageId(
+              `user-message-${backend}-checkpoint-cooldown-first`,
+            ),
+            role: "user",
+            text: "first",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1, 4_000);
 
-  it("skips repeated checkpoint scans during the workspace cooldown after a timeout", async () => {
-    const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(() => Effect.never);
-    const harness = await createHarness({
-      checkpointStore: {
-        isGitRepository: vi.fn<CheckpointStoreShape["isGitRepository"]>(() => Effect.succeed(true)),
-        captureCheckpoint,
-      },
+      const secondThreadId = ThreadId.makeUnsafe(
+        `thread-${backend}-checkpoint-cooldown-second`,
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe(
+            `cmd-thread-create-${backend}-checkpoint-cooldown-second`,
+          ),
+          threadId: secondThreadId,
+          projectId: asProjectId("project-1"),
+          title: "Second thread",
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(
+            `cmd-turn-start-${backend}-checkpoint-cooldown-second`,
+          ),
+          threadId: secondThreadId,
+          message: {
+            messageId: asMessageId(
+              `user-message-${backend}-checkpoint-cooldown-second`,
+            ),
+            role: "user",
+            text: "second",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      expect(captureCheckpoint.mock.calls).toHaveLength(1);
     });
-    const now = new Date().toISOString();
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-checkpoint-cooldown-first"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-checkpoint-cooldown-first"),
-          role: "user",
-          text: "first",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1, 4_000);
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-thread-create-checkpoint-cooldown-second"),
-        threadId: ThreadId.makeUnsafe("thread-checkpoint-cooldown-second"),
-        projectId: asProjectId("project-1"),
-        title: "Second thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-checkpoint-cooldown-second"),
-        threadId: ThreadId.makeUnsafe("thread-checkpoint-cooldown-second"),
-        message: {
-          messageId: asMessageId("user-message-checkpoint-cooldown-second"),
-          role: "user",
-          text: "second",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-
-    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
-    expect(captureCheckpoint.mock.calls.length).toBe(1);
-  });
+  }
 
   it("waits for the Studio output baseline before sending the provider turn", async () => {
     let releaseCapture: (() => void) | undefined;
