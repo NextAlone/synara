@@ -30,6 +30,7 @@ __screenshots__/
 .tanstack
 /.pi/
 /.tmp/
+/.worktrees/
 /~/
 /bootstrap.js
 /preload.js
