@@ -21,6 +21,7 @@ import {
   TerminalIcon,
   WorktreeIcon,
 } from "~/lib/icons";
+import { useAppSettings } from "~/appSettings";
 import { resolveThreadEnvironmentPresentation } from "~/lib/threadEnvironment";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { cn } from "~/lib/utils";
@@ -125,6 +126,7 @@ function KanbanCardViewComponent({
   isDragSource = false,
   nowMs,
 }: KanbanCardViewProps) {
+  const { settings } = useAppSettings();
   // Thread-backed draft cards keep their own title, so the unsent prompt is shown
   // separately; local drafts and unsent-prompt cards already title themselves from it.
   const showDraftPreview =
@@ -136,6 +138,7 @@ function KanbanCardViewComponent({
   const worktreeBadgeLabel = resolveThreadEnvironmentPresentation({
     envMode: card.envMode,
     worktreePath: card.worktreePath,
+    backend: settings.vcsBackend,
   }).worktreeBadgeLabel;
   const pr = card.thread?.lastKnownPr ?? null;
   const activeWorkElapsed =

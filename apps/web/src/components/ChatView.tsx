@@ -1946,6 +1946,7 @@ export default function ChatView({
     envMode: resolvedThreadEnvMode,
     worktreePath: resolvedThreadWorktreePath,
     workingDirectory: resolvedThreadWorkingDirectory,
+    backend: settings.vcsBackend,
   });
   const diffEnvironmentPending = diffEnvironmentState.pending;
   const diffDisabledReason = diffEnvironmentState.disabledReason;
@@ -7311,7 +7312,7 @@ export default function ChatView({
       setStoreThreadError(
         threadIdForSend,
         settings.vcsBackend === "jj"
-          ? "Select a base bookmark or revision (@ / @-) before sending in New worktree mode."
+          ? "Select a base bookmark or revision (@ / @-) before sending in New workspace mode."
           : "Select a base branch before sending in New worktree mode.",
       );
       return false;
@@ -7351,7 +7352,11 @@ export default function ChatView({
     sendInFlightRef.current = true;
     beginLocalDispatch(
       baseBranchForWorktree
-        ? { worktreeSetupStepId: "create-worktree", setupScriptName: worktreeSetupScriptName }
+        ? {
+            worktreeSetupStepId: "create-worktree",
+            setupScriptName: worktreeSetupScriptName,
+            vcsBackend: settings.vcsBackend,
+          }
         : undefined,
     );
 
@@ -7501,6 +7506,7 @@ export default function ChatView({
         beginLocalDispatch({
           worktreeSetupStepId: "prepare-thread",
           setupScriptName: worktreeSetupScriptName,
+          vcsBackend: settings.vcsBackend,
         });
         nextThreadBranch = result.workspace.branch;
         nextThreadWorktreePath = result.workspace.path;
@@ -7610,6 +7616,7 @@ export default function ChatView({
           beginLocalDispatch({
             worktreeSetupStepId: "run-setup-action",
             setupScriptName: setupScript.name,
+            vcsBackend: settings.vcsBackend,
           });
           const setupScriptOptions: Parameters<typeof runProjectScript>[1] = {
             worktreePath: nextThreadWorktreePath,
@@ -7641,7 +7648,11 @@ export default function ChatView({
 
       beginLocalDispatch(
         baseBranchForWorktree
-          ? { worktreeSetupStepId: "start-session", setupScriptName: worktreeSetupScriptName }
+          ? {
+              worktreeSetupStepId: "start-session",
+              setupScriptName: worktreeSetupScriptName,
+              vcsBackend: settings.vcsBackend,
+            }
           : undefined,
       );
       const stagedTurnAttachments = await turnAttachmentsPromise;
@@ -11361,6 +11372,7 @@ export default function ChatView({
         interactionMode={interactionMode}
         envMode={envMode}
         envState={envState}
+        vcsBackend={settings.vcsBackend}
         branch={activeThread?.branch ?? activeRootBranch}
         contextWindow={activeContextWindow}
         cumulativeCostUsd={activeCumulativeCostUsd}

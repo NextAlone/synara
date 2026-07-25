@@ -489,6 +489,7 @@ export default function DiffPanel({
     envMode: resolvedThreadEnvMode,
     worktreePath: resolvedThreadWorktreePath,
     workingDirectory: resolvedThreadWorkingDirectory,
+    backend: settings.vcsBackend,
   });
   const diffEnvironmentPending = diffEnvironmentState.pending;
   const activeCwd = diffEnvironmentState.cwd;

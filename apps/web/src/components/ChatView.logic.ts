@@ -819,10 +819,18 @@ export const WORKTREE_SETUP_STEP_DEFINITIONS: ReadonlyArray<{
 
 export interface WorktreeSetupSnapshotOptions {
   setupScriptName?: string | null;
+  /** JJ uses "workspace" instead of "worktree" in user-facing setup labels. */
+  vcsBackend?: "git" | "jj" | null;
 }
 
 export interface WorktreeSetupDispatchOptions extends WorktreeSetupSnapshotOptions {
   worktreeSetupStepId?: WorktreeSetupStepId;
+}
+
+function isolatedCreateStepLabel(backend?: "git" | "jj" | null): string {
+  return backend === "jj"
+    ? "Creating bookmark and workspace"
+    : "Creating branch and worktree";
 }
 
 function worktreeSetupStepDefinitions(
@@ -831,11 +839,17 @@ function worktreeSetupStepDefinitions(
 ): ReadonlyArray<{ id: WorktreeSetupStepId; label: string }> {
   const setupScriptName = options?.setupScriptName?.trim();
   const includeSetupStep = activeStepId === "run-setup-action" || Boolean(setupScriptName);
+  const createLabel = isolatedCreateStepLabel(options?.vcsBackend);
+  const baseSteps: ReadonlyArray<{ id: WorktreeSetupStepId; label: string }> = [
+    { id: "create-worktree", label: createLabel },
+    { id: "prepare-thread", label: "Linking thread workspace" },
+    { id: "start-session", label: "Starting session" },
+  ];
   if (!includeSetupStep) {
-    return WORKTREE_SETUP_STEP_DEFINITIONS;
+    return baseSteps;
   }
   return [
-    { id: "create-worktree", label: "Creating branch and worktree" },
+    { id: "create-worktree", label: createLabel },
     { id: "prepare-thread", label: "Linking thread workspace" },
     {
       id: "run-setup-action",

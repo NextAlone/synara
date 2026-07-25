@@ -146,11 +146,13 @@ function automationStatusDisplay(definition: AutomationDefinition): {
 
 type SelectOption = { readonly value: string; readonly label: string };
 
-const WORKTREE_OPTIONS: readonly SelectOption[] = [
-  { value: "auto", label: "Auto" },
-  { value: "local", label: "Local" },
-  { value: "worktree", label: "Worktree" },
-];
+function worktreeModeOptions(vcsBackend: "git" | "jj"): readonly SelectOption[] {
+  return [
+    { value: "auto", label: "Auto" },
+    { value: "local", label: "Local" },
+    { value: "worktree", label: vcsBackend === "jj" ? "Workspace" : "Worktree" },
+  ] as const;
+}
 
 const INTERVAL_PRESETS: readonly SelectOption[] = [
   { value: "900", label: "Every 15 min" },
@@ -565,7 +567,7 @@ function AutomationDetailView() {
                   >
                     <InlineSelect
                       value={definition.worktreeMode}
-                      options={WORKTREE_OPTIONS}
+                      options={worktreeModeOptions(settings.vcsBackend)}
                       onChange={(value) => {
                         if (
                           (value === "local" || value === "auto") &&

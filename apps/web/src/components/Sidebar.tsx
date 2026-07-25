@@ -611,10 +611,12 @@ function threadRowTimestampSlotClassName(
 
 function resolveWorktreeBadgeLabel(
   thread: Pick<Thread, "envMode" | "worktreePath">,
+  backend?: "git" | "jj" | null,
 ): string | null {
   return resolveThreadEnvironmentPresentation({
     envMode: thread.envMode,
     worktreePath: thread.worktreePath,
+    backend,
   }).worktreeBadgeLabel;
 }
 
@@ -642,6 +644,8 @@ function resolveThreadRowMetaChips(input: {
   handoffShownInAvatar?: boolean;
   /** Heartbeat automations targeting this thread; surfaced as an at-a-glance clock chip. */
   threadAutomations?: readonly AutomationDefinition[] | undefined;
+  /** Global VCS backend — JJ labels isolated envs as "workspace". */
+  vcsBackend?: "git" | "jj" | null;
 }): ThreadMetaChip[] {
   const chips: ThreadMetaChip[] = [];
   const isSidechatThread = Boolean(input.thread.sidechatSourceThreadId);
@@ -692,7 +696,7 @@ function resolveThreadRowMetaChips(input: {
     });
   }
 
-  const worktreeBadgeLabel = resolveWorktreeBadgeLabel(input.thread);
+  const worktreeBadgeLabel = resolveWorktreeBadgeLabel(input.thread, input.vcsBackend);
   if (worktreeBadgeLabel) {
     chips.push({
       id: "worktree",
@@ -4098,6 +4102,7 @@ export default function Sidebar() {
         !isGenericChatThreadTitle(thread.title) &&
         Boolean(thread.handoff?.sourceProvider),
       threadAutomations: automationsByThreadId.get(thread.id),
+      vcsBackend: appSettings.vcsBackend,
     });
     const threadStatus = resolveThreadStatusForSidebar(thread);
     const isSubagentThread = Boolean(thread.parentThreadId);
@@ -4267,6 +4272,7 @@ export default function Sidebar() {
         !isGenericChatThreadTitle(thread.title) &&
         Boolean(thread.handoff?.sourceProvider),
       threadAutomations: automationsByThreadId.get(thread.id),
+      vcsBackend: appSettings.vcsBackend,
     });
     const isSubagentThread = Boolean(thread.parentThreadId);
     const leadingPrStatus =

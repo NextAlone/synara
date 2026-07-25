@@ -274,6 +274,7 @@ export default function BranchToolbar({
   const environmentPresentation = resolveThreadEnvironmentPresentation({
     envMode: effectiveEnvMode,
     worktreePath: activeWorktreePath,
+    backend: settings.vcsBackend,
   });
 
   const setThreadWorkspace = useCallback(
@@ -557,7 +558,7 @@ export default function BranchToolbar({
                 {canSwitchToWorktree ? (
                   <ContinueInMenuItem
                     icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label="New worktree"
+                    label={environmentPresentation.newIsolatedOptionLabel}
                     onSelect={() => onEnvModeChange("worktree")}
                   />
                 ) : null}
@@ -571,7 +572,7 @@ export default function BranchToolbar({
                 {canHandoffToWorktree && onHandoffToWorktree ? (
                   <ContinueInMenuItem
                     icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label="Hand off to new worktree"
+                    label={environmentPresentation.handOffToIsolatedLabel}
                     disabled={handoffBusy}
                     onSelect={() => onHandoffToWorktree()}
                   />

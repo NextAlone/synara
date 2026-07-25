@@ -36,11 +36,14 @@ function formatRateLimitMessage(rateLimitStatus: RateLimitStatus): string {
 function formatEnvironmentLabel(
   envMode: DraftThreadEnvMode,
   envState: ResolvedThreadWorkspaceState,
+  vcsBackend?: "git" | "jj" | null,
 ): string {
   if (envMode === "local") {
     return "Local";
   }
-  return envState === "worktree-pending" ? "New worktree (pending)" : "Worktree";
+  const noun = vcsBackend === "jj" ? "workspace" : "worktree";
+  const label = vcsBackend === "jj" ? "Workspace" : "Worktree";
+  return envState === "worktree-pending" ? `New ${noun} (pending)` : label;
 }
 
 export function ComposerSlashStatusDialog(props: {
@@ -52,6 +55,7 @@ export function ComposerSlashStatusDialog(props: {
   interactionMode: ProviderInteractionMode;
   envMode: DraftThreadEnvMode;
   envState: ResolvedThreadWorkspaceState;
+  vcsBackend?: "git" | "jj" | null;
   branch: string | null;
   contextWindow: ContextWindowSnapshot | null;
   cumulativeCostUsd: number | null;
@@ -68,6 +72,7 @@ export function ComposerSlashStatusDialog(props: {
     interactionMode,
     envMode,
     envState,
+    vcsBackend,
     branch,
     contextWindow,
     cumulativeCostUsd,
@@ -108,7 +113,7 @@ export function ComposerSlashStatusDialog(props: {
             <div className="space-y-1">
               <p className="text-xs text-muted-foreground">Environment</p>
               <p className="font-medium text-foreground">
-                {formatEnvironmentLabel(envMode, envState)}
+                {formatEnvironmentLabel(envMode, envState, vcsBackend)}
               </p>
             </div>
             <div className="space-y-1">

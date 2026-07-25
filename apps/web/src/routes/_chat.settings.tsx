@@ -432,13 +432,19 @@ function SettingsRouteView() {
                 });
               }}
               ariaLabel="Default thread mode"
-              valueContent={settings.defaultThreadEnvMode === "worktree" ? "New worktree" : "Local"}
+              valueContent={
+                settings.defaultThreadEnvMode === "worktree"
+                  ? settings.vcsBackend === "jj"
+                    ? "New workspace"
+                    : "New worktree"
+                  : "Local"
+              }
             >
               <SelectItem hideIndicator value="local">
                 Local
               </SelectItem>
               <SelectItem hideIndicator value="worktree">
-                New worktree
+                {settings.vcsBackend === "jj" ? "New workspace" : "New worktree"}
               </SelectItem>
             </SettingsSelectControl>
           }

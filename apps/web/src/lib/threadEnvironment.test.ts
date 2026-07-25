@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { resolveDiffEnvironmentState, resolveForkThreadEnvironment } from "./threadEnvironment";
+import {
+  formatIsolatedWorkspaceNoun,
+  resolveDiffEnvironmentState,
+  resolveForkThreadEnvironment,
+  resolveIsolatedWorkspaceNoun,
+  resolveThreadEnvironmentPresentation,
+} from "./threadEnvironment";
 
 describe("threadEnvironment", () => {
   it("keeps a worktree fork into local on the same worktree", () => {
@@ -80,6 +86,46 @@ describe("threadEnvironment", () => {
       cwd: null,
       disabledReason:
         "Diff and summary will be available once the worktree is ready for this chat.",
+    });
+  });
+
+  it("uses workspace wording for pending JJ isolated environments", () => {
+    expect(
+      resolveDiffEnvironmentState({
+        projectCwd: "/repo",
+        envMode: "worktree",
+        worktreePath: null,
+        backend: "jj",
+      }).disabledReason,
+    ).toBe("Diff and summary will be available once the workspace is ready for this chat.");
+  });
+
+  it("labels JJ isolated environments as workspace, not worktree", () => {
+    expect(resolveIsolatedWorkspaceNoun("jj")).toBe("workspace");
+    expect(formatIsolatedWorkspaceNoun("jj")).toBe("Workspace");
+    expect(
+      resolveThreadEnvironmentPresentation({
+        envMode: "worktree",
+        worktreePath: null,
+        backend: "jj",
+      }),
+    ).toMatchObject({
+      shortLabel: "Workspace",
+      worktreeOptionLabel: "Workspace",
+      newIsolatedOptionLabel: "New workspace",
+      handOffToIsolatedLabel: "Hand off to new workspace",
+      worktreeBadgeLabel: "Workspace pending",
+    });
+    expect(
+      resolveThreadEnvironmentPresentation({
+        envMode: "worktree",
+        worktreePath: "/repo/.worktrees/feature",
+        backend: "git",
+      }),
+    ).toMatchObject({
+      shortLabel: "Worktree",
+      newIsolatedOptionLabel: "New worktree",
+      worktreeBadgeLabel: "Worktree",
     });
   });
 
