@@ -228,6 +228,30 @@ export function shouldHandlePromptHistoryNavigationKey(input: {
   );
 }
 
+export type StopTurnEscapeAction = "ignore" | "consume" | "confirm" | "interrupt";
+
+export function resolveStopTurnEscapeAction(input: {
+  hasActiveTurn: boolean;
+  targetsComposer: boolean;
+  hasBlockingSurface: boolean;
+  isComposing: boolean;
+  isRepeat: boolean;
+  isConfirmationVisible: boolean;
+}): StopTurnEscapeAction {
+  if (
+    !input.hasActiveTurn ||
+    !input.targetsComposer ||
+    input.hasBlockingSurface ||
+    input.isComposing
+  ) {
+    return "ignore";
+  }
+  if (input.isRepeat) {
+    return "consume";
+  }
+  return input.isConfirmationVisible ? "interrupt" : "confirm";
+}
+
 // `expandedCursor` is a raw index into `prompt` (see PromptHistoryNavigationResult).
 export function isComposerCursorOnFirstLine(prompt: string, expandedCursor: number): boolean {
   const boundedCursor = Math.max(0, Math.min(prompt.length, expandedCursor));

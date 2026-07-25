@@ -1486,6 +1486,10 @@ function hasDispatchedCommandType(type: string): boolean {
   return wsRequests.some((request) => readDispatchedCommand(request)?.type === type);
 }
 
+function countDispatchedCommands(type: string): number {
+  return wsRequests.filter((request) => readDispatchedCommand(request)?.type === type).length;
+}
+
 async function waitForEnvironmentModeButton(label: string): Promise<HTMLButtonElement> {
   return waitForElement(
     () =>
@@ -1570,6 +1574,20 @@ function dispatchComposerFocusToggleShortcut(): KeyboardEvent {
     cancelable: true,
   });
   window.dispatchEvent(event);
+  return event;
+}
+
+function dispatchEscape(
+  target: EventTarget,
+  options: Pick<KeyboardEventInit, "isComposing" | "repeat"> = {},
+): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+    ...options,
+  });
+  target.dispatchEvent(event);
   return event;
 }
 
@@ -3431,6 +3449,137 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
 
       expect(getComputedStyle(stopButton).cursor).toBe("pointer");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("requires two Escape presses to interrupt a running turn", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-double-escape-stop" as MessageId,
+        targetText: "double Escape stop target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      const composerEditor = await waitForComposerEditor();
+      const stopButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Unable to find stop generation button.",
+      );
+      composerEditor.focus();
+
+      expect(dispatchEscape(composerEditor).defaultPrevented).toBe(true);
+      await vi.waitFor(() => {
+        expect(stopButton.textContent?.trim()).toBe("Esc");
+      });
+      expect(countDispatchedCommands("thread.turn.interrupt")).toBe(0);
+
+      expect(dispatchEscape(composerEditor).defaultPrevented).toBe(true);
+      await vi.waitFor(() => {
+        expect(countDispatchedCommands("thread.turn.interrupt")).toBe(1);
+        expect(stopButton.textContent?.trim()).toBe("");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not treat held Escape key-repeat as stop confirmation", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-held-escape-stop" as MessageId,
+        targetText: "held Escape stop target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      const composerEditor = await waitForComposerEditor();
+      const stopButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Unable to find stop generation button.",
+      );
+      composerEditor.focus();
+      dispatchEscape(composerEditor);
+      await vi.waitFor(() => {
+        expect(stopButton.textContent?.trim()).toBe("Esc");
+      });
+
+      expect(dispatchEscape(composerEditor, { repeat: true }).defaultPrevented).toBe(true);
+      await waitForLayout();
+      expect(countDispatchedCommands("thread.turn.interrupt")).toBe(0);
+      expect(stopButton.textContent?.trim()).toBe("Esc");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("lets IME composition own Escape while a turn is running", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-ime-escape-stop" as MessageId,
+        targetText: "IME Escape stop target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      const composerEditor = await waitForComposerEditor();
+      const stopButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Unable to find stop generation button.",
+      );
+      composerEditor.focus();
+
+      expect(dispatchEscape(composerEditor, { isComposing: true }).defaultPrevented).toBe(false);
+      await waitForLayout();
+      expect(countDispatchedCommands("thread.turn.interrupt")).toBe(0);
+      expect(stopButton.textContent?.trim()).toBe("");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("expires Escape stop confirmation after two seconds", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-expired-escape-stop" as MessageId,
+        targetText: "expired Escape stop target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      const composerEditor = await waitForComposerEditor();
+      const stopButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Unable to find stop generation button.",
+      );
+      composerEditor.focus();
+      dispatchEscape(composerEditor);
+      await vi.waitFor(() => {
+        expect(stopButton.textContent?.trim()).toBe("Esc");
+      });
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 2_050);
+      });
+      await vi.waitFor(() => {
+        expect(stopButton.textContent?.trim()).toBe("");
+      });
+
+      dispatchEscape(composerEditor);
+      await vi.waitFor(() => {
+        expect(stopButton.textContent?.trim()).toBe("Esc");
+      });
+      expect(countDispatchedCommands("thread.turn.interrupt")).toBe(0);
     } finally {
       await mounted.cleanup();
     }

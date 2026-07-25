@@ -179,6 +179,7 @@ import {
   resolveGitRepoUiState,
   resolveProjectScriptTerminalTarget,
   resolvePromptHistoryNavigation,
+  resolveStopTurnEscapeAction,
   resolveThreadDetailHydration,
   shouldHandlePromptHistoryNavigationKey,
   shouldEnableComposerPastedTextCollapse,
@@ -832,6 +833,67 @@ function canHandleComposerPickerShortcut(
     document.activeElement === document.documentElement
   );
 }
+
+const STOP_TURN_CONFIRMATION_TIMEOUT_MS = 2_000;
+
+function useStopTurnConfirmation(activeTurnKey: string | null): {
+  visible: boolean;
+  confirm: () => void;
+  clear: () => void;
+  isVisible: () => boolean;
+} {
+  const [confirmedTurnKey, setConfirmedTurnKey] = useState<string | null>(null);
+  const confirmedTurnKeyRef = useRef<string | null>(null);
+  const timeoutRef = useRef<number | null>(null);
+
+  const clear = useCallback(() => {
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    if (confirmedTurnKeyRef.current === null) {
+      return;
+    }
+    confirmedTurnKeyRef.current = null;
+    setConfirmedTurnKey(null);
+  }, []);
+
+  const confirm = useCallback(() => {
+    if (activeTurnKey === null) {
+      return;
+    }
+    clear();
+    confirmedTurnKeyRef.current = activeTurnKey;
+    setConfirmedTurnKey(activeTurnKey);
+    timeoutRef.current = window.setTimeout(clear, STOP_TURN_CONFIRMATION_TIMEOUT_MS);
+  }, [activeTurnKey, clear]);
+
+  const isVisible = useCallback(
+    () => activeTurnKey !== null && confirmedTurnKeyRef.current === activeTurnKey,
+    [activeTurnKey],
+  );
+
+  useEffect(() => {
+    clear();
+  }, [activeTurnKey, clear]);
+
+  useEffect(
+    () => () => {
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current);
+      }
+    },
+    [],
+  );
+
+  return {
+    visible: activeTurnKey !== null && confirmedTurnKey === activeTurnKey,
+    confirm,
+    clear,
+    isVisible,
+  };
+}
+
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
@@ -2661,6 +2723,21 @@ export default function ChatView({
   const activeWorktreeSetup = localDispatch?.worktreeSetup ?? null;
   const isPreparingWorktree = activeWorktreeSetup !== null;
   const hasLiveTurn = phase === "running";
+  const activeStopTurnConfirmationKey =
+    hasLiveTurn && activeThreadId
+      ? `${activeThreadId}\u001f${
+          activeThread?.session?.activeTurnId ??
+          activeLatestTurn?.turnId ??
+          activeLatestTurn?.startedAt ??
+          "running"
+        }`
+      : null;
+  const {
+    visible: isStopTurnConfirmationVisible,
+    confirm: confirmStopTurn,
+    clear: clearStopTurnConfirmation,
+    isVisible: isStopTurnConfirmationActive,
+  } = useStopTurnConfirmation(activeStopTurnConfirmationKey);
   const {
     automationProjects,
     automationThreads,
@@ -5496,6 +5573,11 @@ export default function ChatView({
     });
   }, [activeThread]);
 
+  const interruptCurrentTurn = useCallback(async () => {
+    clearStopTurnConfirmation();
+    await onInterrupt();
+  }, [clearStopTurnConfirmation, onInterrupt]);
+
   const onStopWorkflowRun = useCallback(async () => {
     const api = readNativeApi();
     if (!api || !activeThread || !workflowRunState) return;
@@ -5629,7 +5711,7 @@ export default function ChatView({
       ) {
         event.preventDefault();
         event.stopPropagation();
-        void onInterrupt();
+        void interruptCurrentTurn();
         return;
       }
       // Ctrl+B mirrors the native CLI: background all foreground running
@@ -5886,7 +5968,7 @@ export default function ChatView({
     terminalWorkspaceTerminalTabActive,
     onToggleBrowser,
     onToggleDiff,
-    onInterrupt,
+    interruptCurrentTurn,
     onSplitSurface,
     showGitActions,
     isGitRepo,
@@ -9821,6 +9903,82 @@ export default function ChatView({
     setDismissedRateLimitBannerKey(activeRateLimitBannerDismissalKey);
   }, [activeRateLimitBannerDismissalKey]);
 
+  useEffect(() => {
+    if (surfaceMode === "split" && !isFocusedPane) {
+      return;
+    }
+
+    const handler = (event: globalThis.KeyboardEvent) => {
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+
+      const action = resolveStopTurnEscapeAction({
+        hasActiveTurn: activeStopTurnConfirmationKey !== null,
+        targetsComposer: eventTargetsComposer(event, composerFormRef.current),
+        hasBlockingSurface:
+          expandedImage !== null ||
+          composerMenuOpen ||
+          isComposerModelEffortPickerOpen ||
+          renameDialogOpen ||
+          automationDraftOpen ||
+          pullRequestDialogState !== null ||
+          isSlashStatusDialogOpen ||
+          worktreeHandoffDialogOpen ||
+          isComposerApprovalState ||
+          pendingUserInputs.length > 0 ||
+          isVoiceRecording ||
+          isVoiceTranscribing ||
+          isTerminalFocused(),
+        isComposing: event.isComposing || event.keyCode === 229,
+        isRepeat: event.repeat,
+        isConfirmationVisible: isStopTurnConfirmationActive(),
+      });
+      if (action === "ignore") {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (action === "confirm") {
+        confirmStopTurn();
+      } else if (action === "interrupt") {
+        void interruptCurrentTurn();
+      }
+    };
+
+    // Bubble phase lets menus, dialogs, image previews, and editor-local Escape
+    // handlers consume the key before the destructive stop shortcut sees it.
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [
+    activeStopTurnConfirmationKey,
+    automationDraftOpen,
+    composerMenuOpen,
+    confirmStopTurn,
+    expandedImage,
+    interruptCurrentTurn,
+    isComposerApprovalState,
+    isComposerModelEffortPickerOpen,
+    isFocusedPane,
+    isSlashStatusDialogOpen,
+    isStopTurnConfirmationActive,
+    isVoiceRecording,
+    isVoiceTranscribing,
+    pendingUserInputs.length,
+    pullRequestDialogState,
+    renameDialogOpen,
+    surfaceMode,
+    worktreeHandoffDialogOpen,
+  ]);
+
   // Empty state: no active thread
   if (!activeThread) {
     return (
@@ -10560,14 +10718,27 @@ export default function ChatView({
                           variant="prominent"
                           size="icon-xs"
                           className="sm:size-[26px]"
-                          onClick={() => void onInterrupt()}
+                          onClick={() => void interruptCurrentTurn()}
                           aria-label="Stop generation"
-                          title="Stop the current response. On Mac, press Ctrl+C to interrupt."
+                          title={
+                            isStopTurnConfirmationVisible
+                              ? "Press Esc again to stop the current response."
+                              : "Stop the current response. Press Esc twice, or on Mac press Ctrl+C."
+                          }
                         >
-                          <span
-                            aria-hidden="true"
-                            className="block size-2 rounded-[1px] bg-current"
-                          />
+                          {isStopTurnConfirmationVisible ? (
+                            <span
+                              aria-hidden="true"
+                              className="text-[9px] font-semibold leading-none tracking-[-0.04em]"
+                            >
+                              Esc
+                            </span>
+                          ) : (
+                            <span
+                              aria-hidden="true"
+                              className="block size-2 rounded-[1px] bg-current"
+                            />
+                          )}
                         </Button>
                       ) : pendingUserInputs.length === 0 &&
                         !isVoiceRecording &&

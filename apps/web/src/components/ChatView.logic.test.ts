@@ -35,6 +35,7 @@ import {
   resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
   resolveRuntimeModeAfterApprovalDecision,
+  resolveStopTurnEscapeAction,
   resolveThreadDetailHydration,
   QUEUED_STEER_GATE_TIMEOUT_MS,
   sanitizeVoiceErrorMessage,
@@ -218,6 +219,58 @@ describe("composer menu selection", () => {
         items,
       }),
     ).toBeNull();
+  });
+});
+
+describe("stop-turn Escape shortcut", () => {
+  const activeComposerContext = {
+    hasActiveTurn: true,
+    targetsComposer: true,
+    hasBlockingSurface: false,
+    isComposing: false,
+    isRepeat: false,
+  } as const;
+
+  it("confirms first and interrupts only after confirmation is visible", () => {
+    expect(
+      resolveStopTurnEscapeAction({
+        ...activeComposerContext,
+        isConfirmationVisible: false,
+      }),
+    ).toBe("confirm");
+    expect(
+      resolveStopTurnEscapeAction({
+        ...activeComposerContext,
+        isConfirmationVisible: true,
+      }),
+    ).toBe("interrupt");
+  });
+
+  it("consumes key-repeat without treating a held Escape as confirmation", () => {
+    expect(
+      resolveStopTurnEscapeAction({
+        ...activeComposerContext,
+        isRepeat: true,
+        isConfirmationVisible: true,
+      }),
+    ).toBe("consume");
+  });
+
+  it("ignores Escape when another interaction owns it", () => {
+    for (const input of [
+      { hasActiveTurn: false },
+      { targetsComposer: false },
+      { hasBlockingSurface: true },
+      { isComposing: true },
+    ] as const) {
+      expect(
+        resolveStopTurnEscapeAction({
+          ...activeComposerContext,
+          ...input,
+          isConfirmationVisible: false,
+        }),
+      ).toBe("ignore");
+    }
   });
 });
 
