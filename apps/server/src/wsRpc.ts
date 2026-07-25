@@ -4,6 +4,7 @@ import {
   CommandId,
   DEFAULT_TERMINAL_ID,
   ORCHESTRATION_WS_METHODS,
+  PROJECT_FILE_BINARY_ERROR_CODE,
   ThreadId,
   WS_BOOTSTRAP_METHOD,
   WS_BOOTSTRAP_PATH,
@@ -104,7 +105,10 @@ import { isLoopbackHost } from "./startupAccess";
 import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
-import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
+import {
+  WorkspaceFileBinaryError,
+  WorkspaceFileSystem,
+} from "./workspace/Services/WorkspaceFileSystem";
 import {
   MAX_STREAMS_PER_RPC_CLIENT,
   MAX_THREAD_STREAMS_PER_RPC_CLIENT,
@@ -1008,7 +1012,17 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.projectsSearchLocalEntries]: (input) =>
           rpcEffect(workspaceEntries.searchLocal(input), "Failed to search local entries"),
         [WS_METHODS.projectsReadFile]: (input) =>
-          rpcEffect(workspaceFileSystem.readFile(input), "Failed to read workspace file"),
+          workspaceFileSystem.readFile(input).pipe(
+            Effect.mapError((cause) =>
+              Schema.is(WorkspaceFileBinaryError)(cause)
+                ? new WsRpcError({
+                    message: cause.message,
+                    code: PROJECT_FILE_BINARY_ERROR_CODE,
+                    resourcePath: cause.relativePath,
+                  })
+                : toWsRpcError(cause, "Failed to read workspace file"),
+            ),
+          ),
         [WS_METHODS.projectsCreateLocalFilePreviewGrant]: (input) =>
           rpcEffect(
             Effect.promise(() => createLocalPreviewGrant({ requestedPath: input.path })),

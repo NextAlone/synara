@@ -8,6 +8,18 @@ import type {
 } from "@synara/contracts";
 import { WorkspacePathOutsideRootError } from "./WorkspacePaths";
 
+export class WorkspaceFileBinaryError extends Schema.TaggedErrorClass<WorkspaceFileBinaryError>()(
+  "WorkspaceFileBinaryError",
+  {
+    cwd: Schema.String,
+    relativePath: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Workspace file is binary and cannot be previewed: ${this.relativePath}`;
+  }
+}
+
 export class WorkspaceFileSystemError extends Schema.TaggedErrorClass<WorkspaceFileSystemError>()(
   "WorkspaceFileSystemError",
   {
@@ -28,7 +40,7 @@ export interface WorkspaceFileSystemShape {
     input: ProjectReadFileInput,
   ) => Effect.Effect<
     ProjectReadFileResult,
-    WorkspaceFileSystemError | WorkspacePathOutsideRootError
+    WorkspaceFileBinaryError | WorkspaceFileSystemError | WorkspacePathOutsideRootError
   >;
   readonly writeFile: (
     input: ProjectWriteFileInput,

@@ -1,11 +1,12 @@
-import type {
-  ProjectCreateLocalFilePreviewGrantResult,
-  ProjectEntry,
-  ProjectListDirectoriesResult,
-  ProjectReadFileResult,
-  ProjectDiscoverScriptsResult,
-  ProjectSearchEntriesResult,
-  ProjectSearchLocalEntriesResult,
+import {
+  PROJECT_FILE_BINARY_ERROR_CODE,
+  type ProjectCreateLocalFilePreviewGrantResult,
+  type ProjectDiscoverScriptsResult,
+  type ProjectEntry,
+  type ProjectListDirectoriesResult,
+  type ProjectReadFileResult,
+  type ProjectSearchEntriesResult,
+  type ProjectSearchLocalEntriesResult,
 } from "@synara/contracts";
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
@@ -69,6 +70,37 @@ const EMPTY_SEARCH_LOCAL_ENTRIES_RESULT: ProjectSearchLocalEntriesResult = {
   truncated: false,
 };
 const ABSOLUTE_LOCAL_READ_CWD = "/";
+
+export interface ProjectUnsupportedBinaryFileResult {
+  readonly kind: "unsupported-binary";
+  readonly relativePath: string;
+}
+
+export type ProjectReadFileQueryResult =
+  | ProjectReadFileResult
+  | ProjectUnsupportedBinaryFileResult;
+
+export function isProjectUnsupportedBinaryFileResult(
+  result: ProjectReadFileQueryResult | null | undefined,
+): result is ProjectUnsupportedBinaryFileResult {
+  return (
+    result !== null &&
+    result !== undefined &&
+    "kind" in result &&
+    result.kind === "unsupported-binary"
+  );
+}
+
+function isProjectFileBinaryRpcError(
+  error: unknown,
+): error is { readonly code: string; readonly resourcePath?: unknown } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === PROJECT_FILE_BINARY_ERROR_CODE
+  );
+}
 
 export function isLocalPreviewGrantUsable(
   grant: Pick<ProjectCreateLocalFilePreviewGrantResult, "expiresAt"> | null | undefined,
@@ -141,18 +173,31 @@ export function projectReadFileQueryOptions(input: {
     (input.relativePath !== null && isLocalAbsolutePath(input.relativePath)
       ? ABSOLUTE_LOCAL_READ_CWD
       : null);
-  return queryOptions<ProjectReadFileResult>({
+  return queryOptions<ProjectReadFileQueryResult>({
     queryKey: projectQueryKeys.readFile(input.cwd, input.relativePath),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!effectiveCwd || !input.relativePath) {
         throw new Error("Workspace file read is unavailable.");
       }
-      return api.projects.readFile({
-        cwd: effectiveCwd,
-        relativePath: input.relativePath,
-        ...(input.previewGrant ? { previewGrant: input.previewGrant } : {}),
-      });
+      try {
+        return await api.projects.readFile({
+          cwd: effectiveCwd,
+          relativePath: input.relativePath,
+          ...(input.previewGrant ? { previewGrant: input.previewGrant } : {}),
+        });
+      } catch (error) {
+        if (isProjectFileBinaryRpcError(error)) {
+          return {
+            kind: "unsupported-binary",
+            relativePath:
+              typeof error.resourcePath === "string" && error.resourcePath.length > 0
+                ? error.resourcePath
+                : input.relativePath,
+          };
+        }
+        throw error;
+      }
     },
     enabled: (input.enabled ?? true) && effectiveCwd !== null && input.relativePath !== null,
     staleTime: input.staleTime ?? DEFAULT_READ_FILE_STALE_TIME,

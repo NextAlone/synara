@@ -8,6 +8,7 @@ import { Effect, Layer, Path } from "effect";
 
 import { resolveLocalPreviewGrantRealPath } from "../../localImageFiles";
 import {
+  WorkspaceFileBinaryError,
   WorkspaceFileSystem,
   WorkspaceFileSystemError,
   type WorkspaceFileSystemShape,
@@ -309,11 +310,9 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
       });
 
       if (isBinaryLike(bytes)) {
-        return yield* new WorkspaceFileSystemError({
+        return yield* new WorkspaceFileBinaryError({
           cwd: input.cwd,
-          relativePath: input.relativePath,
-          operation: "workspaceFileSystem.readFile",
-          detail: "File appears to be binary.",
+          relativePath: target.relativePath,
         });
       }
 

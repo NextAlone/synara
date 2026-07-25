@@ -7,12 +7,14 @@
 // Exports: WorkspaceFileOpenerContext, useWorkspaceFileOpener,
 //          resolveWorkspaceFileOpenTarget, resolveScratchPreviewFileOpenTarget,
 //          resolveDockFileOpenTarget,
-//          openWorkspaceFileReference, prefetchWorkspaceFile
+//          openWorkspaceFileReference, activateWorkspaceFile,
+//          prefetchWorkspaceFile
 
 import { isSupportedLocalPreviewFilePath } from "@synara/shared/localPreviewFiles";
 import {
   isLocalAbsolutePath,
   isWorkspaceRelativePathSafe,
+  joinWorkspaceRelativePath,
   workspaceRelativePathOf,
 } from "@synara/shared/path";
 import { isScratchWorkspacePath } from "@synara/shared/threadWorkspace";
@@ -21,13 +23,16 @@ import { createContext, useContext } from "react";
 
 import { openInPreferredEditor } from "../editorPreferences";
 import { readNativeApi } from "../nativeApi";
-import { projectReadFileQueryOptions } from "./projectReactQuery";
+import {
+  isProjectUnsupportedBinaryFileResult,
+  projectReadFileQueryOptions,
+} from "./projectReactQuery";
 
 export interface WorkspaceFileOpener {
   /**
    * Opens a file referenced in the chat. Returns true when the reference was
-   * handled by an in-app viewer; false tells the caller to fall back to the
-   * external editor (path outside the workspace, no viewer on this surface).
+   * handled by this surface (in-app preview or native file-manager reveal);
+   * false tells the caller to fall back to the external editor.
    */
   openFile: (path: string) => boolean;
   /** Optional hover warm-up for the file contents + syntax highlighter. */
@@ -148,6 +153,59 @@ export function openWorkspaceFileReference(opener: WorkspaceFileOpener | null, p
   }
 }
 
+export type WorkspaceFileOpenDisposition =
+  | { readonly kind: "preview" }
+  | { readonly kind: "reveal"; readonly relativePath: string };
+
+/**
+ * Resolves the click behavior from the same read query used by the preview.
+ * Supported image/PDF files bypass the text RPC. Other files are sampled by
+ * the server; an unsupported binary result is expected control flow, while a
+ * genuine read failure still opens the preview so its existing error UI can
+ * explain the failure.
+ */
+export async function resolveWorkspaceFileOpenDisposition(
+  queryClient: QueryClient,
+  workspaceRoot: string,
+  relativePath: string,
+): Promise<WorkspaceFileOpenDisposition> {
+  if (isSupportedLocalPreviewFilePath(relativePath)) {
+    return { kind: "preview" };
+  }
+
+  try {
+    const result = await queryClient.fetchQuery({
+      ...projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath }),
+      retry: false,
+    });
+    return isProjectUnsupportedBinaryFileResult(result)
+      ? { kind: "reveal", relativePath: result.relativePath }
+      : { kind: "preview" };
+  } catch {
+    return { kind: "preview" };
+  }
+}
+
+export async function activateWorkspaceFile(input: {
+  queryClient: QueryClient;
+  workspaceRoot: string;
+  relativePath: string;
+  preview: () => void;
+  reveal: (absolutePath: string) => Promise<void>;
+}): Promise<WorkspaceFileOpenDisposition> {
+  const disposition = await resolveWorkspaceFileOpenDisposition(
+    input.queryClient,
+    input.workspaceRoot,
+    input.relativePath,
+  );
+  if (disposition.kind === "reveal") {
+    await input.reveal(joinWorkspaceRelativePath(input.workspaceRoot, disposition.relativePath));
+  } else {
+    input.preview();
+  }
+  return disposition;
+}
+
 /**
  * Hover warm-up so the file pane opens instantly: file contents go through the
  * shared React Query cache, and the matching Shiki highlighter loads in the
@@ -172,10 +230,16 @@ export function prefetchWorkspaceFile(
   if (!relativePath.includes("/")) {
     return;
   }
-  void queryClient.prefetchQuery(projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath }));
-  void import("./syntaxHighlighting")
-    .then((module) =>
-      module.getSyntaxHighlighterPromise(module.getSyntaxLanguageForPath(relativePath)),
-    )
-    .catch(() => undefined);
+  const options = projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath });
+  void queryClient.prefetchQuery(options).then(() => {
+    const result = queryClient.getQueryData(options.queryKey);
+    if (!result || isProjectUnsupportedBinaryFileResult(result)) {
+      return;
+    }
+    void import("./syntaxHighlighting")
+      .then((module) =>
+        module.getSyntaxHighlighterPromise(module.getSyntaxLanguageForPath(relativePath)),
+      )
+      .catch(() => undefined);
+  });
 }

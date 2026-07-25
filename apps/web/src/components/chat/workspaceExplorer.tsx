@@ -25,10 +25,12 @@ import {
 import { splitRepoRelativePath } from "~/lib/diffRendering";
 import { showFileReferenceContextMenu } from "~/lib/fileReferenceContextMenu";
 import {
+  isProjectUnsupportedBinaryFileResult,
   projectListDirectoriesQueryOptions,
   projectReadFileQueryOptions,
   projectSearchEntriesQueryOptions,
 } from "~/lib/projectReactQuery";
+import { useWorkspaceFileActivation } from "~/hooks/useWorkspaceFileActivation";
 import { getSyntaxHighlighterPromise, getSyntaxLanguageForPath } from "~/lib/syntaxHighlighting";
 import { cn } from "~/lib/utils";
 import { Skeleton } from "../ui/skeleton";
@@ -108,8 +110,24 @@ export function useExplorerEntryPrefetch(cwd: string | null) {
       );
       return;
     }
-    void queryClient.prefetchQuery(projectReadFileQueryOptions({ cwd, relativePath: entry.path }));
-    void getSyntaxHighlighterPromise(getSyntaxLanguageForPath(entry.path)).catch(() => undefined);
+    const options = projectReadFileQueryOptions({ cwd, relativePath: entry.path });
+    void queryClient.prefetchQuery(options).then(() => {
+      const result = queryClient.getQueryData(options.queryKey);
+      if (!result || isProjectUnsupportedBinaryFileResult(result)) {
+        return;
+      }
+      void getSyntaxHighlighterPromise(getSyntaxLanguageForPath(entry.path)).catch(() => undefined);
+    });
+  };
+}
+
+function useWorkspaceExplorerFileActivation(
+  workspaceRoot: string | null,
+  onSelectFile: (path: string) => void,
+) {
+  const activateFile = useWorkspaceFileActivation(workspaceRoot);
+  return (relativePath: string) => {
+    activateFile(relativePath, () => onSelectFile(relativePath));
   };
 }
 
@@ -365,6 +383,10 @@ export function WorkspaceFilesSidebar(props: {
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
 }) {
   const prefetchEntry = useExplorerEntryPrefetch(props.workspaceRoot);
+  const activateFile = useWorkspaceExplorerFileActivation(
+    props.workspaceRoot,
+    props.onSelectFile,
+  );
   const handleEntryContextMenu = useTreeEntryContextMenu(props.onReferenceInChat);
   const handleListKeyDown = useExplorerListNavigation();
   return (
@@ -376,7 +398,7 @@ export function WorkspaceFilesSidebar(props: {
         workspaceRoot={props.workspaceRoot}
         selectedFilePath={props.selectedFilePath}
         expandedDirectories={props.expandedDirectories}
-        onSelectFile={props.onSelectFile}
+        onSelectFile={activateFile}
         onToggleDirectory={props.onToggleDirectory}
         onPrefetchEntry={prefetchEntry}
         onEntryContextMenu={handleEntryContextMenu}
@@ -592,6 +614,10 @@ export function WorkspaceSearchSidebar(props: {
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
 }) {
   const prefetchEntry = useExplorerEntryPrefetch(props.workspaceRoot);
+  const activateFile = useWorkspaceExplorerFileActivation(
+    props.workspaceRoot,
+    props.onSelectFile,
+  );
   const handleEntryContextMenu = useResultEntryContextMenu(props.onReferenceInChat);
   const handleListKeyDown = useExplorerListNavigation();
   const search = useWorkspaceFileSearch(props.workspaceRoot, props.query);
@@ -606,7 +632,7 @@ export function WorkspaceSearchSidebar(props: {
         search={search}
         autoFocus
         onQueryChange={props.onQueryChange}
-        onSelectFile={props.onSelectFile}
+        onSelectFile={activateFile}
       />
       {search.inputQuery.length === 0 ? (
         <div className="flex min-h-0 flex-1 flex-col px-1 py-1">
@@ -619,7 +645,7 @@ export function WorkspaceSearchSidebar(props: {
           workspaceRoot={props.workspaceRoot}
           search={search}
           selectedFilePath={props.selectedFilePath}
-          onSelectFile={props.onSelectFile}
+          onSelectFile={activateFile}
           onPrefetchEntry={prefetchEntry}
           onEntryContextMenu={handleEntryContextMenu}
         />
@@ -643,6 +669,10 @@ export function WorkspaceExplorerSidebar(props: {
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
 }) {
   const prefetchEntry = useExplorerEntryPrefetch(props.workspaceRoot);
+  const activateFile = useWorkspaceExplorerFileActivation(
+    props.workspaceRoot,
+    props.onSelectFile,
+  );
   const handleTreeEntryContextMenu = useTreeEntryContextMenu(props.onReferenceInChat);
   const handleResultEntryContextMenu = useResultEntryContextMenu(props.onReferenceInChat);
   const handleListKeyDown = useExplorerListNavigation();
@@ -657,14 +687,14 @@ export function WorkspaceExplorerSidebar(props: {
         query={props.query}
         search={search}
         onQueryChange={props.onQueryChange}
-        onSelectFile={props.onSelectFile}
+        onSelectFile={activateFile}
       />
       {search.inputQuery.length === 0 ? (
         <WorkspaceFilesTreeBody
           workspaceRoot={props.workspaceRoot}
           selectedFilePath={props.selectedFilePath}
           expandedDirectories={props.expandedDirectories}
-          onSelectFile={props.onSelectFile}
+          onSelectFile={activateFile}
           onToggleDirectory={props.onToggleDirectory}
           onPrefetchEntry={prefetchEntry}
           onEntryContextMenu={handleTreeEntryContextMenu}
@@ -674,7 +704,7 @@ export function WorkspaceExplorerSidebar(props: {
           workspaceRoot={props.workspaceRoot}
           search={search}
           selectedFilePath={props.selectedFilePath}
-          onSelectFile={props.onSelectFile}
+          onSelectFile={activateFile}
           onPrefetchEntry={prefetchEntry}
           onEntryContextMenu={handleResultEntryContextMenu}
         />

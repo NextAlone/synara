@@ -16,6 +16,8 @@ const PROJECT_DIRECTORY_LIST_MAX_DEPTH = 32;
 const PROJECT_SCRIPT_DISCOVERY_MAX_DEPTH = 3;
 const ProjectEntryKind = Schema.Literals(["file", "directory"]);
 
+export const PROJECT_FILE_BINARY_ERROR_CODE = "PROJECT_FILE_BINARY" as const;
+
 export const ProjectKind = Schema.Literals(["project", "chat", "studio"]);
 export type ProjectKind = typeof ProjectKind.Type;
 

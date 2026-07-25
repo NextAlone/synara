@@ -23,6 +23,7 @@ import { basenameOfPath } from "../../file-icons";
 import { useBrowserPanelDesktopBridge } from "../../hooks/useBrowserPanelDesktopBridge";
 import { useDockPaneRuntimeActivation } from "../../hooks/useDockPaneRuntimeActivation";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
+import { useWorkspaceFileActivation } from "../../hooks/useWorkspaceFileActivation";
 import {
   addChatFileComment,
   appendChatFileReference,
@@ -208,6 +209,7 @@ export function SingleChatSurface(props: {
   const { settings: appSettings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
   const queryClient = useQueryClient();
+  const activateWorkspacePreview = useWorkspaceFileActivation(workspaceRoot);
   const lastAppliedRoutePanelSearchKeyRef = useRef<string | null>(null);
   const [editorExpandedDirectories, setEditorExpandedDirectories] = useState<ReadonlySet<string>>(
     () => new Set(readEditorViewState(props.threadId)?.expandedDirectories ?? []),
@@ -422,8 +424,15 @@ export function SingleChatSurface(props: {
       if (!targetPath) {
         return false;
       }
-      requestImmediateDockHydration("file");
-      openPane(props.threadId, { kind: "file", filePath: targetPath });
+      const openPreview = () => {
+        requestImmediateDockHydration("file");
+        openPane(props.threadId, { kind: "file", filePath: targetPath });
+      };
+      if (workspaceRoot && isWorkspaceRelativePathSafe(targetPath)) {
+        activateWorkspacePreview(targetPath, openPreview);
+      } else {
+        openPreview();
+      }
       return true;
     },
     prefetchFile: prefetchOpenerFile,
@@ -439,7 +448,7 @@ export function SingleChatSurface(props: {
       if (!relativePath) {
         return false;
       }
-      handleSelectEditorFile(relativePath);
+      activateWorkspacePreview(relativePath, () => handleSelectEditorFile(relativePath));
       return true;
     },
     prefetchFile: prefetchOpenerFile,

@@ -235,6 +235,7 @@ export class WsRpcError extends Schema.TaggedErrorClass<WsRpcError>()("WsRpcErro
   message: Schema.String,
   cause: Schema.optional(Schema.Defect),
   code: Schema.optional(Schema.String),
+  resourcePath: Schema.optional(Schema.String),
   retryable: Schema.optional(Schema.Boolean),
   retryAfterMs: Schema.optional(Schema.Number),
 }) {}

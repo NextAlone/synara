@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  activateWorkspaceFile,
   resolveDockFileOpenTarget,
   resolveScratchPreviewFileOpenTarget,
   resolveWorkspaceFileOpenTarget,
 } from "./workspaceFileOpener";
+import { projectQueryKeys } from "./projectReactQuery";
 
 describe("resolveWorkspaceFileOpenTarget", () => {
   it("passes workspace-relative paths through unchanged", () => {
@@ -103,5 +106,49 @@ describe("resolveDockFileOpenTarget", () => {
     expect(resolveDockFileOpenTarget("/Users/dev/Downloads/report.txt:4", "/repo/app")).toBe(
       "/Users/dev/Downloads/report.txt",
     );
+  });
+});
+
+describe("activateWorkspaceFile", () => {
+  it("reveals unsupported binary files without selecting the in-app preview", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(projectQueryKeys.readFile("/repo/app", "app.apk"), {
+      kind: "unsupported-binary",
+      relativePath: "build/app.apk",
+    });
+    const preview = vi.fn();
+    const reveal = vi.fn().mockResolvedValue(undefined);
+
+    const disposition = await activateWorkspaceFile({
+      queryClient,
+      workspaceRoot: "/repo/app",
+      relativePath: "app.apk",
+      preview,
+      reveal,
+    });
+
+    expect(disposition).toEqual({
+      kind: "reveal",
+      relativePath: "build/app.apk",
+    });
+    expect(reveal).toHaveBeenCalledWith("/repo/app/build/app.apk");
+    expect(preview).not.toHaveBeenCalled();
+  });
+
+  it("keeps supported binary previews inside the app", async () => {
+    const preview = vi.fn();
+    const reveal = vi.fn().mockResolvedValue(undefined);
+
+    const disposition = await activateWorkspaceFile({
+      queryClient: new QueryClient(),
+      workspaceRoot: "/repo/app",
+      relativePath: "assets/screenshot.png",
+      preview,
+      reveal,
+    });
+
+    expect(disposition).toEqual({ kind: "preview" });
+    expect(preview).toHaveBeenCalledOnce();
+    expect(reveal).not.toHaveBeenCalled();
   });
 });

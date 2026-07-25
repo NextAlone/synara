@@ -37,6 +37,7 @@ import { showFileReferenceContextMenu } from "~/lib/fileReferenceContextMenu";
 import { PlusIcon } from "~/lib/icons";
 import { toggleMarkdownTaskMarker } from "~/lib/markdownTaskList";
 import {
+  isProjectUnsupportedBinaryFileResult,
   isLocalPreviewGrantUsable,
   projectLocalPreviewGrantQueryOptions,
   projectReadFileQueryOptions,
@@ -356,7 +357,13 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     }),
   );
 
-  const fileContents = fileQuery.data?.contents ?? "";
+  const fileResult = fileQuery.data;
+  const unsupportedBinaryFile = isProjectUnsupportedBinaryFileResult(fileResult)
+    ? fileResult
+    : null;
+  const textFile =
+    fileResult && !isProjectUnsupportedBinaryFileResult(fileResult) ? fileResult : null;
+  const fileContents = textFile?.contents ?? "";
   const showMarkdownPreview = fileIsMarkdown && markdownPreviewEnabled;
   const lineCount = fileContents.length === 0 ? 0 : fileContents.split("\n").length;
   // Highlight -> floating "Add to chat" -> reference that points at exactly what
@@ -424,7 +431,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     }
     const options = projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath: filePath });
     const current = queryClient.getQueryData(options.queryKey);
-    if (!current || current.truncated) {
+    if (!current || isProjectUnsupportedBinaryFileResult(current) || current.truncated) {
       return;
     }
     const nextContents = toggleMarkdownTaskMarker(current.contents, sourceLine, checked);
@@ -475,8 +482,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const canToggleTasks =
     props.workspaceRoot !== null &&
     fileIsWorkspaceRelative &&
-    fileQuery.data !== undefined &&
-    !fileQuery.data.truncated;
+    textFile !== null &&
+    !textFile.truncated;
 
   if (!props.workspaceRoot && !fileIsLocalAbsolute && !fileIsScratchBinaryPreview) {
     return (
@@ -541,7 +548,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         onMarkdownPreviewChange={handleMarkdownPreviewChange}
         onReferenceInChat={onReferenceInChat}
         onAskWhyInChat={onAskWhyInChat}
-        truncated={fileQuery.data?.truncated ?? false}
+        truncated={textFile?.truncated ?? false}
       />
       {fileIsImage ? (
         <div
@@ -560,6 +567,10 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         </div>
       ) : fileQuery.isLoading ? (
         <FilePreviewLoadingState />
+      ) : unsupportedBinaryFile ? (
+        <PanelStateMessage density="compact" fill="flex">
+          <p>This binary file opens in Finder.</p>
+        </PanelStateMessage>
       ) : fileQuery.error ? (
         <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
           <p className="text-left text-[11px] text-destructive/85">

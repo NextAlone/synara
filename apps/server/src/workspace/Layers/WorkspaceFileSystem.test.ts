@@ -3,11 +3,14 @@ import * as NodeFs from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect } from "vitest";
 import { it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path } from "effect";
+import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 
 import { createLocalPreviewGrant } from "../../localImageFiles";
 import { WorkspaceEntries } from "../Services/WorkspaceEntries";
-import { WorkspaceFileSystem } from "../Services/WorkspaceFileSystem";
+import {
+  WorkspaceFileBinaryError,
+  WorkspaceFileSystem,
+} from "../Services/WorkspaceFileSystem";
 import { WorkspaceEntriesLive } from "./WorkspaceEntries";
 import { WorkspaceFileSystemLive } from "./WorkspaceFileSystem";
 import { WorkspacePathsLive } from "./WorkspacePaths";
@@ -82,6 +85,30 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
           contents: "abc",
           truncated: true,
         });
+      }),
+    );
+
+    it.effect("reports binary files without decoding them as text", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const relativePath = "build/app.apk";
+        const absolutePath = path.join(cwd, relativePath);
+        yield* Effect.promise(async () => {
+          await NodeFs.mkdir(path.dirname(absolutePath), { recursive: true });
+          await NodeFs.writeFile(absolutePath, Uint8Array.from([0x50, 0x4b, 0x03, 0x04, 0x00]));
+        });
+
+        const error = yield* workspaceFileSystem
+          .readFile({ cwd, relativePath })
+          .pipe(Effect.flip);
+
+        expect(Schema.is(WorkspaceFileBinaryError)(error)).toBe(true);
+        if (!Schema.is(WorkspaceFileBinaryError)(error)) {
+          throw new Error("Expected WorkspaceFileBinaryError.");
+        }
+        expect(error.relativePath).toBe(relativePath);
       }),
     );
 
