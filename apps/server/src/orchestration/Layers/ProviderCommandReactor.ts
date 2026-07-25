@@ -54,11 +54,13 @@ import { resolveThreadWorkspaceState } from "@synara/shared/threadEnvironment";
 import {
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadTurn,
+  resolveProjectCheckpointBackend,
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { JjCore } from "../../vcs/Services/JjCore.ts";
+import { resolveProjectVcsState } from "../../vcs/projectVcsState.ts";
 import {
   ProviderAdapterRequestError,
   ProviderAdapterValidationError,
@@ -433,12 +435,20 @@ const make = Effect.gen(function* () {
   });
 
   const resolveProjectedThreadCheckpointWorkspace = Effect.fnUntraced(function* (
-    thread: Pick<OrchestrationThread, "projectId" | "envMode" | "worktreePath">,
+    thread: Pick<
+      OrchestrationThread,
+      "projectId" | "envMode" | "worktreePath" | "workingDirectory"
+    >,
   ) {
     const project = yield* resolveThreadWorkspaceProject(thread);
-    const backend = project?.vcs.binding?.backend;
     const selectedBackend = (yield* serverSettings.getSettings).vcsBackend;
-    if (!project || !backend || backend !== selectedBackend) return undefined;
+    if (!project) return undefined;
+    const backend = resolveProjectCheckpointBackend({
+      projectKind: project.kind,
+      boundBackend: resolveProjectVcsState(project).binding?.backend,
+      selectedBackend,
+    });
+    if (!backend) return undefined;
     const cwd = resolveThreadWorkspaceCwd({
       thread,
       projects: [project],
@@ -1419,8 +1429,7 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      const checkpointWorkspace =
-        yield* resolveProjectedThreadCheckpointWorkspace(currentThread);
+      const checkpointWorkspace = yield* resolveProjectedThreadCheckpointWorkspace(currentThread);
       if (!checkpointWorkspace) {
         return;
       }
@@ -1698,32 +1707,25 @@ const make = Effect.gen(function* () {
 
     const branch =
       input.backend === "jj"
-        ? yield* jj
-            .createAvailableBookmark(input.cwd, input.targetBranch, "@-")
-            .pipe(
-              Effect.tap((bookmark) =>
-                jj.pushBookmark(input.cwd, bookmark).pipe(
-                  Effect.catchCause((cause) =>
-                    Effect.logWarning(
-                      "provider command reactor failed to publish JJ bookmark",
-                      {
-                        threadId: input.threadId,
-                        cwd: input.cwd,
-                        bookmark,
-                        cause: Cause.pretty(cause),
-                      },
-                    ),
-                  ),
+        ? yield* jj.createAvailableBookmark(input.cwd, input.targetBranch, "@-").pipe(
+            Effect.tap((bookmark) =>
+              jj.pushBookmark(input.cwd, bookmark).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("provider command reactor failed to publish JJ bookmark", {
+                    threadId: input.threadId,
+                    cwd: input.cwd,
+                    bookmark,
+                    cause: Cause.pretty(cause),
+                  }),
                 ),
               ),
-            )
+            ),
+          )
         : yield* git.withMutation(
             input.cwd,
             Effect.gen(function* () {
               if (!input.oldBranch) {
-                return yield* Effect.die(
-                  new Error("Git worktree branch is unavailable."),
-                );
+                return yield* Effect.die(new Error("Git worktree branch is unavailable."));
               }
               const result = yield* git.renameBranch({
                 cwd: input.cwd,
@@ -1732,15 +1734,12 @@ const make = Effect.gen(function* () {
               });
               yield* git.publishBranch({ cwd: input.cwd, branch: result.branch }).pipe(
                 Effect.catchCause((cause) =>
-                  Effect.logWarning(
-                    "provider command reactor failed to publish renamed branch",
-                    {
-                      threadId: input.threadId,
-                      cwd: input.cwd,
-                      branch: result.branch,
-                      cause: Cause.pretty(cause),
-                    },
-                  ),
+                  Effect.logWarning("provider command reactor failed to publish renamed branch", {
+                    threadId: input.threadId,
+                    cwd: input.cwd,
+                    branch: result.branch,
+                    cause: Cause.pretty(cause),
+                  }),
                 ),
               );
               return result.branch;
@@ -1787,12 +1786,11 @@ const make = Effect.gen(function* () {
     const thread = yield* resolveFirstTurnThread(input.threadId, input.messageId);
     if (!thread) return;
     const project = yield* resolveThreadWorkspaceProject(thread);
-    const backend = project?.vcs.binding?.backend;
+    const backend = project ? resolveProjectVcsState(project).binding?.backend : undefined;
     const selectedBackend = (yield* serverSettings.getSettings).vcsBackend;
     if (!backend || backend !== selectedBackend) return;
     if (
-      (backend === "git" &&
-        (!input.branch || !isTemporaryWorktreeBranch(input.branch))) ||
+      (backend === "git" && (!input.branch || !isTemporaryWorktreeBranch(input.branch))) ||
       (backend === "jj" && input.branch !== null)
     ) {
       return;

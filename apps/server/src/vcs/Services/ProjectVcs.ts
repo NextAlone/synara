@@ -116,9 +116,7 @@ export interface ProjectVcsShape {
   readonly handoffThread: (
     input: VcsHandoffThreadInput,
   ) => Effect.Effect<VcsHandoffThreadResult, ProjectVcsServiceError>;
-  readonly pull: (
-    input: VcsPullInput,
-  ) => Effect.Effect<VcsPullResult, ProjectVcsServiceError>;
+  readonly pull: (input: VcsPullInput) => Effect.Effect<VcsPullResult, ProjectVcsServiceError>;
   readonly githubRepository: (
     input: VcsGitHubRepositoryInput,
   ) => Effect.Effect<VcsGitHubRepositoryResult, ProjectVcsServiceError>;
@@ -145,9 +143,7 @@ export interface ProjectVcsShape {
   readonly runStackedAction: (
     input: VcsRunStackedActionInput,
     options?: {
-      readonly publishProgress?: (
-        event: GitActionProgressEvent,
-      ) => Effect.Effect<void>;
+      readonly publishProgress?: (event: GitActionProgressEvent) => Effect.Effect<void>;
     },
   ) => Effect.Effect<GitRunStackedActionResult, ProjectVcsServiceError>;
 }

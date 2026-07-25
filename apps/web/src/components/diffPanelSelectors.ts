@@ -25,6 +25,7 @@ export type DiffPanelThreadCatalog = {
   projectId: Thread["projectId"];
   envMode: Thread["envMode"];
   worktreePath: string | null;
+  workingDirectory: string | null;
   branch: string | null;
   turnDiffSummaries: TurnDiffSummary[];
 };
@@ -35,6 +36,7 @@ export function toDiffPanelThreadCatalog(thread: Thread): DiffPanelThreadCatalog
     projectId: thread.projectId,
     envMode: thread.envMode,
     worktreePath: thread.worktreePath,
+    workingDirectory: thread.workingDirectory ?? null,
     branch: thread.branch,
     turnDiffSummaries: thread.turnDiffSummaries,
   };
@@ -80,6 +82,7 @@ export function createDiffPanelThreadCatalogSelector(
       projectId: shell.projectId,
       envMode: shell.envMode,
       worktreePath: shell.worktreePath,
+      workingDirectory: shell.workingDirectory ?? null,
       branch: shell.branch,
       turnDiffSummaries,
     };

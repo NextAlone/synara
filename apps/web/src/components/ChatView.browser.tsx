@@ -4249,6 +4249,70 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("keeps source control available for a persisted Studio reference folder", async () => {
+    const studioSnapshot = withStudioProject(
+      createSnapshotForTargetUser({
+        targetMessageId: "msg-user-studio-vcs-reference-folder" as MessageId,
+        targetText: "studio vcs reference folder",
+      }),
+    );
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...studioSnapshot,
+        threads: studioSnapshot.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? {
+                ...thread,
+                projectId: STUDIO_PROJECT_ID,
+                envMode: "local",
+                branch: null,
+                worktreePath: null,
+                workingDirectory: "/repo/project",
+              }
+            : thread,
+        ),
+      },
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(
+            wsRequests.some(
+              (request) =>
+                request._tag === WS_METHODS.vcsListReferences &&
+                request.projectId === STUDIO_PROJECT_ID &&
+                request.threadId === THREAD_ID &&
+                request.expectedEpoch === 0,
+            ),
+          ).toBe(true);
+          expect(
+            wsRequests.some(
+              (request) =>
+                request._tag === WS_METHODS.vcsStatus &&
+                request.projectId === STUDIO_PROJECT_ID &&
+                request.threadId === THREAD_ID &&
+                request.expectedEpoch === 0,
+            ),
+          ).toBe(true);
+          expect(document.body.textContent).toContain("Changes");
+          expect(document.body.textContent).toContain("Commit and Push");
+          expect(
+            wsRequests.some(
+              (request) =>
+                request._tag === WS_METHODS.vcsConfigureProject &&
+                request.projectId === STUDIO_PROJECT_ID,
+            ),
+          ).toBe(false);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("coalesces repeated Studio new-chat clicks and stays in Studio after navigation settles", async () => {
     useComposerDraftStore.setState({
       draftThreadsByThreadId: {

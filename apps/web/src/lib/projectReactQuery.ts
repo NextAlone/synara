@@ -76,9 +76,7 @@ export interface ProjectUnsupportedBinaryFileResult {
   readonly relativePath: string;
 }
 
-export type ProjectReadFileQueryResult =
-  | ProjectReadFileResult
-  | ProjectUnsupportedBinaryFileResult;
+export type ProjectReadFileQueryResult = ProjectReadFileResult | ProjectUnsupportedBinaryFileResult;
 
 export function isProjectUnsupportedBinaryFileResult(
   result: ProjectReadFileQueryResult | null | undefined,

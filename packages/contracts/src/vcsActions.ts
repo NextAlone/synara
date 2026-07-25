@@ -17,19 +17,13 @@ export type VcsStackedAction = typeof VcsStackedAction.Type;
 export const VcsStackedActionFields = {
   actionId: TrimmedNonEmptyString,
   action: VcsStackedAction,
-  commitMessage: Schema.optional(
-    TrimmedNonEmptyString.check(Schema.isMaxLength(10_000)),
-  ),
+  commitMessage: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(10_000))),
   featureBranch: Schema.optional(Schema.Boolean),
-  filePaths: Schema.optional(
-    Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1)),
-  ),
+  filePaths: Schema.optional(Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1))),
   codexHomePath: Schema.optional(TrimmedNonEmptyString),
   providerOptions: Schema.optional(ProviderStartOptions),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString).pipe(
-    Schema.withConstructorDefault(() =>
-      Option.some(DEFAULT_GIT_TEXT_GENERATION_MODEL),
-    ),
+    Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_TEXT_GENERATION_MODEL)),
   ),
   textGenerationModelSelection: Schema.optional(ModelSelection),
 } as const;
@@ -43,5 +37,4 @@ export const VcsRunStackedActionInput = Schema.Struct({
   ...VcsProjectTarget.fields,
   ...VcsStackedActionFields,
 });
-export type VcsRunStackedActionInput =
-  typeof VcsRunStackedActionInput.Type;
+export type VcsRunStackedActionInput = typeof VcsRunStackedActionInput.Type;

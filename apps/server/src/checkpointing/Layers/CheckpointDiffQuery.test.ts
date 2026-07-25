@@ -1,4 +1,11 @@
-import { CheckpointRef, ProjectId, ThreadId, TurnId, type ProjectKind } from "@synara/contracts";
+import {
+  CheckpointRef,
+  ProjectId,
+  ThreadId,
+  TurnId,
+  type ProjectKind,
+  type VcsBackend,
+} from "@synara/contracts";
 import { Effect, Layer, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -19,6 +26,8 @@ function makeThreadCheckpointContext(input: {
   readonly workspaceRoot: string;
   readonly envMode?: "local" | "worktree";
   readonly worktreePath: string | null;
+  readonly workingDirectory?: string | null;
+  readonly vcsBackend?: VcsBackend | null;
   readonly checkpointTurnCount: number;
   readonly checkpointRef: CheckpointRef;
   readonly status?: "ready" | "missing" | "error";
@@ -30,8 +39,8 @@ function makeThreadCheckpointContext(input: {
     workspaceRoot: input.workspaceRoot,
     envMode: input.envMode ?? "local",
     worktreePath: input.worktreePath,
-    workingDirectory: null,
-    vcsBackend: "git",
+    workingDirectory: input.workingDirectory ?? null,
+    vcsBackend: input.vcsBackend === undefined ? "git" : input.vcsBackend,
     checkpoints: [
       {
         turnId: TurnId.makeUnsafe("turn-1"),
@@ -53,6 +62,8 @@ function makeFullThreadDiffContext(input: {
   readonly workspaceRoot: string;
   readonly envMode?: "local" | "worktree";
   readonly worktreePath: string | null;
+  readonly workingDirectory?: string | null;
+  readonly vcsBackend?: VcsBackend | null;
   readonly latestCheckpointTurnCount: number;
   readonly baselineCheckpointRef?: CheckpointRef | null;
   readonly toCheckpointRef: CheckpointRef | null;
@@ -64,8 +75,8 @@ function makeFullThreadDiffContext(input: {
     workspaceRoot: input.workspaceRoot,
     envMode: input.envMode ?? "local",
     worktreePath: input.worktreePath,
-    workingDirectory: null,
-    vcsBackend: "git",
+    workingDirectory: input.workingDirectory ?? null,
+    vcsBackend: input.vcsBackend === undefined ? "git" : input.vcsBackend,
     latestCheckpointTurnCount: input.latestCheckpointTurnCount,
     baselineCheckpointRef: input.baselineCheckpointRef ?? input.toCheckpointRef,
     toCheckpointRef: input.toCheckpointRef,
@@ -456,11 +467,14 @@ describe("CheckpointDiffQueryLive", () => {
     ).rejects.toThrow("Workspace path missing");
   });
 
-  it("uses the workspace root as a real cwd for a studio-kind project", async () => {
+  it("finds an unbound Studio checkpoint in its actual JJ reference folder", async () => {
     const projectId = ProjectId.makeUnsafe("project-studio");
     const threadId = ThreadId.makeUnsafe("thread-studio");
     const toCheckpointRef = checkpointRefForThreadTurn(threadId, 1);
-    const diffCheckpointsCalls: Array<{ readonly cwd: string }> = [];
+    const diffCheckpointsCalls: Array<{
+      readonly cwd: string;
+      readonly backend: VcsBackend;
+    }> = [];
 
     const threadCheckpointContext = makeThreadCheckpointContext({
       projectId,
@@ -469,6 +483,8 @@ describe("CheckpointDiffQueryLive", () => {
       workspaceRoot: "/tmp/studio-root",
       envMode: "local",
       worktreePath: null,
+      workingDirectory: "/tmp/studio-reference",
+      vcsBackend: null,
       checkpointTurnCount: 1,
       checkpointRef: toCheckpointRef,
     });
@@ -477,12 +493,13 @@ describe("CheckpointDiffQueryLive", () => {
       isRepository: () => Effect.succeed(true),
       captureCheckpoint: () => Effect.void,
       copyCheckpointRef: () => Effect.succeed(true),
-      hasCheckpointRef: () => Effect.succeed(true),
+      hasCheckpointRef: ({ backend, checkpointRef }) =>
+        Effect.succeed(backend === "jj" && checkpointRef === toCheckpointRef),
       restoreCheckpoint: () => Effect.succeed(true),
       reverseCheckpointDiff: () => Effect.succeed(true),
-      diffCheckpoints: ({ cwd }) =>
+      diffCheckpoints: ({ cwd, backend }) =>
         Effect.sync(() => {
-          diffCheckpointsCalls.push({ cwd });
+          diffCheckpointsCalls.push({ cwd, backend });
           return "diff patch";
         }),
       deleteCheckpointRefs: () => Effect.void,
@@ -525,7 +542,7 @@ describe("CheckpointDiffQueryLive", () => {
       }).pipe(Effect.provide(layer)),
     );
 
-    expect(diffCheckpointsCalls).toEqual([{ cwd: "/tmp/studio-root" }]);
+    expect(diffCheckpointsCalls).toEqual([{ cwd: "/tmp/studio-reference", backend: "jj" }]);
     expect(result.diff).toBe("diff patch");
   });
 

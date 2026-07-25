@@ -82,9 +82,7 @@ export function useSidebarThreadActions(input: {
   } = input;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const removeWorktreeMutation = useMutation(
-    vcsRemoveWorkspaceMutationOptions({ queryClient }),
-  );
+  const removeWorktreeMutation = useMutation(vcsRemoveWorkspaceMutationOptions({ queryClient }));
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clearProjectDraftThreadById = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadById,

@@ -71,8 +71,7 @@ type CompletionEvaluationInputForTest = Parameters<
 let gitMode: "nonRepo" | "worktree" = "nonRepo";
 let vcsBackend: "git" | "jj" = "git";
 let gitStatusHook: ((cwd: string) => Effect.Effect<void>) | null = null;
-let createWorktreeHook: ((input: VcsCreateWorkspaceInput) => Effect.Effect<void>) | null =
-  null;
+let createWorktreeHook: ((input: VcsCreateWorkspaceInput) => Effect.Effect<void>) | null = null;
 // Configurable thread shell returned by the ProjectionSnapshotQuery mock; reconcile
 // tests set it to drive the run's latest-turn outcome.
 let threadShell: Option.Option<OrchestrationThreadShell> = Option.none();
@@ -126,9 +125,7 @@ function currentProject() {
     ...project,
     vcs: {
       ...project.vcs,
-      binding: project.vcs.binding
-        ? { ...project.vcs.binding, backend: vcsBackend }
-        : null,
+      binding: project.vcs?.binding ? { ...project.vcs.binding, backend: vcsBackend } : null,
     },
   };
 }
@@ -443,8 +440,7 @@ const projectionSnapshotQuery = {
       threads: [],
       updatedAt: now,
     }),
-  getActiveProjectByWorkspaceRoot: () =>
-    Effect.succeed(Option.some(currentProject() as never)),
+  getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.some(currentProject() as never)),
   getProjectShellById: () => Effect.succeed(Option.some(currentProject())),
   getSpaceShellById: () => Effect.succeed(Option.none()),
   getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
@@ -494,8 +490,8 @@ const projectVcs = {
         projectId,
         threadId: null,
         backend: vcsBackend,
-        epoch: project.vcs.epoch,
-        binding: currentProject().vcs.binding!,
+        epoch: project.vcs!.epoch,
+        binding: currentProject().vcs!.binding!,
         cwd: project.workspaceRoot,
         preferredReference: null,
       };
@@ -508,7 +504,7 @@ const projectVcs = {
       }
       return {
         backend: vcsBackend,
-        epoch: project.vcs.epoch,
+        epoch: project.vcs!.epoch,
         workspace: {
           name: "automation-worktree",
           path: "/tmp/automation-worktree",
@@ -520,7 +516,7 @@ const projectVcs = {
   removeWorkspace: (input: VcsRemoveWorkspaceInput) =>
     Effect.sync(() => {
       removedWorktrees.push(input);
-      return { backend: "git" as const, epoch: project.vcs.epoch, removed: true };
+      return { backend: "git" as const, epoch: project.vcs!.epoch, removed: true };
     }),
   setBackend: () => Effect.die("unused"),
   status: () => Effect.die("unused"),
@@ -914,7 +910,7 @@ layer("AutomationService", (it) => {
       assert.deepStrictEqual(removedWorktrees, [
         {
           projectId,
-          expectedEpoch: project.vcs.epoch,
+          expectedEpoch: project.vcs!.epoch,
           path: "/tmp/automation-worktree",
           force: true,
         },
@@ -970,7 +966,7 @@ layer("AutomationService", (it) => {
       assert.deepStrictEqual(removedWorktrees, [
         {
           projectId,
-          expectedEpoch: project.vcs.epoch,
+          expectedEpoch: project.vcs!.epoch,
           path: "/tmp/automation-worktree",
           force: true,
         },

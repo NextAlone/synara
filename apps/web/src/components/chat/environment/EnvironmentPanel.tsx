@@ -361,11 +361,7 @@ export function EnvironmentPanel({
       ) : null}
 
       {activeProjectId && !isStudioChat ? (
-        <BranchToolbar
-          {...branchToolbar}
-          variant="panel"
-          showBranchSelector={isGitRepo}
-        />
+        <BranchToolbar {...branchToolbar} variant="panel" showBranchSelector={isGitRepo} />
       ) : null}
 
       {showGitActions ? (

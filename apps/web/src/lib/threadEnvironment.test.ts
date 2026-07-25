@@ -96,4 +96,19 @@ describe("threadEnvironment", () => {
       disabledReason: null,
     });
   });
+
+  it("uses a Studio reference folder for a local diff", () => {
+    expect(
+      resolveDiffEnvironmentState({
+        projectCwd: "/studio",
+        envMode: "local",
+        worktreePath: null,
+        workingDirectory: "/references/project",
+      }),
+    ).toEqual({
+      pending: false,
+      cwd: "/references/project",
+      disabledReason: null,
+    });
+  });
 });

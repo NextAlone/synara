@@ -3,6 +3,8 @@ import {
   type OrchestrationGetFullThreadDiffInput,
   type OrchestrationGetFullThreadDiffResult,
   type OrchestrationGetTurnDiffResult as OrchestrationGetTurnDiffResultType,
+  type CheckpointRef,
+  type VcsBackend,
 } from "@synara/contracts";
 import { Effect, Layer, Option, Schema } from "effect";
 
@@ -40,6 +42,39 @@ function buildTurnDiffResult(input: {
 const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const checkpointStore = yield* CheckpointStore;
+
+  const resolveCheckpointBackend = Effect.fnUntraced(function* (input: {
+    readonly cwd: string;
+    readonly configuredBackend: VcsBackend | null;
+    readonly checkpointRef: CheckpointRef;
+  }) {
+    if (input.configuredBackend) {
+      return (yield* checkpointStore.isRepository({
+        cwd: input.cwd,
+        backend: input.configuredBackend,
+      }))
+        ? input.configuredBackend
+        : null;
+    }
+
+    // Studio projects intentionally have no persisted project binding. Probe
+    // the concrete checkpoint ref so reads follow the backend that captured
+    // this turn instead of guessing from repository shape alone (a colocated
+    // JJ repository is also a valid Git repository).
+    for (const backend of ["git", "jj"] as const) {
+      if (
+        (yield* checkpointStore.isRepository({ cwd: input.cwd, backend })) &&
+        (yield* checkpointStore.hasCheckpointRef({
+          cwd: input.cwd,
+          backend,
+          checkpointRef: input.checkpointRef,
+        }))
+      ) {
+        return backend;
+      }
+    }
+    return null;
+  });
 
   const getTurnDiff: CheckpointDiffQueryShape["getTurnDiff"] = (input) =>
     Effect.gen(function* () {
@@ -105,15 +140,6 @@ const make = Effect.gen(function* () {
           detail: `Workspace path missing for thread '${input.threadId}' when computing turn diff.`,
         });
       }
-      const backend = threadContext.value.vcsBackend;
-      if (!backend || !(yield* checkpointStore.isRepository({ cwd: workspaceCwd, backend }))) {
-        return yield* new CheckpointInvariantError({
-          operation,
-          detail: `Configured VCS backend is unavailable for thread '${input.threadId}'.`,
-        });
-      }
-      const checkpointWorkspace = { cwd: workspaceCwd, backend };
-
       const toCheckpoint = threadContext.value.checkpoints.find(
         (checkpoint) => checkpoint.checkpointTurnCount === input.toTurnCount,
       );
@@ -124,6 +150,25 @@ const make = Effect.gen(function* () {
           detail: `Checkpoint ref is unavailable for turn ${input.toTurnCount}.`,
         });
       }
+      if (toCheckpoint.status === "missing") {
+        return yield* new CheckpointUnavailableError({
+          threadId: input.threadId,
+          turnCount: input.toTurnCount,
+          detail: `Checkpoint diff is not available yet for turn ${input.toTurnCount}.`,
+        });
+      }
+      const backend = yield* resolveCheckpointBackend({
+        cwd: workspaceCwd,
+        configuredBackend: threadContext.value.vcsBackend,
+        checkpointRef: toCheckpoint.checkpointRef,
+      });
+      if (!backend) {
+        return yield* new CheckpointInvariantError({
+          operation,
+          detail: `Checkpoint VCS backend is unavailable for thread '${input.threadId}'.`,
+        });
+      }
+      const checkpointWorkspace = { cwd: workspaceCwd, backend };
 
       const fromCheckpoint =
         input.fromTurnCount === 0
@@ -158,13 +203,6 @@ const make = Effect.gen(function* () {
       }
 
       const toCheckpointRef = toCheckpoint.checkpointRef;
-      if (toCheckpoint.status === "missing") {
-        return yield* new CheckpointUnavailableError({
-          threadId: input.threadId,
-          turnCount: input.toTurnCount,
-          detail: `Checkpoint diff is not available yet for turn ${input.toTurnCount}.`,
-        });
-      }
       if (input.toTurnCount === input.fromTurnCount + 1) {
         const turnStartCheckpointRef =
           checkpointRefForThreadTurnStartInManagedFamily(
@@ -268,15 +306,6 @@ const make = Effect.gen(function* () {
           detail: `Workspace path missing for thread '${input.threadId}' when computing full thread diff.`,
         });
       }
-      const backend = threadContext.value.vcsBackend;
-      if (!backend || !(yield* checkpointStore.isRepository({ cwd: workspaceCwd, backend }))) {
-        return yield* new CheckpointInvariantError({
-          operation,
-          detail: `Configured VCS backend is unavailable for thread '${input.threadId}'.`,
-        });
-      }
-      const checkpointWorkspace = { cwd: workspaceCwd, backend };
-
       if (!threadContext.value.toCheckpointRef) {
         return yield* new CheckpointUnavailableError({
           threadId: input.threadId,
@@ -284,6 +313,18 @@ const make = Effect.gen(function* () {
           detail: `Checkpoint ref is unavailable for turn ${input.toTurnCount}.`,
         });
       }
+      const backend = yield* resolveCheckpointBackend({
+        cwd: workspaceCwd,
+        configuredBackend: threadContext.value.vcsBackend,
+        checkpointRef: threadContext.value.toCheckpointRef,
+      });
+      if (!backend) {
+        return yield* new CheckpointInvariantError({
+          operation,
+          detail: `Checkpoint VCS backend is unavailable for thread '${input.threadId}'.`,
+        });
+      }
+      const checkpointWorkspace = { cwd: workspaceCwd, backend };
 
       const diff = yield* checkpointStore.diffCheckpoints({
         ...checkpointWorkspace,

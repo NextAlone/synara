@@ -6,6 +6,8 @@
 // Layer: Pull request presentation
 // Exports: PullRequestDockPane
 
+import type { ThreadId } from "@synara/contracts";
+
 import type { RightDockPane } from "~/rightDockStore.logic";
 
 import { PanelStateMessage } from "~/components/chat/PanelStateMessage";
@@ -17,10 +19,12 @@ import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
 
 export function PullRequestDockPane({
   pane,
+  hostThreadId,
   onClose,
   pollingEnabled = true,
 }: {
   pane: RightDockPane;
+  hostThreadId?: ThreadId | undefined;
   onClose?: (() => void) | undefined;
   pollingEnabled?: boolean;
 }) {
@@ -32,6 +36,7 @@ export function PullRequestDockPane({
     <PullRequestDetailPanel
       key={pullRequestDetailInputKey(input)}
       input={input}
+      hostThreadId={hostThreadId}
       initialTab={pane.pullRequestInitialTab ?? "summary"}
       pollingEnabled={pollingEnabled}
       {...(onClose ? { onClose } : {})}

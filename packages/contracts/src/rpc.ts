@@ -529,51 +529,36 @@ export const WsVcsPullRpc = Rpc.make(WS_METHODS.vcsPull, {
   error: WsRpcError,
 });
 
-export const WsVcsResolvePullRequestRpc = Rpc.make(
-  WS_METHODS.vcsResolvePullRequest,
-  {
-    payload: VcsResolvePullRequestInput,
-    success: VcsResolvePullRequestResult,
-    error: WsRpcError,
-  },
-);
+export const WsVcsResolvePullRequestRpc = Rpc.make(WS_METHODS.vcsResolvePullRequest, {
+  payload: VcsResolvePullRequestInput,
+  success: VcsResolvePullRequestResult,
+  error: WsRpcError,
+});
 
-export const WsVcsGitHubRepositoryRpc = Rpc.make(
-  WS_METHODS.vcsGithubRepository,
-  {
-    payload: VcsGitHubRepositoryInput,
-    success: VcsGitHubRepositoryResult,
-    error: WsRpcError,
-  },
-);
+export const WsVcsGitHubRepositoryRpc = Rpc.make(WS_METHODS.vcsGithubRepository, {
+  payload: VcsGitHubRepositoryInput,
+  success: VcsGitHubRepositoryResult,
+  error: WsRpcError,
+});
 
-export const WsVcsPullRequestSnapshotRpc = Rpc.make(
-  WS_METHODS.vcsPullRequestSnapshot,
-  {
-    payload: VcsPullRequestSnapshotInput,
-    success: VcsPullRequestSnapshotResult,
-    error: WsRpcError,
-  },
-);
+export const WsVcsPullRequestSnapshotRpc = Rpc.make(WS_METHODS.vcsPullRequestSnapshot, {
+  payload: VcsPullRequestSnapshotInput,
+  success: VcsPullRequestSnapshotResult,
+  error: WsRpcError,
+});
 
-export const WsVcsPreparePullRequestThreadRpc = Rpc.make(
-  WS_METHODS.vcsPreparePullRequestThread,
-  {
-    payload: VcsPreparePullRequestThreadInput,
-    success: VcsPreparePullRequestThreadResult,
-    error: WsRpcError,
-  },
-);
+export const WsVcsPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.vcsPreparePullRequestThread, {
+  payload: VcsPreparePullRequestThreadInput,
+  success: VcsPreparePullRequestThreadResult,
+  error: WsRpcError,
+});
 
-export const WsVcsRunStackedActionRpc = Rpc.make(
-  WS_METHODS.vcsRunStackedAction,
-  {
-    payload: VcsRunStackedActionInput,
-    success: GitActionProgressEvent,
-    error: WsRpcError,
-    stream: true,
-  },
-);
+export const WsVcsRunStackedActionRpc = Rpc.make(WS_METHODS.vcsRunStackedAction, {
+  payload: VcsRunStackedActionInput,
+  success: GitActionProgressEvent,
+  error: WsRpcError,
+  stream: true,
+});
 
 export const WsGitStatusRpc = Rpc.make(WS_METHODS.gitStatus, {
   payload: GitStatusInput,

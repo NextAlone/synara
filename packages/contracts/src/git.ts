@@ -8,10 +8,7 @@ import {
 } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
 import { ModelSelection, ProviderStartOptions } from "./orchestration";
-import {
-  VcsStackedAction,
-  VcsStackedActionFields,
-} from "./vcsActions";
+import { VcsStackedAction, VcsStackedActionFields } from "./vcsActions";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 

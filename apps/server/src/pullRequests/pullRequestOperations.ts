@@ -23,9 +23,7 @@ export function makePullRequestOperations(dependencies: {
     project: OrchestrationProject,
     repository: string,
   ) => Effect.Effect<string, unknown>;
-  resolveGitHubCwd: (
-    project: OrchestrationProject,
-  ) => Effect.Effect<string, unknown>;
+  resolveGitHubCwd: (project: OrchestrationProject) => Effect.Effect<string, unknown>;
   loadMergeCapabilities: (
     cwd: string,
     repository: string,
@@ -131,10 +129,7 @@ export function makePullRequestOperations(dependencies: {
       const cwd = yield* dependencies.resolveGitHubCwd(project);
       if (input.action === "merge") {
         const mergeMethod = input.mergeMethod ?? "merge";
-        const capabilities = yield* dependencies.loadMergeCapabilities(
-          cwd,
-          repository,
-        );
+        const capabilities = yield* dependencies.loadMergeCapabilities(cwd, repository);
         if (!isPullRequestMergeMethodAllowed(capabilities, mergeMethod)) {
           return yield* Effect.fail(
             new Error(`The repository does not allow the ${mergeMethod} merge method.`),

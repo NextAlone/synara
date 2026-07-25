@@ -60,7 +60,7 @@ export class ProviderAdapterRequestError extends Schema.TaggedErrorClass<Provide
     provider: Schema.String,
     method: Schema.String,
     detail: Schema.String,
-    deliveryState: Schema.optional(Schema.Literal("not-sent", "uncertain")),
+    deliveryState: Schema.optional(Schema.Literals(["not-sent", "uncertain"])),
     cause: Schema.optional(Schema.Defect),
   },
 ) {

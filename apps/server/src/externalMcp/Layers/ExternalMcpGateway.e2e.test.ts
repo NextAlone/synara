@@ -278,7 +278,9 @@ describe("external MCP gateway stdio flow", () => {
       deleteBranchIfUnchanged: () => Effect.void,
     } as never);
     const jjLayer = Layer.succeed(JjCore, {} as never);
-    const projectVcsLayer = Layer.succeed(ProjectVcs, {} as never);
+    const projectVcsLayer = Layer.succeed(ProjectVcs, {
+      getBackend: Effect.succeed("git"),
+    } as never);
 
     const providerDiscoveryLayer = Layer.succeed(ProviderDiscoveryService, {
       listModels: ({ provider }: { readonly provider: string }) =>

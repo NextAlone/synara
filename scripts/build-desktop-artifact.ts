@@ -451,10 +451,9 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
           if (!(yield* fs.exists(iconIcnsPath))) {
             return yield* Effect.fail(error);
           }
-          yield* Effect.logWarning(
-            "macOS icon generation failed; retaining the staged icon.icns",
-            { error },
-          );
+          yield* Effect.logWarning("macOS icon generation failed; retaining the staged icon.icns", {
+            error,
+          });
         }),
       ),
     );

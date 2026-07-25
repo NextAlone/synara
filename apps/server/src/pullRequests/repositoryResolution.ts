@@ -1,6 +1,7 @@
 import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/githubRepository";
 import { Effect } from "effect";
 
+import { GitCommandError } from "../git/Errors.ts";
 import type { GitCoreShape } from "../git/Services/GitCore";
 
 export interface GitHubRepositoryLink {
@@ -42,7 +43,12 @@ function readCurrentBranch(git: GitCoreShape, cwd: string) {
       Effect.flatMap((result) => {
         if (result.code !== 0) {
           return Effect.fail(
-            new Error(result.stderr.trim() || `${operation} failed with exit code ${result.code}.`),
+            new GitCommandError({
+              operation,
+              command: "git branch --show-current",
+              cwd,
+              detail: result.stderr.trim() || `${operation} failed with exit code ${result.code}.`,
+            }),
           );
         }
         const trimmed = result.stdout.trim();
@@ -123,10 +129,14 @@ function readRepositoryConfig(git: GitCoreShape, cwd: string, branch: string | n
           return Effect.succeed(parseRepositoryConfig("", branch));
         }
         return Effect.fail(
-          new Error(
-            result.stderr.trim() ||
+          new GitCommandError({
+            operation: "PullRequestService.githubRepository.config",
+            command: "git config --null --get-regexp",
+            cwd,
+            detail:
+              result.stderr.trim() ||
               `PullRequestService.githubRepository.config failed with exit code ${result.code}.`,
-          ),
+          }),
         );
       }),
     );
@@ -147,7 +157,12 @@ function readExpandedRemoteUrl(git: GitCoreShape, cwd: string, remoteName: strin
       Effect.flatMap((result) => {
         if (result.code !== 0) {
           return Effect.fail(
-            new Error(result.stderr.trim() || `${operation} failed with exit code ${result.code}.`),
+            new GitCommandError({
+              operation,
+              command: `git remote get-url ${remoteName}`,
+              cwd,
+              detail: result.stderr.trim() || `${operation} failed with exit code ${result.code}.`,
+            }),
           );
         }
         return Effect.succeed(result.stdout.trim());

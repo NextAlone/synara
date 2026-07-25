@@ -383,10 +383,7 @@ export function WorkspaceFilesSidebar(props: {
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
 }) {
   const prefetchEntry = useExplorerEntryPrefetch(props.workspaceRoot);
-  const activateFile = useWorkspaceExplorerFileActivation(
-    props.workspaceRoot,
-    props.onSelectFile,
-  );
+  const activateFile = useWorkspaceExplorerFileActivation(props.workspaceRoot, props.onSelectFile);
   const handleEntryContextMenu = useTreeEntryContextMenu(props.onReferenceInChat);
   const handleListKeyDown = useExplorerListNavigation();
   return (
@@ -614,10 +611,7 @@ export function WorkspaceSearchSidebar(props: {
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
 }) {
   const prefetchEntry = useExplorerEntryPrefetch(props.workspaceRoot);
-  const activateFile = useWorkspaceExplorerFileActivation(
-    props.workspaceRoot,
-    props.onSelectFile,
-  );
+  const activateFile = useWorkspaceExplorerFileActivation(props.workspaceRoot, props.onSelectFile);
   const handleEntryContextMenu = useResultEntryContextMenu(props.onReferenceInChat);
   const handleListKeyDown = useExplorerListNavigation();
   const search = useWorkspaceFileSearch(props.workspaceRoot, props.query);
@@ -669,10 +663,7 @@ export function WorkspaceExplorerSidebar(props: {
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
 }) {
   const prefetchEntry = useExplorerEntryPrefetch(props.workspaceRoot);
-  const activateFile = useWorkspaceExplorerFileActivation(
-    props.workspaceRoot,
-    props.onSelectFile,
-  );
+  const activateFile = useWorkspaceExplorerFileActivation(props.workspaceRoot, props.onSelectFile);
   const handleTreeEntryContextMenu = useTreeEntryContextMenu(props.onReferenceInChat);
   const handleResultEntryContextMenu = useResultEntryContextMenu(props.onReferenceInChat);
   const handleListKeyDown = useExplorerListNavigation();

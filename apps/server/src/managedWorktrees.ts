@@ -3,15 +3,13 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import type {
-  OrchestrationThread,
-  ServerManagedWorkspace,
-} from "@synara/contracts";
+import type { OrchestrationThread, ServerManagedWorkspace } from "@synara/contracts";
 import { Effect } from "effect";
 
 import type { GitCoreShape } from "./git/Services/GitCore.ts";
 import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProjectVcsShape } from "./vcs/Services/ProjectVcs.ts";
+import { resolveProjectVcsState } from "./vcs/projectVcsState.ts";
 
 const MANAGED_WORKTREE_SCAN_DEPTH = 6;
 export const MANAGED_WORKTREE_RETENTION_COUNT = 15;
@@ -161,8 +159,7 @@ export function pruneArchivedManagedWorktrees(input: {
         ): value is {
           thread: OrchestrationThread;
           entry: GitManagedWorktreeInventoryEntry;
-        } =>
-          value.entry !== null && !activePaths.has(value.entry.path),
+        } => value.entry !== null && !activePaths.has(value.entry.path),
       )
       .sort((left, right) =>
         (right.thread.archivedAt ?? "").localeCompare(left.thread.archivedAt ?? ""),
@@ -266,9 +263,7 @@ function pathIsInside(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return (
     relative === "" ||
-    (!path.isAbsolute(relative) &&
-      relative !== ".." &&
-      !relative.startsWith(`..${path.sep}`))
+    (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
   );
 }
 
@@ -279,25 +274,25 @@ export function listProjectedManagedWorkspaces(input: {
   readonly projectVcs: ProjectVcsShape;
 }): Effect.Effect<ReadonlyArray<ServerManagedWorkspace>, Error> {
   return Effect.gen(function* () {
-    const snapshot = yield* input.snapshotQuery.getShellSnapshot().pipe(
-      Effect.mapError((cause) =>
-        cause instanceof Error ? cause : new Error(String(cause)),
-      ),
-    );
+    const snapshot = yield* input.snapshotQuery
+      .getShellSnapshot()
+      .pipe(
+        Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))),
+      );
     const managedRoot = yield* Effect.tryPromise({
-      try: () =>
-        fs.realpath(input.workspacesDir).catch(() => path.resolve(input.workspacesDir)),
+      try: () => fs.realpath(input.workspacesDir).catch(() => path.resolve(input.workspacesDir)),
       catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
     });
     const listed = yield* Effect.forEach(
       snapshot.projects,
-      (project) => {
-        const binding = project.vcs.binding;
-        if (!binding) return Effect.succeed<ReadonlyArray<ServerManagedWorkspace>>([]);
+      (project): Effect.Effect<ReadonlyArray<ServerManagedWorkspace | null>, Error> => {
+        const projectVcsState = resolveProjectVcsState(project);
+        const binding = projectVcsState.binding;
+        if (!binding) return Effect.succeed([]);
         return input.projectVcs
           .listWorkspaces({
             projectId: project.id,
-            expectedEpoch: project.vcs.epoch,
+            expectedEpoch: projectVcsState.epoch,
           })
           .pipe(
             Effect.flatMap((result) =>
@@ -309,18 +304,15 @@ export function listProjectedManagedWorkspaces(input: {
                   }
                   return Effect.tryPromise({
                     try: () =>
-                      fs
-                        .realpath(workspace.path!)
-                        .catch(() => path.resolve(workspace.path!)),
-                    catch: (cause) =>
-                      cause instanceof Error ? cause : new Error(String(cause)),
+                      fs.realpath(workspace.path!).catch(() => path.resolve(workspace.path!)),
+                    catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
                   }).pipe(
-                    Effect.map((workspacePath) =>
+                    Effect.map((workspacePath): ServerManagedWorkspace | null =>
                       pathIsInside(managedRoot, workspacePath)
                         ? {
                             projectId: project.id,
                             backend: binding.backend,
-                            epoch: project.vcs.epoch,
+                            epoch: projectVcsState.epoch,
                             path: workspacePath,
                             workspaceRoot: project.workspaceRoot,
                           }
@@ -336,7 +328,7 @@ export function listProjectedManagedWorkspaces(input: {
                 projectId: project.id,
                 backend: binding.backend,
                 error: error instanceof Error ? error.message : String(error),
-              }).pipe(Effect.as([])),
+              }).pipe(Effect.as<ReadonlyArray<ServerManagedWorkspace | null>>([])),
             ),
           );
       },
@@ -363,27 +355,19 @@ function pruneArchivedManagedJjWorkspaces(input: {
   readonly threads: ReadonlyArray<OrchestrationThread>;
 }): Effect.Effect<void, Error> {
   return Effect.gen(function* () {
-    const inventory = (
-      yield* listProjectedManagedWorkspaces({
-        workspacesDir: input.workspacesDir,
-        snapshotQuery: input.snapshotQuery,
-        projectVcs: input.projectVcs,
-      })
-    ).filter((entry) => entry.backend === "jj");
+    const inventory = (yield* listProjectedManagedWorkspaces({
+      workspacesDir: input.workspacesDir,
+      snapshotQuery: input.snapshotQuery,
+      projectVcs: input.projectVcs,
+    })).filter((entry) => entry.backend === "jj");
     if (inventory.length === 0) return;
 
-    const canonicalByRecordedPath = yield* canonicalizeThreadWorktreePaths(
-      input.threads,
-    );
+    const canonicalByRecordedPath = yield* canonicalizeThreadWorktreePaths(input.threads);
     const canonicalThreadPath = (thread: OrchestrationThread): string | null => {
       const recordedPath = threadManagedWorktreePath(thread);
-      return recordedPath === null
-        ? null
-        : (canonicalByRecordedPath.get(recordedPath) ?? null);
+      return recordedPath === null ? null : (canonicalByRecordedPath.get(recordedPath) ?? null);
     };
-    const inventoryByPath = new Map(
-      inventory.map((entry) => [entry.path, entry]),
-    );
+    const inventoryByPath = new Map(inventory.map((entry) => [entry.path, entry]));
     const activePaths = new Set(
       input.threads
         .filter((thread) => (thread.archivedAt ?? null) === null)
@@ -408,9 +392,7 @@ function pruneArchivedManagedJjWorkspaces(input: {
         } => value.entry !== null && !activePaths.has(value.entry.path),
       )
       .sort((left, right) =>
-        (right.thread.archivedAt ?? "").localeCompare(
-          left.thread.archivedAt ?? "",
-        ),
+        (right.thread.archivedAt ?? "").localeCompare(left.thread.archivedAt ?? ""),
       )
       .filter(({ entry }) => {
         if (seenArchivedPaths.has(entry.path)) return false;
@@ -431,15 +413,11 @@ function pruneArchivedManagedJjWorkspaces(input: {
           })
           .pipe(
             Effect.catch((error) =>
-              Effect.logWarning(
-                "managed JJ workspace retention skipped an unsafe cleanup",
-                {
-                  threadId: thread.id,
-                  workspacePath: entry.path,
-                  error:
-                    error instanceof Error ? error.message : String(error),
-                },
-              ),
+              Effect.logWarning("managed JJ workspace retention skipped an unsafe cleanup", {
+                threadId: thread.id,
+                workspacePath: entry.path,
+                error: error instanceof Error ? error.message : String(error),
+              }),
             ),
           ),
       { discard: true, concurrency: 1 },

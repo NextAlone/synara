@@ -93,7 +93,11 @@ const RawWorkspace = Schema.Struct({
   root: Schema.NonEmptyString,
 });
 
-function parseJsonLines<A>(output: string, schema: Schema.Schema<A>): A[] {
+function parseJsonLines<
+  S extends Schema.Top & {
+    readonly DecodingServices: never;
+  },
+>(output: string, schema: S): Array<S["Type"]> {
   const decode = Schema.decodeUnknownSync(schema);
   return output
     .split("\n")
@@ -124,14 +128,12 @@ export function parseJjBookmarks(output: string, currentChangeId: string): JjBoo
 
   for (const row of rows) {
     const existing = byName.get(row.name);
-    const aggregate =
-      existing ??
-      {
-        targetChangeId: null,
-        isLocal: false,
-        conflicted: false,
-        remotes: [],
-      };
+    const aggregate = existing ?? {
+      targetChangeId: null,
+      isLocal: false,
+      conflicted: false,
+      remotes: [],
+    };
     if (!existing) {
       order.push(row.name);
     }
@@ -166,9 +168,9 @@ export function parseJjBookmarks(output: string, currentChangeId: string): JjBoo
 }
 
 export function parseJjBookmarkNames(output: string): string[] {
-  return [
-    ...new Set(parseJsonLines(output, RawBookmarkName).map((entry) => entry.name)),
-  ].toSorted((left, right) => left.localeCompare(right));
+  return [...new Set(parseJsonLines(output, RawBookmarkName).map((entry) => entry.name))].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
 }
 
 export function parseJjFileChanges(output: string): JjFileChange[] {

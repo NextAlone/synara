@@ -161,18 +161,21 @@ export function redactCreationPlanForPurgedCaller(input: {
   readonly operationId: string;
 }): string {
   return JSON.stringify(
-    parseRecoverableCreationPlan(input.planJson, input.operationId).map((entry) => ({
-      ...(entry.projectId ? { projectId: entry.projectId } : {}),
-      vcsBackend: entry.vcsBackend,
-      ...(entry.vcsEpoch !== null ? { vcsEpoch: entry.vcsEpoch } : {}),
-      workspaceRoot: entry.environment === "worktree" ? entry.workspaceRoot : "",
-      environment: entry.environment,
-      ...(entry.worktreeRef ? { worktreeRef: entry.worktreeRef } : {}),
-      newBranch: entry.newBranch,
-      plannedWorktreePath: entry.plannedWorktreePath,
-      ownershipPreflightPassed: entry.ownershipPreflightPassed,
-      worktreeOwnership: entry.worktreeOwnership,
-      ids: entry.ids,
-    })),
+    parseRecoverableCreationPlan(input.planJson, input.operationId).map((entry) => {
+      const needsJjRecoveryIdentity = entry.environment === "worktree" && entry.vcsBackend === "jj";
+      return {
+        ...(needsJjRecoveryIdentity && entry.projectId ? { projectId: entry.projectId } : {}),
+        ...(needsJjRecoveryIdentity ? { vcsBackend: entry.vcsBackend } : {}),
+        ...(needsJjRecoveryIdentity && entry.vcsEpoch !== null ? { vcsEpoch: entry.vcsEpoch } : {}),
+        workspaceRoot: entry.environment === "worktree" ? entry.workspaceRoot : "",
+        environment: entry.environment,
+        ...(entry.worktreeRef ? { worktreeRef: entry.worktreeRef } : {}),
+        newBranch: entry.newBranch,
+        plannedWorktreePath: entry.plannedWorktreePath,
+        ownershipPreflightPassed: entry.ownershipPreflightPassed,
+        worktreeOwnership: entry.worktreeOwnership,
+        ids: entry.ids,
+      };
+    }),
   );
 }

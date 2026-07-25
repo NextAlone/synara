@@ -70,9 +70,7 @@ export const applyProjectMetadataProjection = (input: {
             ...(input.event.payload.spaceId !== undefined
               ? { spaceId: input.event.payload.spaceId }
               : {}),
-            ...(input.event.payload.vcs !== undefined
-              ? { vcs: input.event.payload.vcs }
-              : {}),
+            ...(input.event.payload.vcs !== undefined ? { vcs: input.event.payload.vcs } : {}),
             updatedAt: input.event.payload.updatedAt,
           });
         }

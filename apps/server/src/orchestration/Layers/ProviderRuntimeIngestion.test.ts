@@ -5326,6 +5326,123 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("projects live diff placeholders for an unbound Studio reference folder", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const projectId = asProjectId("project-studio-live-diff");
+    const threadId = asThreadId("thread-studio-live-diff");
+    const workspaceRoot = makeTempDir("synara-studio-root-");
+    const workingDirectory = makeTempDir("synara-studio-reference-");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-studio-live-diff"),
+        projectId,
+        kind: "studio",
+        title: "Studio",
+        workspaceRoot,
+        defaultModelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-thread-studio-live-diff"),
+        threadId,
+        projectId,
+        title: "Studio thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-studio-live-diff-cwd"),
+        threadId,
+        workingDirectory,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-studio-live-diff"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          updatedAt: now,
+          lastError: null,
+        },
+        createdAt: now,
+      }),
+    );
+    harness.setProviderSession({
+      provider: "codex",
+      status: "ready",
+      runtimeMode: "approval-required",
+      threadId,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    harness.emit({
+      type: "turn.diff.updated",
+      eventId: asEventId("evt-studio-live-diff"),
+      provider: "codex",
+      createdAt: now,
+      threadId,
+      turnId: asTurnId("turn-studio-live-diff"),
+      payload: {
+        unifiedDiff: [
+          "diff --git a/studio.txt b/studio.txt",
+          "new file mode 100644",
+          "index 0000000..2222222",
+          "--- /dev/null",
+          "+++ b/studio.txt",
+          "@@ -0,0 +1 @@",
+          "+studio",
+          "",
+        ].join("\n"),
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.some(
+          (checkpoint: ProviderRuntimeTestCheckpoint) =>
+            checkpoint.turnId === "turn-studio-live-diff",
+        ),
+      2_000,
+      threadId,
+    );
+    expect(
+      thread.checkpoints.find(
+        (checkpoint: ProviderRuntimeTestCheckpoint) =>
+          checkpoint.turnId === "turn-studio-live-diff",
+      ),
+    ).toMatchObject({
+      status: "missing",
+      files: [{ path: "studio.txt", kind: "modified", additions: 1, deletions: 0 }],
+    });
+  });
+
   it("does not parse live diff files for providers without patch capability", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

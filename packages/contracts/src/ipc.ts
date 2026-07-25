@@ -619,9 +619,7 @@ export interface NativeApi {
   };
   vcs: {
     setBackend: (input: VcsSetBackendInput) => Promise<VcsSetBackendResult>;
-    configureProject: (
-      input: VcsConfigureProjectInput,
-    ) => Promise<VcsConfigureProjectResult>;
+    configureProject: (input: VcsConfigureProjectInput) => Promise<VcsConfigureProjectResult>;
     status: (input: VcsStatusInput) => Promise<VcsStatusResult>;
     readDiff: (input: VcsReadDiffInput) => Promise<VcsReadDiffResult>;
     listReferences: (input: VcsListReferencesInput) => Promise<VcsListReferencesResult>;
@@ -632,21 +630,15 @@ export interface NativeApi {
     removeWorkspace: (input: VcsRemoveWorkspaceInput) => Promise<VcsRemoveWorkspaceResult>;
     handoffThread: (input: VcsHandoffThreadInput) => Promise<VcsHandoffThreadResult>;
     pull: (input: VcsPullInput) => Promise<VcsPullResult>;
-    githubRepository: (
-      input: VcsGitHubRepositoryInput,
-    ) => Promise<VcsGitHubRepositoryResult>;
-    resolvePullRequest: (
-      input: VcsResolvePullRequestInput,
-    ) => Promise<VcsResolvePullRequestResult>;
+    githubRepository: (input: VcsGitHubRepositoryInput) => Promise<VcsGitHubRepositoryResult>;
+    resolvePullRequest: (input: VcsResolvePullRequestInput) => Promise<VcsResolvePullRequestResult>;
     pullRequestSnapshot: (
       input: VcsPullRequestSnapshotInput,
     ) => Promise<VcsPullRequestSnapshotResult>;
     preparePullRequestThread: (
       input: VcsPreparePullRequestThreadInput,
     ) => Promise<VcsPreparePullRequestThreadResult>;
-    runStackedAction: (
-      input: VcsRunStackedActionInput,
-    ) => Promise<GitRunStackedActionResult>;
+    runStackedAction: (input: VcsRunStackedActionInput) => Promise<GitRunStackedActionResult>;
     onActionProgress: (callback: (event: GitActionProgressEvent) => void) => () => void;
   };
   git: {

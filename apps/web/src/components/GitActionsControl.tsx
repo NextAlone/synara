@@ -367,10 +367,7 @@ export default function GitActionsControl({
     useMemo(() => createThreadExistsSelector(activeThreadId), [activeThreadId]),
   );
   const activeProject = useStore(
-    useMemo(
-      () => createProjectSelector(activeThread?.projectId),
-      [activeThread?.projectId],
-    ),
+    useMemo(() => createProjectSelector(activeThread?.projectId), [activeThread?.projectId]),
   );
   const vcsTarget = useMemo(
     () =>
@@ -378,8 +375,20 @@ export default function GitActionsControl({
         activeProject,
         hasServerThread ? activeThreadId : null,
         settings.vcsBackend,
+        {
+          threadWorkingDirectory:
+            activeProject?.kind === "studio" && hasServerThread
+              ? (activeThread?.workingDirectory ?? null)
+              : null,
+        },
       ),
-    [activeProject, activeThreadId, hasServerThread, settings.vcsBackend],
+    [
+      activeProject,
+      activeThread?.workingDirectory,
+      activeThreadId,
+      hasServerThread,
+      settings.vcsBackend,
+    ],
   );
   const isJjBackend = vcsTarget.backend === "jj";
   const backendName = isJjBackend ? "JJ" : "Git";
@@ -416,9 +425,7 @@ export default function GitActionsControl({
     });
   }, [threadToastData]);
 
-  const referencesQuery = useQuery(
-    vcsReferencesQueryOptions(vcsTarget),
-  );
+  const referencesQuery = useQuery(vcsReferencesQueryOptions(vcsTarget));
   const branchList = useMemo(
     () => adaptVcsReferencesForGitActions(referencesQuery.data ?? null),
     [referencesQuery.data],
@@ -459,10 +466,7 @@ export default function GitActionsControl({
     vcsDiffQueryOptions({
       target: vcsTarget,
       scope: "workingTree",
-      enabled:
-        isJjBackend &&
-        isCommitDialogOpen &&
-        branchListReady,
+      enabled: isJjBackend && isCommitDialogOpen && branchListReady,
     }),
   );
   const jjDiffStats = useMemo(
@@ -498,9 +502,7 @@ export default function GitActionsControl({
       ...(providerOptions ? { providerOptions } : {}),
     }),
   );
-  const pullMutation = useMutation(
-    vcsPullMutationOptions({ target: vcsTarget, queryClient }),
-  );
+  const pullMutation = useMutation(vcsPullMutationOptions({ target: vcsTarget, queryClient }));
   const persistThreadPr = useCallback(
     async (pr: {
       number: number;
@@ -536,8 +538,7 @@ export default function GitActionsControl({
     useIsMutating({
       mutationKey: vcsMutationKeys.runStackedAction(vcsTarget),
     }) > 0;
-  const isPullRunning =
-    useIsMutating({ mutationKey: vcsMutationKeys.pull(vcsTarget) }) > 0;
+  const isPullRunning = useIsMutating({ mutationKey: vcsMutationKeys.pull(vcsTarget) }) > 0;
   const isGitActionRunning = isRunStackedActionRunning || isPullRunning;
   const isDefaultBranch = useMemo(() => {
     const branchName = gitStatusForActions?.branch;
@@ -843,8 +844,7 @@ export default function GitActionsControl({
         hookStartedAtMs: null,
         hookName: null,
         lastOutputLine: null,
-        currentPhaseLabel:
-          progressStages[0] ?? `Running ${backendActionLabel.toLowerCase()}...`,
+        currentPhaseLabel: progressStages[0] ?? `Running ${backendActionLabel.toLowerCase()}...`,
       };
 
       if (progressToastId) {
@@ -1675,8 +1675,7 @@ export default function GitActionsControl({
         <DialogPopup className="max-w-xl">
           <DialogHeader>
             <DialogTitle>
-              {pendingDefaultBranchActionCopy?.title ??
-                `Run action on default ${referenceKind}?`}
+              {pendingDefaultBranchActionCopy?.title ?? `Run action on default ${referenceKind}?`}
             </DialogTitle>
             <DialogDescription>{pendingDefaultBranchActionCopy?.description}</DialogDescription>
           </DialogHeader>
@@ -1729,8 +1728,8 @@ export default function GitActionsControl({
           <DialogHeader>
             <DialogTitle>Create {referenceLabel}</DialogTitle>
             <DialogDescription>
-              Create and select a {referenceLabel.toLowerCase()} from the current revision.
-              Future commits, pushes, and PRs will use it.
+              Create and select a {referenceLabel.toLowerCase()} from the current revision. Future
+              commits, pushes, and PRs will use it.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-3">
@@ -1836,86 +1835,86 @@ export default function GitActionsControl({
   return (
     <>
       <ChatHeaderSplitGroup label={isJjBackend ? "JJ actions" : "Git actions"}>
-          {quickActionDisabledReason ? (
-            <Popover>
-              <PopoverTrigger
-                openOnHover
-                render={
-                  <Button
-                    aria-label={quickAction.label}
-                    aria-disabled="true"
-                    className={cn(
-                      hideQuickActionLabel
-                        ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME
-                        : CHAT_HEADER_CONTROL_CLASS_NAME,
-                      CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
-                      CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
-                      "cursor-not-allowed opacity-64",
-                    )}
-                    size={hideQuickActionLabel ? "icon-xs" : "xs"}
-                    variant="chrome-outline"
-                    title={quickAction.label}
-                  />
-                }
-              >
-                <GitQuickActionIcon quickAction={quickAction} />
-                {!hideQuickActionLabel ? (
-                  <span className="font-normal">{quickAction.label}</span>
-                ) : null}
-              </PopoverTrigger>
-              <PopoverPopup tooltipStyle side="bottom" align="start">
-                {quickActionDisabledReason}
-              </PopoverPopup>
-            </Popover>
-          ) : (
-            <Button
-              variant="chrome-outline"
-              size={hideQuickActionLabel ? "icon-xs" : "xs"}
-              className={cn(
-                hideQuickActionLabel
-                  ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME
-                  : CHAT_HEADER_CONTROL_CLASS_NAME,
-                CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
-                CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
-              )}
-              disabled={isGitActionRunning || quickAction.disabled}
-              aria-label={quickAction.label}
-              title={quickAction.label}
-              onClick={runQuickAction}
+        {quickActionDisabledReason ? (
+          <Popover>
+            <PopoverTrigger
+              openOnHover
+              render={
+                <Button
+                  aria-label={quickAction.label}
+                  aria-disabled="true"
+                  className={cn(
+                    hideQuickActionLabel
+                      ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME
+                      : CHAT_HEADER_CONTROL_CLASS_NAME,
+                    CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+                    CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
+                    "cursor-not-allowed opacity-64",
+                  )}
+                  size={hideQuickActionLabel ? "icon-xs" : "xs"}
+                  variant="chrome-outline"
+                  title={quickAction.label}
+                />
+              }
             >
               <GitQuickActionIcon quickAction={quickAction} />
               {!hideQuickActionLabel ? (
                 <span className="font-normal">{quickAction.label}</span>
               ) : null}
-            </Button>
-          )}
-          <ChatHeaderSplitDivider />
-          <Menu
-            onOpenChange={(open) => {
-              if (open) void invalidateVcsQueries(queryClient);
-            }}
+            </PopoverTrigger>
+            <PopoverPopup tooltipStyle side="bottom" align="start">
+              {quickActionDisabledReason}
+            </PopoverPopup>
+          </Popover>
+        ) : (
+          <Button
+            variant="chrome-outline"
+            size={hideQuickActionLabel ? "icon-xs" : "xs"}
+            className={cn(
+              hideQuickActionLabel
+                ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME
+                : CHAT_HEADER_CONTROL_CLASS_NAME,
+              CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+              CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
+            )}
+            disabled={isGitActionRunning || quickAction.disabled}
+            aria-label={quickAction.label}
+            title={quickAction.label}
+            onClick={runQuickAction}
           >
-            <MenuTrigger
-              render={
-                <Button
-                  aria-label={`${isJjBackend ? "JJ" : "Git"} action options`}
-                  size="icon-xs"
-                  variant="chrome-outline"
-                  className={cn(
-                    CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
-                    CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
-                    CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
-                  )}
-                />
-              }
-              disabled={isGitActionRunning}
-            >
-              <ChevronDownIcon aria-hidden="true" className="size-3.5" />
-            </MenuTrigger>
-            <ComposerPickerMenuPopup align="end" side="bottom" className="w-50 min-w-50">
-              {gitMenuContent}
-            </ComposerPickerMenuPopup>
-          </Menu>
+            <GitQuickActionIcon quickAction={quickAction} />
+            {!hideQuickActionLabel ? (
+              <span className="font-normal">{quickAction.label}</span>
+            ) : null}
+          </Button>
+        )}
+        <ChatHeaderSplitDivider />
+        <Menu
+          onOpenChange={(open) => {
+            if (open) void invalidateVcsQueries(queryClient);
+          }}
+        >
+          <MenuTrigger
+            render={
+              <Button
+                aria-label={`${isJjBackend ? "JJ" : "Git"} action options`}
+                size="icon-xs"
+                variant="chrome-outline"
+                className={cn(
+                  CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
+                  CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+                  CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
+                )}
+              />
+            }
+            disabled={isGitActionRunning}
+          >
+            <ChevronDownIcon aria-hidden="true" className="size-3.5" />
+          </MenuTrigger>
+          <ComposerPickerMenuPopup align="end" side="bottom" className="w-50 min-w-50">
+            {gitMenuContent}
+          </ComposerPickerMenuPopup>
+        </Menu>
       </ChatHeaderSplitGroup>
 
       {gitActionDialogs}

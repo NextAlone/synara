@@ -2,10 +2,7 @@ import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/
 import { Effect } from "effect";
 
 import type { GitCoreShape } from "../git/Services/GitCore.ts";
-import type {
-  JjBookmark,
-  JjBookmarkRemote,
-} from "./jjParsing.ts";
+import type { JjBookmark, JjBookmarkRemote } from "./jjParsing.ts";
 import type { JjWorkingCopyStatus } from "./Services/JjCore.ts";
 
 export interface JjBookmarkRemoteResolution {
@@ -37,11 +34,7 @@ function selectNativeRemote(
 ): JjBookmarkRemote | null {
   return (
     bookmark?.remotes
-      .filter(
-        (remote) =>
-          remote.targetChangeId !== null &&
-          (!trackedOnly || remote.tracked),
-      )
+      .filter((remote) => remote.targetChangeId !== null && (!trackedOnly || remote.tracked))
       .toSorted(
         (left, right) =>
           Number(right.tracked) - Number(left.tracked) ||
@@ -87,29 +80,21 @@ export function resolveJjBookmarkRemote(input: {
   );
   const trackedNative = selectNativeRemote(local, true);
   if (trackedNative) {
-    return Effect.succeed(
-      resolutionFromNative(input.bookmark, trackedNative),
-    );
+    return Effect.succeed(resolutionFromNative(input.bookmark, trackedNative));
   }
 
-  const upstreamSeparator =
-    input.status.upstreamBookmark?.lastIndexOf("@") ?? -1;
+  const upstreamSeparator = input.status.upstreamBookmark?.lastIndexOf("@") ?? -1;
   if (
     upstreamSeparator > 0 &&
-    input.status.upstreamBookmark?.slice(0, upstreamSeparator) ===
-      input.bookmark
+    input.status.upstreamBookmark?.slice(0, upstreamSeparator) === input.bookmark
   ) {
     return Effect.succeed({
       localBookmark: input.bookmark,
-      remoteName: input.status.upstreamBookmark.slice(
-        upstreamSeparator + 1,
-      ),
+      remoteName: input.status.upstreamBookmark.slice(upstreamSeparator + 1),
       remoteBookmark: input.bookmark,
       remoteRevision: input.status.upstreamBookmark,
       tracked: true,
-      synced:
-        input.status.aheadCount === 0 &&
-        input.status.behindCount === 0,
+      synced: input.status.aheadCount === 0 && input.status.behindCount === 0,
       nativePush: true,
     } satisfies JjBookmarkRemoteResolution);
   }
@@ -121,21 +106,13 @@ export function resolveJjBookmarkRemote(input: {
   const gitCwd = input.status.repository.gitStorePath;
   if (!gitCwd) {
     const native = selectNativeRemote(local, false);
-    return Effect.succeed(
-      native ? resolutionFromNative(input.bookmark, native) : null,
-    );
+    return Effect.succeed(native ? resolutionFromNative(input.bookmark, native) : null);
   }
 
   return Effect.all(
     [
-      input.git.readConfigValue(
-        gitCwd,
-        `branch.${input.bookmark}.remote`,
-      ),
-      input.git.readConfigValue(
-        gitCwd,
-        `branch.${input.bookmark}.merge`,
-      ),
+      input.git.readConfigValue(gitCwd, `branch.${input.bookmark}.remote`),
+      input.git.readConfigValue(gitCwd, `branch.${input.bookmark}.merge`),
     ],
     { concurrency: 2 },
   ).pipe(
@@ -152,20 +129,17 @@ export function resolveJjBookmarkRemote(input: {
           remoteBookmark,
           remoteRevision: `${remoteBookmark}@${remoteName}`,
           tracked: remote?.tracked ?? false,
-          synced:
-            sameName
-              ? (remote?.synced ?? false)
-              : local?.targetChangeId !== null &&
-                local?.targetChangeId !== undefined &&
-                local.targetChangeId === remote?.targetChangeId,
+          synced: sameName
+            ? (remote?.synced ?? false)
+            : local?.targetChangeId !== null &&
+              local?.targetChangeId !== undefined &&
+              local.targetChangeId === remote?.targetChangeId,
           nativePush: sameName,
         } satisfies JjBookmarkRemoteResolution;
       }
 
       const native = selectNativeRemote(local, false);
-      return native
-        ? resolutionFromNative(input.bookmark, native)
-        : null;
+      return native ? resolutionFromNative(input.bookmark, native) : null;
     }),
   );
 }
@@ -186,31 +160,22 @@ export function resolveJjGitHubHeadContext(input: {
     } satisfies JjGitHubHeadContext);
   }
 
-  return input.git
-    .readConfigValue(input.gitCwd, `remote.${remoteName}.url`)
-    .pipe(
-      Effect.map((remoteUrl) => {
-        const repositoryNameWithOwner =
-          parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
-        const owner = repositoryNameWithOwner?.split("/")[0] ?? null;
-        const ownerSelector = owner ? `${owner}:${headBranch}` : null;
-        const remoteSelector = `${remoteName}:${headBranch}`;
-        const selectors: string[] = [];
-        appendUnique(selectors, ownerSelector);
-        appendUnique(
-          selectors,
-          remoteSelector !== ownerSelector ? remoteSelector : null,
-        );
-        appendUnique(selectors, headBranch);
-        appendUnique(
-          selectors,
-          input.bookmark !== headBranch ? input.bookmark : null,
-        );
-        return {
-          headBranch,
-          selectors,
-          preferredSelector: ownerSelector ?? headBranch,
-        } satisfies JjGitHubHeadContext;
-      }),
-    );
+  return input.git.readConfigValue(input.gitCwd, `remote.${remoteName}.url`).pipe(
+    Effect.map((remoteUrl) => {
+      const repositoryNameWithOwner = parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
+      const owner = repositoryNameWithOwner?.split("/")[0] ?? null;
+      const ownerSelector = owner ? `${owner}:${headBranch}` : null;
+      const remoteSelector = `${remoteName}:${headBranch}`;
+      const selectors: string[] = [];
+      appendUnique(selectors, ownerSelector);
+      appendUnique(selectors, remoteSelector !== ownerSelector ? remoteSelector : null);
+      appendUnique(selectors, headBranch);
+      appendUnique(selectors, input.bookmark !== headBranch ? input.bookmark : null);
+      return {
+        headBranch,
+        selectors,
+        preferredSelector: ownerSelector ?? headBranch,
+      } satisfies JjGitHubHeadContext;
+    }),
+  );
 }

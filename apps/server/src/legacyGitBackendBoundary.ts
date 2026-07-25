@@ -4,6 +4,7 @@ import { WS_METHODS, WsRpcError, type VcsBackend } from "@synara/contracts";
 import { Effect } from "effect";
 
 import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { resolveProjectVcsState } from "./vcs/projectVcsState.ts";
 
 /**
  * These calls use Git/GitHub only to discover remote identity or read hosted
@@ -34,10 +35,7 @@ function workspaceRootForProjectPath(
     return nodePath.resolve(projectPath);
   }
   const depth = projectRelativePath.split(/[\\/]/u).filter(Boolean).length;
-  const workspaceRoot = nodePath.resolve(
-    projectPath,
-    ...Array.from({ length: depth }, () => ".."),
-  );
+  const workspaceRoot = nodePath.resolve(projectPath, ...Array.from({ length: depth }, () => ".."));
   return nodePath.resolve(workspaceRoot, projectRelativePath) === nodePath.resolve(projectPath)
     ? workspaceRoot
     : null;
@@ -47,9 +45,7 @@ export interface LegacyGitBackendBoundaryDependencies {
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly getVcsBackend: Effect.Effect<VcsBackend, unknown>;
   readonly canonicalizePath: (path: string) => Effect.Effect<string>;
-  readonly resolveJjGitStorePath: (
-    cwd: string,
-  ) => Effect.Effect<string | null>;
+  readonly resolveJjGitStorePath: (cwd: string) => Effect.Effect<string | null, unknown>;
 }
 
 export interface LegacyGitBackendBoundaryInput {
@@ -62,9 +58,7 @@ export interface LegacyGitBackendBoundaryInput {
  * backend. Unknown legacy Git methods default to local access and are blocked;
  * only the explicit remote-read allowlist above can cross the boundary.
  */
-export function makeLegacyGitBackendBoundary(
-  dependencies: LegacyGitBackendBoundaryDependencies,
-) {
+export function makeLegacyGitBackendBoundary(dependencies: LegacyGitBackendBoundaryDependencies) {
   return (input: LegacyGitBackendBoundaryInput) => {
     if (JJ_GIT_REMOTE_READ_ALLOWLIST.has(input.method)) {
       return Effect.void;
@@ -75,10 +69,7 @@ export function makeLegacyGitBackendBoundary(
         return;
       }
       const [cwd, snapshot] = yield* Effect.all(
-        [
-          dependencies.canonicalizePath(input.cwd),
-          dependencies.snapshotQuery.getShellSnapshot(),
-        ],
+        [dependencies.canonicalizePath(input.cwd), dependencies.snapshotQuery.getShellSnapshot()],
         { concurrency: 2 },
       );
       const jjRoots: Array<{ readonly projectId: string; readonly root: string }> = [];
@@ -88,9 +79,29 @@ export function makeLegacyGitBackendBoundary(
       }> = [];
 
       for (const project of snapshot.projects) {
-        if ((project.kind ?? "project") !== "project") continue;
+        const projectKind = project.kind ?? "project";
+        if (projectKind === "studio") {
+          const studioRoots = [
+            project.workspaceRoot,
+            ...snapshot.threads
+              .filter((thread) => thread.projectId === project.id)
+              .flatMap((thread) =>
+                [
+                  thread.workingDirectory,
+                  thread.worktreePath,
+                  thread.associatedWorktreePath,
+                ].filter((path): path is string => typeof path === "string"),
+              ),
+          ];
+          for (const root of studioRoots) {
+            jjRoots.push({ projectId: project.id, root });
+            jjRepositoryRoots.push({ projectId: project.id, root });
+          }
+          continue;
+        }
+        if (projectKind !== "project") continue;
         jjRoots.push({ projectId: project.id, root: project.workspaceRoot });
-        const binding = project.vcs.binding;
+        const binding = resolveProjectVcsState(project).binding;
         if (binding?.backend !== "jj") continue;
         jjRoots.push({ projectId: project.id, root: binding.repoRoot });
         jjRepositoryRoots.push({
@@ -120,16 +131,12 @@ export function makeLegacyGitBackendBoundary(
       const gitStoreRoots = yield* Effect.forEach(
         jjRepositoryRoots,
         (entry) =>
-          dependencies
-            .resolveJjGitStorePath(entry.root)
-            .pipe(
-              Effect.map((root) =>
-                root === null ? null : { ...entry, root },
-              ),
-              // The bound workspace root remains protected even when a stale
-              // repository cannot currently reveal its external Git store.
-              Effect.catch(() => Effect.succeed(null)),
-            ),
+          dependencies.resolveJjGitStorePath(entry.root).pipe(
+            Effect.map((root) => (root === null ? null : { ...entry, root })),
+            // The bound workspace root remains protected even when a stale
+            // repository cannot currently reveal its external Git store.
+            Effect.catch(() => Effect.succeed(null)),
+          ),
         { concurrency: 4 },
       );
       const canonicalRoots = yield* Effect.forEach(

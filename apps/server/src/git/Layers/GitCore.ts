@@ -1773,13 +1773,14 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const pullCurrentBranch: GitCoreShape["pullCurrentBranch"] = (cwd) =>
       Effect.gen(function* () {
+        const pullArgs = ["pull", "--ff-only", "--no-rebase", "--no-autostash"] as const;
         const details = yield* statusDetails(cwd);
         const branch = details.branch;
         if (!branch) {
           return yield* createGitCommandError(
             "GitCore.pullCurrentBranch",
             cwd,
-            ["pull", "--ff-only"],
+            pullArgs,
             "Cannot pull from detached HEAD.",
           );
         }
@@ -1787,7 +1788,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           return yield* createGitCommandError(
             "GitCore.pullCurrentBranch",
             cwd,
-            ["pull", "--ff-only"],
+            pullArgs,
             "Current branch has no upstream configured. Push with upstream first.",
           );
         }
@@ -1797,7 +1798,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           ["rev-parse", "HEAD"],
           true,
         ).pipe(Effect.map((stdout) => stdout.trim()));
-        yield* executeGit("GitCore.pullCurrentBranch.pull", cwd, ["pull", "--ff-only"], {
+        yield* executeGit("GitCore.pullCurrentBranch.pull", cwd, pullArgs, {
           timeoutMs: 30_000,
           fallbackErrorMessage: "git pull failed",
         }).pipe(
@@ -1807,7 +1808,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             return createGitCommandError(
               "GitCore.pullCurrentBranch.pull",
               cwd,
-              ["pull", "--ff-only"],
+              pullArgs,
               friendlyDetail,
               error,
             );

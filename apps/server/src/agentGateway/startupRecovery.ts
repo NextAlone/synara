@@ -138,8 +138,7 @@ export function recoverInterruptedAgentGatewayOperations(input: {
                           expectedEpoch: entry.vcsEpoch,
                         });
                         const registered = workspaces.workspaces.find(
-                          (workspace) =>
-                            workspace.name === entry.worktreeOwnership!.token,
+                          (workspace) => workspace.name === entry.worktreeOwnership!.token,
                         );
                         if (!existsSync(plannedWorkspacePath)) {
                           if (!registered) return;
@@ -150,9 +149,7 @@ export function recoverInterruptedAgentGatewayOperations(input: {
                               ),
                             );
                           }
-                          const repository = yield* input.jj.detectRepository(
-                            entry.workspaceRoot,
-                          );
+                          const repository = yield* input.jj.detectRepository(entry.workspaceRoot);
                           if (!repository) {
                             return yield* Effect.fail(
                               new Error(
@@ -197,86 +194,90 @@ export function recoverInterruptedAgentGatewayOperations(input: {
                         ),
                       )
                     : input.git
-                      .withMutation(
-                        entry.workspaceRoot,
-                        Effect.gen(function* () {
-                          const plannedWorktreePath = entry.plannedWorktreePath;
-                          const newBranch = entry.newBranch;
-                          if (plannedWorktreePath === null) return;
-                          const branch = newBranch
-                            ? (yield* input.git.listBranches({
-                                cwd: entry.workspaceRoot,
-                              })).branches.find(
-                                (candidate) => !candidate.isRemote && candidate.name === newBranch,
-                              )
-                            : null;
-                          if (!entry.worktreeOwnership) {
-                            if (existsSync(plannedWorktreePath) || branch) {
+                        .withMutation(
+                          entry.workspaceRoot,
+                          Effect.gen(function* () {
+                            const plannedWorktreePath = entry.plannedWorktreePath;
+                            const newBranch = entry.newBranch;
+                            if (plannedWorktreePath === null) return;
+                            const branch = newBranch
+                              ? (yield* input.git.listBranches({
+                                  cwd: entry.workspaceRoot,
+                                })).branches.find(
+                                  (candidate) =>
+                                    !candidate.isRemote && candidate.name === newBranch,
+                                )
+                              : null;
+                            if (!entry.worktreeOwnership) {
+                              if (existsSync(plannedWorktreePath) || branch) {
+                                return yield* Effect.fail(
+                                  new Error(
+                                    `Cleanup remains pending for unverified worktree plan ${plannedWorktreePath}; automatic removal is unsafe without a durable ownership marker.`,
+                                  ),
+                                );
+                              }
+                              return;
+                            }
+                            if (!existsSync(plannedWorktreePath)) {
+                              if (branch) {
+                                return yield* Effect.fail(
+                                  new Error(
+                                    `Refusing to delete branch ${newBranch}: the owned worktree is missing, so current branch ownership cannot be verified.`,
+                                  ),
+                                );
+                              }
+                              return;
+                            }
+                            if (
+                              newBranch !== null &&
+                              branch?.worktreePath !== plannedWorktreePath
+                            ) {
                               return yield* Effect.fail(
                                 new Error(
-                                  `Cleanup remains pending for unverified worktree plan ${plannedWorktreePath}; automatic removal is unsafe without a durable ownership marker.`,
+                                  `Refusing to clean worktree ${plannedWorktreePath}: git does not register the operation-owned branch at that path.`,
                                 ),
                               );
                             }
-                            return;
-                          }
-                          if (!existsSync(plannedWorktreePath)) {
-                            if (branch) {
-                              return yield* Effect.fail(
-                                new Error(
-                                  `Refusing to delete branch ${newBranch}: the owned worktree is missing, so current branch ownership cannot be verified.`,
-                                ),
-                              );
-                            }
-                            return;
-                          }
-                          if (newBranch !== null && branch?.worktreePath !== plannedWorktreePath) {
-                            return yield* Effect.fail(
-                              new Error(
-                                `Refusing to clean worktree ${plannedWorktreePath}: git does not register the operation-owned branch at that path.`,
-                              ),
-                            );
-                          }
-                          const verification = yield* input.git.verifyWorktreeOwnership({
-                            path: plannedWorktreePath,
-                            proof: {
-                              token: entry.worktreeOwnership.token,
-                              gitDir: entry.worktreeOwnership.gitDir,
-                              branch: entry.worktreeOwnership.branch,
-                              head: entry.worktreeOwnership.head,
-                              ...(entry.worktreeOwnership.stateHash
-                                ? { stateHash: entry.worktreeOwnership.stateHash }
-                                : {}),
-                            },
-                          });
-                          if (!verification.verified) {
-                            return yield* Effect.fail(
-                              new Error(
-                                `Refusing to clean worktree ${plannedWorktreePath}: ${verification.reason ?? "ownership verification failed"}.`,
-                              ),
-                            );
-                          }
-                          yield* input.git.removeWorktree({
-                            cwd: entry.workspaceRoot,
-                            path: plannedWorktreePath,
-                            // A verified baseline may intentionally contain copied local
-                            // changes, so Git requires force even though ownership is proven.
-                            force: true,
-                          });
-                          if (newBranch !== null) {
-                            yield* input.git.deleteBranchIfUnchanged({
-                              cwd: entry.workspaceRoot,
-                              branch: newBranch,
-                              expectedHead: entry.worktreeOwnership.head,
+                            const verification = yield* input.git.verifyWorktreeOwnership({
+                              path: plannedWorktreePath,
+                              proof: {
+                                token: entry.worktreeOwnership.token,
+                                gitDir: entry.worktreeOwnership.gitDir,
+                                branch: entry.worktreeOwnership.branch,
+                                head: entry.worktreeOwnership.head,
+                                ...(entry.worktreeOwnership.stateHash
+                                  ? { stateHash: entry.worktreeOwnership.stateHash }
+                                  : {}),
+                              },
                             });
-                          }
-                        }),
-                      )
-                      .pipe(
-                        Effect.catch((error) =>
-                          Effect.sync(() => recoveryErrors.push(errorText(error))),
-                        ),
-                      )
+                            if (!verification.verified) {
+                              return yield* Effect.fail(
+                                new Error(
+                                  `Refusing to clean worktree ${plannedWorktreePath}: ${verification.reason ?? "ownership verification failed"}.`,
+                                ),
+                              );
+                            }
+                            yield* input.git.removeWorktree({
+                              cwd: entry.workspaceRoot,
+                              path: plannedWorktreePath,
+                              // A verified baseline may intentionally contain copied local
+                              // changes, so Git requires force even though ownership is proven.
+                              force: true,
+                            });
+                            if (newBranch !== null) {
+                              yield* input.git.deleteBranchIfUnchanged({
+                                cwd: entry.workspaceRoot,
+                                branch: newBranch,
+                                expectedHead: entry.worktreeOwnership.head,
+                              });
+                            }
+                          }),
+                        )
+                        .pipe(
+                          Effect.catch((error) =>
+                            Effect.sync(() => recoveryErrors.push(errorText(error))),
+                          ),
+                        )
                   : Effect.void,
             { discard: true },
           );

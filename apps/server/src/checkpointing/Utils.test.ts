@@ -7,9 +7,32 @@ import {
   checkpointRefForThreadTurnStartInManagedFamily,
   isManagedCheckpointRefForThread,
   parseManagedCheckpointRef,
+  resolveProjectCheckpointBackend,
   resolveProjectCwdForKind,
   resolveThreadWorkspaceCwd,
 } from "./Utils.ts";
+
+describe("resolveProjectCheckpointBackend", () => {
+  it("uses the selected backend for an unbound Studio reference folder", () => {
+    expect(
+      resolveProjectCheckpointBackend({
+        projectKind: "studio",
+        boundBackend: null,
+        selectedBackend: "jj",
+      }),
+    ).toBe("jj");
+  });
+
+  it("requires ordinary projects to match their persisted binding", () => {
+    expect(
+      resolveProjectCheckpointBackend({
+        projectKind: "project",
+        boundBackend: "git",
+        selectedBackend: "jj",
+      }),
+    ).toBeNull();
+  });
+});
 
 describe("managed checkpoint refs", () => {
   const threadId = ThreadId.makeUnsafe("thread-1");

@@ -28,7 +28,10 @@ import {
 import { Cause, Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 
-import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import {
+  resolveProjectCheckpointBackend,
+  resolveThreadWorkspaceCwd,
+} from "../../checkpointing/Utils.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import {
   scanStudioWorkspaceFiles,
@@ -43,6 +46,7 @@ import {
   StudioOutputReactor,
   type StudioOutputReactorShape,
 } from "../Services/StudioOutputReactor.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 
 // Baselines whose terminal event never arrives must not accumulate forever; one
 // entry per active turn stays far below this.
@@ -71,6 +75,7 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const checkpointStore = yield* CheckpointStore;
+  const serverSettings = yield* ServerSettingsService;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const scanWorkspaceFiles = (workspaceRoot: string) =>
@@ -107,7 +112,12 @@ const make = Effect.gen(function* () {
     if (!cwd) {
       return null;
     }
-    const backend = project.vcs?.binding?.backend;
+    const selectedBackend = (yield* serverSettings.getSettings).vcsBackend;
+    const backend = resolveProjectCheckpointBackend({
+      projectKind: project.kind,
+      boundBackend: project.vcs?.binding?.backend,
+      selectedBackend,
+    });
     if (backend && (yield* checkpointStore.isRepository({ cwd, backend }))) {
       return null;
     }
@@ -151,7 +161,7 @@ const make = Effect.gen(function* () {
     captureBaselineBeforeTurnUnsafe(threadId).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.failCause(cause);
+          return Effect.interrupt;
         }
         return Effect.logWarning("studio output reactor failed to capture pre-turn baseline", {
           threadId,
@@ -294,10 +304,12 @@ const make = Effect.gen(function* () {
   };
 
   const processEventSafely = (event: ProviderRuntimeEvent) =>
-    processEvent(event).pipe(
+    Effect.gen(function* () {
+      yield* processEvent(event);
+    }).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.failCause(cause);
+          return Effect.interrupt;
         }
         return Effect.logWarning("studio output reactor failed to process event", {
           eventType: event.type,

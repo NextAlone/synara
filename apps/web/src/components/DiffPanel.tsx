@@ -479,10 +479,16 @@ export default function DiffPanel({
     draftThread?.worktreePath ??
     activeThreadContext?.worktreePath ??
     null;
+  const resolvedThreadWorkingDirectory =
+    serverThreadCatalog?.workingDirectory ??
+    draftThread?.workingDirectory ??
+    activeThreadContext?.workingDirectory ??
+    null;
   const diffEnvironmentState = resolveDiffEnvironmentState({
     projectCwd: activeProject?.cwd ?? null,
     envMode: resolvedThreadEnvMode,
     worktreePath: resolvedThreadWorktreePath,
+    workingDirectory: resolvedThreadWorkingDirectory,
   });
   const diffEnvironmentPending = diffEnvironmentState.pending;
   const activeCwd = diffEnvironmentState.cwd;
@@ -490,6 +496,12 @@ export default function DiffPanel({
     activeProject,
     serverThreadCatalog ? activeThreadId : null,
     settings.vcsBackend,
+    {
+      threadWorkingDirectory:
+        activeProject?.kind === "studio" && serverThreadCatalog
+          ? resolvedThreadWorkingDirectory
+          : null,
+    },
   );
   const repoScopeOptions =
     vcsTarget.backend === "jj" ? JJ_DIFF_SCOPE_OPTIONS : DIFF_PANEL_PICKER_SCOPE_OPTIONS;
@@ -661,20 +673,14 @@ export default function DiffPanel({
     vcsDiffQueryOptions({
       target: vcsTarget,
       scope: "unstaged",
-      enabled:
-        vcsTarget.backend === "git" &&
-        scopeCountQueriesEnabled &&
-        !diffEnvironmentPending,
+      enabled: vcsTarget.backend === "git" && scopeCountQueriesEnabled && !diffEnvironmentPending,
     }),
   );
   const stagedDiffQuery = useQuery(
     vcsDiffQueryOptions({
       target: vcsTarget,
       scope: "staged",
-      enabled:
-        vcsTarget.backend === "git" &&
-        scopeCountQueriesEnabled &&
-        !diffEnvironmentPending,
+      enabled: vcsTarget.backend === "git" && scopeCountQueriesEnabled && !diffEnvironmentPending,
     }),
   );
   const branchDiffQuery = useQuery(

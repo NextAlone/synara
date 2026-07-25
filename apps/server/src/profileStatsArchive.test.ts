@@ -962,6 +962,87 @@ describe("ProfileStatsArchive", () => {
     );
   });
 
+  it("cleans unbound Studio checkpoint refs from their actual JJ repository", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const archive = yield* ProfileStatsArchive;
+        const checkpointRef = "refs/synara/checkpoints/dGhyZWFkLXN0dWRpby1jaGVja3BvaW50/turn/1";
+
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, kind, title, workspace_root, scripts_json, vcs_state_json,
+            created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'project-studio-checkpoint',
+            'studio',
+            'Studio Checkpoint',
+            '/work/studio',
+            '{}',
+            '{"epoch":0,"binding":null}',
+            '2026-06-12T09:00:00.000Z',
+            '2026-06-12T09:00:00.000Z',
+            NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, working_directory,
+            created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'thread-studio-checkpoint',
+            'project-studio-checkpoint',
+            'Studio Checkpoint',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access', 'default', 'local', '/work/studio-reference',
+            '2026-06-13T09:00:00.000Z',
+            '2026-06-13T09:05:00.000Z',
+            '2026-06-13T09:05:00.000Z'
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_turns (
+            thread_id, turn_id, pending_message_id, assistant_message_id, state,
+            requested_at, started_at, completed_at, checkpoint_turn_count,
+            checkpoint_ref, checkpoint_status, checkpoint_files_json
+          )
+          VALUES (
+            'thread-studio-checkpoint', 'turn-studio-checkpoint', NULL, NULL, 'completed',
+            '2026-06-13T09:01:00.000Z',
+            '2026-06-13T09:01:00.000Z',
+            '2026-06-13T09:02:00.000Z',
+            1, ${checkpointRef}, 'captured', '[]'
+          )
+        `;
+        isRepositoryImpl = ({ backend }) => Effect.succeed(backend === "jj");
+
+        const purged = yield* archive.purgeThreadWithStatsSnapshot({
+          threadId: "thread-studio-checkpoint",
+        });
+
+        expect(purged).toBe(true);
+        expect(deletedCheckpointRefCalls).toEqual([
+          {
+            cwd: "/work/studio-reference",
+            backend: "jj",
+            checkpointRefs: [
+              checkpointRef,
+              String(
+                checkpointRefForThreadTurnStart(
+                  ThreadId.makeUnsafe("thread-studio-checkpoint"),
+                  TurnId.makeUnsafe("turn-studio-checkpoint"),
+                ),
+              ),
+            ],
+          },
+        ]);
+      }),
+    );
+  });
+
   it("purges thread rows when checkpoint cleanup workspace is stale", async () => {
     await runArchiveTest(
       Effect.gen(function* () {

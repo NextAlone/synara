@@ -1174,9 +1174,7 @@ export default function ChatView({
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
   const { resolvedTheme } = useTheme();
   const queryClient = useQueryClient();
-  const createWorkspaceMutation = useMutation(
-    vcsCreateWorkspaceMutationOptions({ queryClient }),
-  );
+  const createWorkspaceMutation = useMutation(vcsCreateWorkspaceMutationOptions({ queryClient }));
   const isEditorRail = presentationMode === "editor";
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const composerDraft = useComposerThreadDraft(threadId);
@@ -1947,6 +1945,7 @@ export default function ChatView({
     projectCwd: activeProject?.cwd ?? null,
     envMode: resolvedThreadEnvMode,
     worktreePath: resolvedThreadWorktreePath,
+    workingDirectory: resolvedThreadWorkingDirectory,
   });
   const diffEnvironmentPending = diffEnvironmentState.pending;
   const diffDisabledReason = diffEnvironmentState.disabledReason;
@@ -3281,8 +3280,12 @@ export default function ChatView({
       : null;
   const vcsReferenceTarget = makeVcsQueryTarget(
     activeProject,
-    isServerThread ? activeThread?.id ?? null : null,
+    isServerThread ? (activeThread?.id ?? null) : null,
     settings.vcsBackend,
+    {
+      threadWorkingDirectory:
+        isStudioContainer && isServerThread ? resolvedThreadWorkingDirectory : null,
+    },
   );
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const mentionTriggerQuery = composerTrigger?.kind === "mention" ? composerTrigger.query : "";
@@ -4135,10 +4138,7 @@ export default function ChatView({
     environmentPanelOpen,
   });
   const githubRepositoryQuery = useQuery(
-    vcsGithubRepositoryQueryOptions(
-      vcsReferenceTarget,
-      environmentPanelVisible,
-    ),
+    vcsGithubRepositoryQueryOptions(vcsReferenceTarget, environmentPanelVisible),
   );
   const threadRecap = useThreadRecap({
     thread: activeThread,
@@ -7184,8 +7184,9 @@ export default function ChatView({
           targetProjectDefaultModelSelection: activeProject.defaultModelSelection ?? null,
         }
       : firstSendTarget.target;
-    let targetProjectVcsForSend =
-      currentStoreState.projects.find((project) => project.id === targetProjectIdForSend)?.vcs ??
+    let targetProjectVcsForSend = currentStoreState.projects.find(
+      (project) => project.id === targetProjectIdForSend,
+    )?.vcs ??
       (activeProject?.id === targetProjectIdForSend ? activeProject.vcs : undefined) ?? {
         epoch: 0,
         binding: null,
@@ -7264,7 +7265,7 @@ export default function ChatView({
           targetProjectDefaultModelSelectionForSend =
             recoveredProject.defaultModelSelection ??
             firstSendTarget.creation.defaultModelSelection;
-          targetProjectVcsForSend = recoveredProject.vcs;
+          targetProjectVcsForSend = recoveredProject.vcs ?? { epoch: 0, binding: null };
         }
       }
 
@@ -11351,9 +11352,7 @@ export default function ChatView({
       <ThreadWorktreeHandoffDialog
         open={worktreeHandoffDialogOpen}
         backend={
-          activeProject?.vcs.binding?.backend === settings.vcsBackend
-            ? settings.vcsBackend
-            : null
+          activeProject?.vcs?.binding?.backend === settings.vcsBackend ? settings.vcsBackend : null
         }
         worktreeName={worktreeHandoffName}
         busy={handoffBusy}

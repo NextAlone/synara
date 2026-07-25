@@ -150,12 +150,7 @@ function PullRequestThreadDialogContent({
       setReferenceDirty(true);
       return;
     }
-    if (
-      !parsedReference ||
-      !resolvedPullRequest ||
-      !target.projectId ||
-      !target.backend
-    ) {
+    if (!parsedReference || !resolvedPullRequest || !target.projectId || !target.backend) {
       return;
     }
     setPreparingMode(mode);

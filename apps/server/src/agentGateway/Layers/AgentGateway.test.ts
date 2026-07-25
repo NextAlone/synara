@@ -828,8 +828,7 @@ function makeHarnessLayer(
     status: (cwd: string) =>
       Effect.sync(() => {
         jjStatusReads.push(cwd);
-        const isSourceWorkspace =
-          cwd === "/tmp/demo" || cwd === "/tmp/caller-worktree";
+        const isSourceWorkspace = cwd === "/tmp/demo" || cwd === "/tmp/caller-worktree";
         return {
           repository: {
             workspaceRoot: isSourceWorkspace ? cwd : "/tmp/demo",
@@ -837,9 +836,7 @@ function makeHarnessLayer(
             gitStorePath: "/tmp/demo/.git",
           },
           revision: {
-            changeId: isSourceWorkspace
-              ? "jj-current-change"
-              : "jj-workspace-change",
+            changeId: isSourceWorkspace ? "jj-current-change" : "jj-workspace-change",
             commitId: isSourceWorkspace
               ? "jj-current-commit"
               : (options.jjWorkspaceCommitId ?? "jj-workspace-commit"),
@@ -909,25 +906,29 @@ function makeHarnessLayer(
       Effect.succeed({
         backend: "jj" as const,
         epoch: 1,
-        workspaces: Object.entries(options.existingJjWorkspaces ?? {}).map(([name, path]) => ({
-          name,
-          path,
-          stale: false,
-          current: false,
-          ref: null,
-        })).concat(
-          (options.staleJjWorkspaces ?? []).map((name) => ({
+        workspaces: [
+          ...Object.entries(options.existingJjWorkspaces ?? {}).map(([name, path]) => ({
+            name,
+            path,
+            stale: false,
+            current: false,
+            ref: null,
+          })),
+          ...(options.staleJjWorkspaces ?? []).map((name) => ({
             name,
             path: null,
             stale: true,
             current: false,
             ref: null,
           })),
-        ),
+        ],
       }),
     removeWorkspace: (input: { path: string; force?: boolean }) =>
       Effect.sync(() => {
-        jjWorkspaceRemoves.push({ path: input.path, force: input.force });
+        jjWorkspaceRemoves.push({
+          path: input.path,
+          ...(input.force !== undefined ? { force: input.force } : {}),
+        });
         return { backend: "jj" as const, epoch: 1, removed: true };
       }),
   } as never);
@@ -2229,7 +2230,7 @@ describe("AgentGateway", () => {
         projectId: PROJECT_ID,
         expectedEpoch: 1,
         sourceRef: "jj-current-commit",
-        copyChangesFromCurrent: true,
+        copyChangesFromCurrent: false,
       });
       assert.equal(harness.jjStatusReads[0], "/tmp/demo");
       assert.deepEqual(harness.jjRevisionReads, []);
@@ -2291,11 +2292,9 @@ describe("AgentGateway", () => {
       associatedWorktreeBranch: null,
       associatedWorktreeRef: "jj-current-commit",
     });
-    const { gatewayLayer, makeHarness } = makeHarnessLayer(
-      [isolatedParent],
-      [],
-      { vcsBackend: "jj" },
-    );
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([isolatedParent], [], {
+      vcsBackend: "jj",
+    });
     return Effect.gen(function* () {
       const harness = yield* makeHarness;
       const response = yield* harness.callTool({
@@ -2314,7 +2313,7 @@ describe("AgentGateway", () => {
       assert.equal(harness.jjStatusReads[0], "/tmp/caller-worktree");
       assert.deepInclude(harness.jjWorkspaceCreates[0]!, {
         sourceRef: "jj-current-commit",
-        copyChangesFromCurrent: true,
+        copyChangesFromCurrent: false,
       });
       assert.deepEqual(harness.jjRevisionReads, []);
     }).pipe(Effect.provide(gatewayLayer));
@@ -3641,7 +3640,7 @@ describe("AgentGateway", () => {
       assert.lengthOf(harness.jjWorkspaceCreates, 1);
       assert.deepEqual(harness.jjWorkspaceRemoves, [
         {
-          path: harness.jjWorkspaceCreates[0]!.path,
+          path: harness.jjWorkspaceCreates[0]!.path!,
           force: true,
         },
       ]);

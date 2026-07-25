@@ -3,13 +3,7 @@
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
 import type { ThreadId, RuntimeMode } from "@synara/contracts";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  GitBranchIcon,
-  HandoffIcon,
-  WorktreeIcon,
-} from "~/lib/icons";
+import { CheckIcon, ChevronDownIcon, GitBranchIcon, HandoffIcon, WorktreeIcon } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
@@ -434,18 +428,13 @@ export default function BranchToolbar({
   const [rateLimitsOpen, setRateLimitsOpen] = useState(true);
   const [envPickerOpen, setEnvPickerOpen] = useState(false);
   const projectedVcsState = activeProject?.vcs ?? { epoch: 0, binding: null };
-  const projectUsesGlobalBackend =
-    projectedVcsState.binding?.backend === settings.vcsBackend;
+  const projectUsesGlobalBackend = projectedVcsState.binding?.backend === settings.vcsBackend;
   const vcsState = projectUsesGlobalBackend
     ? projectedVcsState
     : { ...projectedVcsState, binding: null };
 
   useEffect(() => {
-    if (
-      !activeProject ||
-      activeProject.kind !== "project" ||
-      projectUsesGlobalBackend
-    ) {
+    if (!activeProject || activeProject.kind !== "project" || projectUsesGlobalBackend) {
       return;
     }
     const api = readNativeApi();
@@ -641,6 +630,7 @@ export default function BranchToolbar({
         {showBranchSelector ? (
           <BranchToolbarBranchSelector
             projectId={activeProject.id}
+            projectKind={activeProject.kind}
             projectVcs={vcsState}
             vcsBackend={settings.vcsBackend}
             activeThreadId={hasServerThread ? activeThreadId : null}
@@ -648,6 +638,9 @@ export default function BranchToolbar({
             activeThreadBranch={activeThreadBranch}
             activeWorktreePath={activeWorktreePath}
             branchCwd={branchCwd}
+            threadWorkingDirectory={
+              usesFixedLocalWorkspace && hasServerThread ? activeWorkingDirectory : null
+            }
             effectiveEnvMode={effectiveEnvMode}
             envLocked={envLocked}
             hasServerThread={hasServerThread}

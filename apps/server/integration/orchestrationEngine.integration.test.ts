@@ -128,6 +128,19 @@ const seedProjectAndThread = (harness: OrchestrationIntegrationHarness) =>
     });
 
     yield* harness.engine.dispatch({
+      type: "project.vcs-binding.set",
+      commandId: CommandId.makeUnsafe("cmd-project-vcs"),
+      projectId: PROJECT_ID,
+      expectedEpoch: 0,
+      binding: {
+        backend: "git",
+        repoRoot: harness.workspaceDir,
+        projectRelativePath: ".",
+      },
+      updatedAt: createdAt,
+    });
+
+    yield* harness.engine.dispatch({
       type: "thread.create",
       commandId: CommandId.makeUnsafe("cmd-thread-create"),
       threadId: THREAD_ID,
@@ -274,6 +287,19 @@ it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
             model: "gpt-5.3-codex",
           },
           createdAt,
+        });
+
+        yield* harness.engine.dispatch({
+          type: "project.vcs-binding.set",
+          commandId: CommandId.makeUnsafe("cmd-project-vcs-real-codex"),
+          projectId: PROJECT_ID,
+          expectedEpoch: 0,
+          binding: {
+            backend: "git",
+            repoRoot: harness.workspaceDir,
+            projectRelativePath: ".",
+          },
+          updatedAt: createdAt,
         });
 
         yield* harness.engine.dispatch({
@@ -498,6 +524,7 @@ it.live("runs multi-turn file edits and persists checkpoint diffs", () =>
 
       const incrementalDiff = yield* harness.checkpointStore.diffCheckpoints({
         cwd: harness.workspaceDir,
+        backend: "git",
         fromCheckpointRef: checkpointRefForThreadTurn(THREAD_ID, 1),
         toCheckpointRef: checkpointRefForThreadTurn(THREAD_ID, 2),
         fallbackFromToHead: false,
@@ -507,6 +534,7 @@ it.live("runs multi-turn file edits and persists checkpoint diffs", () =>
 
       const fullDiff = yield* harness.checkpointStore.diffCheckpoints({
         cwd: harness.workspaceDir,
+        backend: "git",
         fromCheckpointRef: checkpointRefForThreadTurn(THREAD_ID, 0),
         toCheckpointRef: checkpointRefForThreadTurn(THREAD_ID, 2),
         fallbackFromToHead: false,

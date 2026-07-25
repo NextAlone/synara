@@ -29,9 +29,7 @@ export const ProjectionProject = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.NullOr(SpaceId).pipe(Schema.withDecodingDefault(() => null)),
-  vcs: ProjectVcsState.pipe(
-    Schema.withDecodingDefault(() => ({ epoch: 0, binding: null })),
-  ),
+  vcs: ProjectVcsState.pipe(Schema.withDecodingDefault(() => ({ epoch: 0, binding: null }))),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),

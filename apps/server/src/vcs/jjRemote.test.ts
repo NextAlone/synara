@@ -3,10 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { GitCoreShape } from "../git/Services/GitCore.ts";
 import type { JjWorkingCopyStatus } from "./Services/JjCore.ts";
-import {
-  resolveJjBookmarkRemote,
-  resolveJjGitHubHeadContext,
-} from "./jjRemote.ts";
+import { resolveJjBookmarkRemote, resolveJjGitHubHeadContext } from "./jjRemote.ts";
 
 function crossForkStatus(): JjWorkingCopyStatus {
   return {
@@ -96,11 +93,7 @@ describe("JJ remote resolution", () => {
     });
     expect(head).toEqual({
       headBranch: "main",
-      selectors: [
-        "alice:main",
-        "main",
-        "synara/pr-42/main",
-      ],
+      selectors: ["alice:main", "main", "synara/pr-42/main"],
       preferredSelector: "alice:main",
     });
   });

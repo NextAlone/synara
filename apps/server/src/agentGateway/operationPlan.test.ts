@@ -47,6 +47,69 @@ describe("agent gateway operation plans", () => {
     expect(redacted).not.toContain("/private/repository");
   });
 
+  it("retains only the VCS identity required to recover an owned JJ workspace", () => {
+    const redacted = redactCreationPlanForPurgedCaller({
+      operationId: "gateway:create:jj",
+      planJson: JSON.stringify([
+        {
+          projectId: "project-jj",
+          vcsBackend: "jj",
+          vcsEpoch: 3,
+          workspaceRoot: "/repo",
+          environment: "worktree",
+          worktreeRef: "immutable-change-id",
+          newBranch: null,
+          plannedWorktreePath: "/workspaces/owned",
+          ownershipPreflightPassed: true,
+          worktreeOwnership: {
+            operationId: "gateway:create:jj",
+            path: "/workspaces/owned",
+            branch: null,
+            token: "owned-workspace",
+            gitDir: "/repo",
+            head: "0123456789abcdef",
+            stateHash: "state-hash",
+            recordedAt: "2026-07-20T00:00:00.000Z",
+          },
+          spec: { prompt: "private caller prompt" },
+          ids: {
+            threadId: "agent:jj-child",
+            compensateCommandId: "agent:jj-child:delete",
+          },
+        },
+      ]),
+    });
+
+    expect(JSON.parse(redacted)).toEqual([
+      {
+        projectId: "project-jj",
+        vcsBackend: "jj",
+        vcsEpoch: 3,
+        workspaceRoot: "/repo",
+        environment: "worktree",
+        worktreeRef: "immutable-change-id",
+        newBranch: null,
+        plannedWorktreePath: "/workspaces/owned",
+        ownershipPreflightPassed: true,
+        worktreeOwnership: {
+          operationId: "gateway:create:jj",
+          path: "/workspaces/owned",
+          branch: null,
+          token: "owned-workspace",
+          gitDir: "/repo",
+          head: "0123456789abcdef",
+          stateHash: "state-hash",
+          recordedAt: "2026-07-20T00:00:00.000Z",
+        },
+        ids: {
+          threadId: "agent:jj-child",
+          compensateCommandId: "agent:jj-child:delete",
+        },
+      },
+    ]);
+    expect(redacted).not.toContain("private caller prompt");
+  });
+
   it("does not accept legacy name/path assertions as destructive ownership proof", () => {
     const [entry] = parseRecoverableCreationPlan(
       JSON.stringify([

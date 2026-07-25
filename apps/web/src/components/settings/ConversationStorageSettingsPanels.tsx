@@ -162,9 +162,10 @@ export function WorkspacesSettingsPanel({ active }: { readonly active: boolean }
               "",
               `Delete the ${workspaceKind} anyway?`,
             ].join("\n")
-          : [`Delete workspace "${displayName}"?`, "This removes the VCS workspace from disk."].join(
-              "\n",
-            ),
+          : [
+              `Delete workspace "${displayName}"?`,
+              "This removes the VCS workspace from disk.",
+            ].join("\n"),
       );
       if (!confirmed) return;
 

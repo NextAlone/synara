@@ -11,8 +11,11 @@ const PROJECT_ID = ProjectId.makeUnsafe("project-jj");
 function makeBoundary(input?: {
   readonly selectedBackend?: "git" | "jj";
   readonly backend?: "git" | "jj" | null;
+  readonly projectKind?: "project" | "studio";
+  readonly workspaceRoot?: string;
   readonly projectRelativePath?: string;
   readonly worktreePath?: string | null;
+  readonly workingDirectory?: string | null;
   readonly gitStorePath?: string | null;
   readonly canonicalPaths?: Readonly<Record<string, string>>;
 }) {
@@ -26,9 +29,9 @@ function makeBoundary(input?: {
           projects: [
             {
               id: PROJECT_ID,
-              kind: "project",
+              kind: input?.projectKind ?? "project",
               title: "JJ project",
-              workspaceRoot: "/repo/packages/app",
+              workspaceRoot: input?.workspaceRoot ?? "/repo/packages/app",
               defaultModelSelection: null,
               scripts: [],
               isPinned: false,
@@ -52,6 +55,7 @@ function makeBoundary(input?: {
               id: ThreadId.makeUnsafe("thread-jj"),
               projectId: PROJECT_ID,
               worktreePath: input?.worktreePath ?? null,
+              workingDirectory: input?.workingDirectory ?? null,
               associatedWorktreePath: null,
             },
           ],
@@ -60,8 +64,7 @@ function makeBoundary(input?: {
     } as never,
     canonicalizePath: (path) =>
       Effect.succeed(input?.canonicalPaths?.[path] ?? nodePath.resolve(path)),
-    resolveJjGitStorePath: () =>
-      Effect.succeed(input?.gitStorePath ?? null),
+    resolveJjGitStorePath: () => Effect.succeed(input?.gitStorePath ?? null),
   });
 }
 
@@ -146,6 +149,29 @@ describe("legacy Git backend boundary", () => {
       code: "VCS_BACKEND_MISMATCH",
     });
   });
+
+  it.each(["/studio", "/references/project/src"])(
+    "blocks Studio legacy Git access at %s while JJ is selected globally",
+    async (cwd) => {
+      const assertAllowed = makeBoundary({
+        backend: null,
+        projectKind: "studio",
+        workspaceRoot: "/studio",
+        workingDirectory: "/references/project",
+      });
+
+      await expect(
+        Effect.runPromise(
+          assertAllowed({
+            method: WS_METHODS.gitStatus,
+            cwd,
+          }),
+        ),
+      ).rejects.toMatchObject({
+        code: "VCS_BACKEND_MISMATCH",
+      });
+    },
+  );
 
   it.each([
     WS_METHODS.gitGithubRepository,

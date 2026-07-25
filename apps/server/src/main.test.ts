@@ -24,6 +24,7 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
 import { Server, type ServerShape } from "./effectServer";
 import { makeServerShutdownController } from "./serverShutdown";
+import { ServerSettingsService } from "./serverSettings";
 
 vi.mock("./threadRetention", async () => {
   const Effect = await import("effect/Effect");
@@ -105,6 +106,7 @@ const testLayer = Layer.mergeAll(
     openInEditor: () => Effect.void,
   } satisfies OpenShape),
   AnalyticsService.layerTest,
+  ServerSettingsService.layerTest(),
   FetchHttpClient.layer,
   NodeServices.layer,
 );

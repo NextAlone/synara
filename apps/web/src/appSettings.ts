@@ -204,7 +204,7 @@ export const AppSettingsSchema = Schema.Struct({
   openCodeServerPasswordConfigured: Schema.Boolean.pipe(withDefaults(() => false)),
   openCodeExperimentalWebSockets: Schema.Boolean.pipe(withDefaults(() => false)),
   defaultThreadEnvMode: EnvMode.pipe(withDefaults(() => "local" as const satisfies EnvMode)),
-  vcsBackend: VcsBackend.pipe(withDefaults(() => "git")),
+  vcsBackend: VcsBackend.pipe(withDefaults(() => "git" as const satisfies VcsBackend)),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadArchive: Schema.Boolean.pipe(withDefaults(() => false)),
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -1275,15 +1275,13 @@ export function useAppSettings() {
         vcsBackend: result.backend,
       }),
     );
-    queryClient.setQueryData<ServerSettingsView>(
-      serverQueryKeys.settings(),
-      (previous) =>
-        previous
-          ? {
-              ...previous,
-              vcsBackend: result.backend,
-            }
-          : previous,
+    queryClient.setQueryData<ServerSettingsView>(serverQueryKeys.settings(), (previous) =>
+      previous
+        ? {
+            ...previous,
+            vcsBackend: result.backend,
+          }
+        : previous,
     );
     await invalidateVcsQueries(queryClient);
     return result.backend;

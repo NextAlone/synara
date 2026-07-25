@@ -6,6 +6,7 @@ import {
   type ProjectKind,
   type ThreadId,
   TurnId,
+  type VcsBackend,
 } from "@synara/contracts";
 import { resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 
@@ -116,6 +117,17 @@ export function resolveProjectCwdForKind(input: {
     return null;
   }
   return input.workspaceRoot;
+}
+
+export function resolveProjectCheckpointBackend(input: {
+  readonly projectKind: ProjectKind | string | null | undefined;
+  readonly boundBackend: VcsBackend | null | undefined;
+  readonly selectedBackend: VcsBackend;
+}): VcsBackend | null {
+  if (input.projectKind === "studio") {
+    return input.selectedBackend;
+  }
+  return input.boundBackend === input.selectedBackend ? input.boundBackend : null;
 }
 
 export function resolveThreadWorkspaceCwd(input: {

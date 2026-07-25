@@ -1484,9 +1484,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 return yield* Effect.failCause(turnExit.cause);
               }
             }
-            if (Exit.isFailure(turnExit)) {
-              return yield* Effect.failCause(turnExit.cause);
-            }
             const turn = turnExit.value;
             const persistenceInput: StartedTurnPersistenceInput = {
               threadId: input.threadId,

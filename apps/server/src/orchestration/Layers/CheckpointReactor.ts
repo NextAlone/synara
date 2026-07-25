@@ -25,6 +25,7 @@ import {
   checkpointRefForThreadTurnStart,
   checkpointRefForThreadTurnStartInManagedFamily,
   isManagedCheckpointRefForThread,
+  resolveProjectCheckpointBackend,
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
@@ -37,8 +38,6 @@ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
-import { CheckpointStoreError } from "../../checkpointing/Errors.ts";
-import { OrchestrationDispatchError } from "../Errors.ts";
 import {
   CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND,
   checkpointRevertActiveTurnDetail,
@@ -311,12 +310,16 @@ const make = Effect.gen(function* () {
   // Resolves the workspace CWD for checkpoint operations, preferring the
   // active provider session CWD and falling back to the thread/project config.
   // Returns undefined when no CWD can be determined or the workspace is not
-  // a git repository.
+  // a repository for the active backend.
   const resolveCheckpointWorkspace = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
-    readonly thread: Pick<OrchestrationThread, "projectId" | "envMode" | "worktreePath">;
+    readonly thread: Pick<
+      OrchestrationThread,
+      "projectId" | "envMode" | "worktreePath" | "workingDirectory"
+    >;
     readonly project: OrchestrationProjectShell;
     readonly preferSessionRuntime: boolean;
+    readonly checkpointRef?: CheckpointRef;
   }) {
     const fromSession = yield* resolveSessionRuntimeForThread(input.threadId);
     const fromThread = resolveThreadWorkspaceCwd({
@@ -338,16 +341,38 @@ const make = Effect.gen(function* () {
     if (!cwd) {
       return undefined;
     }
-    const backend = input.project.vcs?.binding?.backend;
     const selectedBackend = (yield* serverSettings.getSettings).vcsBackend;
-    if (
-      !backend ||
-      backend !== selectedBackend ||
-      !(yield* checkpointStore.isRepository({ cwd, backend }))
-    ) {
-      return undefined;
+    const configuredBackend = resolveProjectCheckpointBackend({
+      projectKind: input.project.kind,
+      boundBackend: input.project.vcs?.binding?.backend,
+      selectedBackend,
+    });
+    const candidateBackends: ReadonlyArray<VcsBackend> =
+      input.project.kind === "studio" && input.checkpointRef
+        ? [selectedBackend, selectedBackend === "git" ? "jj" : "git"]
+        : configuredBackend
+          ? [configuredBackend]
+          : [];
+    for (const backend of candidateBackends) {
+      if (!(yield* checkpointStore.isRepository({ cwd, backend }))) {
+        continue;
+      }
+      if (
+        input.checkpointRef &&
+        !(yield* checkpointStore.hasCheckpointRef({
+          cwd,
+          backend,
+          checkpointRef: input.checkpointRef,
+        }))
+      ) {
+        continue;
+      }
+      return { cwd, backend } satisfies {
+        readonly cwd: string;
+        readonly backend: VcsBackend;
+      };
     }
-    return { cwd, backend } satisfies { readonly cwd: string; readonly backend: VcsBackend };
+    return undefined;
   });
 
   // Shared tail for both capture paths: creates the git checkpoint ref, diffs
@@ -922,23 +947,6 @@ const make = Effect.gen(function* () {
     }
 
     const project = yield* getProjectShell(thread.projectId);
-    const checkpointWorkspace = project
-      ? yield* resolveCheckpointWorkspace({
-          threadId: event.payload.threadId,
-          thread,
-          project,
-          preferSessionRuntime: true,
-        })
-      : undefined;
-    if (!checkpointWorkspace) {
-      yield* appendRevertFailureActivity({
-        threadId: event.payload.threadId,
-        turnCount: event.payload.turnCount,
-        detail: "No configured VCS workspace is available for checkpoint restore.",
-        createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
-      return;
-    }
 
     if (event.payload.scope === "files") {
       const isUndoableCheckpoint = (checkpoint: (typeof thread.checkpoints)[number]) =>
@@ -953,6 +961,24 @@ const make = Effect.gen(function* () {
           threadId: event.payload.threadId,
           turnCount: event.payload.turnCount,
           detail: `File changes for turn ${event.payload.turnCount} are unavailable or already undone.`,
+          createdAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+        return;
+      }
+      const checkpointWorkspace = project
+        ? yield* resolveCheckpointWorkspace({
+            threadId: event.payload.threadId,
+            thread,
+            project,
+            preferSessionRuntime: true,
+            checkpointRef: targetCheckpoint.checkpointRef,
+          })
+        : undefined;
+      if (!checkpointWorkspace) {
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail: "No VCS workspace contains the selected checkpoint.",
           createdAt: now,
         }).pipe(Effect.catch(() => Effect.void));
         return;
@@ -1113,6 +1139,24 @@ const make = Effect.gen(function* () {
       }).pipe(Effect.catch(() => Effect.void));
       return;
     }
+    const checkpointWorkspace = project
+      ? yield* resolveCheckpointWorkspace({
+          threadId: event.payload.threadId,
+          thread,
+          project,
+          preferSessionRuntime: true,
+          checkpointRef: targetCheckpointRef,
+        })
+      : undefined;
+    if (!checkpointWorkspace) {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail: "No VCS workspace contains the selected checkpoint.",
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
 
     const restored = yield* checkpointStore.restoreCheckpoint({
       ...checkpointWorkspace,
@@ -1247,16 +1291,20 @@ const make = Effect.gen(function* () {
     }
   });
 
-  const processInput = (
-    input: ReactorInput,
-  ): Effect.Effect<void, CheckpointStoreError | OrchestrationDispatchError, never> =>
-    input.source === "domain" ? processDomainEvent(input.event) : processRuntimeEvent(input.event);
+  const processInput = (input: ReactorInput) =>
+    Effect.gen(function* () {
+      if (input.source === "domain") {
+        yield* processDomainEvent(input.event);
+      } else {
+        yield* processRuntimeEvent(input.event);
+      }
+    });
 
   const processInputSafely = (input: ReactorInput) =>
     processInput(input).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.failCause(cause);
+          return Effect.interrupt;
         }
         return Effect.logWarning("checkpoint reactor failed to process input", {
           source: input.source,

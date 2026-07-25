@@ -1419,14 +1419,8 @@ export const makeGitManager = Effect.gen(function* () {
         ...pullRequest,
         ...toPullRequestHeadRemoteInfo(pullRequestSummary),
       } as const;
-      const branch = resolvePullRequestWorktreeLocalBranchName(
-        pullRequestWithRemoteInfo,
-      );
-      yield* materializePullRequestHeadBranch(
-        input.cwd,
-        pullRequestWithRemoteInfo,
-        branch,
-      );
+      const branch = resolvePullRequestWorktreeLocalBranchName(pullRequestWithRemoteInfo);
+      yield* materializePullRequestHeadBranch(input.cwd, pullRequestWithRemoteInfo, branch);
       return { pullRequest, branch };
     });
 

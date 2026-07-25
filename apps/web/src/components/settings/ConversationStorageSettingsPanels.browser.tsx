@@ -51,7 +51,10 @@ vi.mock("~/store", () => ({
     }),
 }));
 
-import { ArchivedSettingsPanel, WorkspacesSettingsPanel } from "./ConversationStorageSettingsPanels";
+import {
+  ArchivedSettingsPanel,
+  WorkspacesSettingsPanel,
+} from "./ConversationStorageSettingsPanels";
 
 function thread(overrides: Record<string, unknown>) {
   return {

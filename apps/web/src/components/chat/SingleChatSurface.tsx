@@ -681,6 +681,7 @@ export function SingleChatSurface(props: {
           <Suspense fallback={<PanelStateMessage>Loading pull request...</PanelStateMessage>}>
             <PullRequestDockPane
               pane={pane}
+              hostThreadId={props.threadId}
               pollingEnabled={context.isVisible}
               onClose={() => closePane(props.threadId, pane.id)}
             />

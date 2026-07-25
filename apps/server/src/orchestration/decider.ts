@@ -29,6 +29,7 @@ import {
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
+import { resolveProjectVcsState } from "../vcs/projectVcsState.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 import {
@@ -127,9 +128,7 @@ function requireVcsBindingChangeAllowed(input: {
     (thread) => thread.deletedAt === null,
   );
   const activeThread = liveThreads.find(
-    (thread) =>
-      threadHasInFlightTurn(thread) ||
-      threadHasCheckpointRevertInProgress(thread),
+    (thread) => threadHasInFlightTurn(thread) || threadHasCheckpointRevertInProgress(thread),
   );
   if (activeThread) {
     return Effect.fail(
@@ -801,6 +800,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         projectId: command.projectId,
       });
+      const existingProjectVcs = resolveProjectVcsState(existingProject);
       const nextProjectKind = command.kind ?? existingProject.kind ?? "project";
       const workspaceRootChanged =
         command.workspaceRoot !== undefined &&
@@ -809,7 +809,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       const invalidatesVcsBinding =
         workspaceRootChanged ||
-        (nextProjectKind !== "project" && existingProject.vcs.binding !== null);
+        (nextProjectKind !== "project" && existingProjectVcs.binding !== null);
       const requestedSpaceId =
         command.spaceId !== undefined
           ? command.spaceId
@@ -856,7 +856,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: "The legacy Chats container workspace root cannot be changed.",
         });
       }
-      if (invalidatesVcsBinding && existingProject.vcs.binding !== null) {
+      if (invalidatesVcsBinding && existingProjectVcs.binding !== null) {
         yield* requireVcsBindingChangeAllowed({
           readModel,
           command,
@@ -947,7 +947,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(invalidatesVcsBinding
             ? {
                 vcs: {
-                  epoch: existingProject.vcs.epoch + 1,
+                  epoch: existingProjectVcs.epoch + 1,
                   binding: null,
                 },
               }
@@ -1048,8 +1048,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           (currentVcs.binding !== null &&
             command.binding !== null &&
             (currentVcs.binding.repoRoot !== command.binding.repoRoot ||
-              currentVcs.binding.projectRelativePath !==
-                command.binding.projectRelativePath)),
+              currentVcs.binding.projectRelativePath !== command.binding.projectRelativePath)),
       });
       return threadReferenceEvents.length === 0
         ? bindingEvent

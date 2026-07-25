@@ -7,10 +7,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { summarizePatchTotals } from "~/lib/diffRendering";
-import {
-  vcsDiffQueryOptions,
-  type VcsQueryTarget,
-} from "~/lib/vcsReactQuery";
+import { vcsDiffQueryOptions, type VcsQueryTarget } from "~/lib/vcsReactQuery";
 import { useRepoDiffScopeStore } from "~/repoDiffScopeStore";
 
 export interface RepoDiffTotals {

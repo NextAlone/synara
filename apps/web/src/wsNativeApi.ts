@@ -517,8 +517,7 @@ export function createWsNativeApi(): NativeApi {
     },
     vcs: {
       setBackend: (input) => transport.request(WS_METHODS.vcsSetBackend, input),
-      configureProject: (input) =>
-        transport.request(WS_METHODS.vcsConfigureProject, input),
+      configureProject: (input) => transport.request(WS_METHODS.vcsConfigureProject, input),
       status: (input) => transport.request(WS_METHODS.vcsStatus, input),
       readDiff: (input) => transport.request(WS_METHODS.vcsReadDiff, input),
       listReferences: (input) => transport.request(WS_METHODS.vcsListReferences, input),
@@ -529,12 +528,9 @@ export function createWsNativeApi(): NativeApi {
       removeWorkspace: (input) => transport.request(WS_METHODS.vcsRemoveWorkspace, input),
       handoffThread: (input) => transport.request(WS_METHODS.vcsHandoffThread, input),
       pull: (input) => transport.request(WS_METHODS.vcsPull, input),
-      githubRepository: (input) =>
-        transport.request(WS_METHODS.vcsGithubRepository, input),
-      resolvePullRequest: (input) =>
-        transport.request(WS_METHODS.vcsResolvePullRequest, input),
-      pullRequestSnapshot: (input) =>
-        transport.request(WS_METHODS.vcsPullRequestSnapshot, input),
+      githubRepository: (input) => transport.request(WS_METHODS.vcsGithubRepository, input),
+      resolvePullRequest: (input) => transport.request(WS_METHODS.vcsResolvePullRequest, input),
+      pullRequestSnapshot: (input) => transport.request(WS_METHODS.vcsPullRequestSnapshot, input),
       preparePullRequestThread: (input) =>
         transport.request(WS_METHODS.vcsPreparePullRequestThread, input),
       runStackedAction: (input) =>

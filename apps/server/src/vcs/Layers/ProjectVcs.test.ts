@@ -10,16 +10,15 @@ import { Effect, Option } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import type { GitCoreShape } from "../../git/Services/GitCore.ts";
+import { GitCommandError } from "../../git/Errors.ts";
 import type { GitHubCliShape } from "../../git/Services/GitHubCli.ts";
 import type { GitManagerShape } from "../../git/Services/GitManager.ts";
 import type { TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import type { OrchestrationEngineShape } from "../../orchestration/Services/OrchestrationEngine.ts";
 import type { ProjectionSnapshotQueryShape } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { JjCoreShape } from "../Services/JjCore.ts";
-import {
-  makeProjectVcsWith,
-  type ProjectVcsDependencies,
-} from "./ProjectVcs.ts";
+import { JjCommandError } from "../Errors.ts";
+import { makeProjectVcsWith, type ProjectVcsDependencies } from "./ProjectVcs.ts";
 
 const PROJECT_ID = ProjectId.makeUnsafe("project-vcs-service");
 const THREAD_ID = ThreadId.makeUnsafe("thread-vcs-service");
@@ -55,12 +54,12 @@ function dependencies(input: {
   gitHubCli?: Partial<GitHubCliShape>;
   textGeneration?: Partial<TextGenerationShape>;
   jj?: Partial<JjCoreShape>;
+  listManagedGitWorkspacePaths?: () => Effect.Effect<ReadonlyArray<string>, Error>;
   pathExists?: (path: string) => Promise<boolean>;
   removeDirectory?: (path: string) => Promise<void>;
 }) {
   const dispatched: unknown[] = [];
-  let vcsBackend =
-    input.vcsBackend ?? input.project.vcs.binding?.backend ?? "git";
+  let vcsBackend = input.vcsBackend ?? input.project.vcs?.binding?.backend ?? "git";
   const setVcsBackend = vi.fn((backend: VcsBackend) =>
     Effect.sync(() => {
       vcsBackend = backend;
@@ -100,8 +99,7 @@ function dependencies(input: {
     setVcsBackend,
     value: {
       git: {
-        execute: () =>
-          Effect.succeed({ code: 1, stdout: "", stderr: "" }),
+        execute: () => Effect.succeed({ code: 1, stdout: "", stderr: "" }),
         readConfigValue: () => Effect.succeed(null),
         withMutation: (_cwd, effect) => effect,
         ...(input.git ?? {}),
@@ -124,6 +122,8 @@ function dependencies(input: {
       now: () => NOW,
       makeCommandId: () => CommandId.makeUnsafe("cmd-project-vcs-service"),
       workspacesDir: "/managed",
+      listManagedGitWorkspacePaths:
+        input.listManagedGitWorkspacePaths ?? (() => Effect.succeed([])),
       pathExists: input.pathExists ?? (async () => false),
       makeDirectory: async () => undefined,
       removeDirectory: input.removeDirectory ?? (async () => undefined),
@@ -210,6 +210,72 @@ describe("ProjectVcs", () => {
     expect(deps.setVcsBackend).not.toHaveBeenCalled();
   });
 
+  it("blocks a Git backend switch while an unprojected managed workspace exists", async () => {
+    const boundProject = project({
+      epoch: 3,
+      binding: { ...jjBinding, backend: "git" },
+    });
+    const deps = dependencies({
+      project: boundProject,
+      vcsBackend: "git",
+      listManagedGitWorkspacePaths: () => Effect.succeed(["/managed/pending/synara"]),
+      commandReadModel: {
+        snapshotSequence: 1,
+        spaces: [],
+        projects: [{ ...boundProject, deletedAt: null }],
+        threads: [],
+        updatedAt: NOW,
+      },
+    });
+
+    await expect(
+      Effect.runPromise(makeProjectVcsWith(deps.value).setBackend({ backend: "jj" })),
+    ).rejects.toThrow("Remove 1 Synara-managed workspace");
+    expect(deps.setVcsBackend).not.toHaveBeenCalled();
+  });
+
+  it("blocks a JJ backend switch while an unprojected managed workspace exists", async () => {
+    const boundProject = project({
+      epoch: 3,
+      binding: jjBinding,
+    });
+    const deps = dependencies({
+      project: boundProject,
+      vcsBackend: "jj",
+      jj: {
+        listWorkspaces: () =>
+          Effect.succeed([
+            {
+              name: "default",
+              registration: {
+                kind: "present" as const,
+                root: "/repo",
+              },
+            },
+            {
+              name: "pending",
+              registration: {
+                kind: "present" as const,
+                root: "/managed/pending/synara",
+              },
+            },
+          ]),
+      },
+      commandReadModel: {
+        snapshotSequence: 1,
+        spaces: [],
+        projects: [{ ...boundProject, deletedAt: null }],
+        threads: [],
+        updatedAt: NOW,
+      },
+    });
+
+    await expect(
+      Effect.runPromise(makeProjectVcsWith(deps.value).setBackend({ backend: "git" })),
+    ).rejects.toThrow("Remove 1 Synara-managed workspace");
+    expect(deps.setVcsBackend).not.toHaveBeenCalled();
+  });
+
   it("treats an unbound project with an existing workspace as affected", async () => {
     const unboundProject = project({ epoch: 0, binding: null });
     const deps = dependencies({
@@ -240,6 +306,42 @@ describe("ProjectVcs", () => {
     expect(deps.setVcsBackend).not.toHaveBeenCalled();
   });
 
+  it("blocks a global backend switch while a Studio turn is active", async () => {
+    const studioProject = {
+      ...project({ epoch: 0, binding: null }, "/studio"),
+      kind: "studio" as const,
+    };
+    const deps = dependencies({
+      project: studioProject,
+      vcsBackend: "git",
+      commandReadModel: {
+        snapshotSequence: 1,
+        spaces: [],
+        projects: [{ ...studioProject, deletedAt: null }],
+        threads: [
+          {
+            id: THREAD_ID,
+            projectId: PROJECT_ID,
+            deletedAt: null,
+            worktreePath: null,
+            session: {
+              status: "running",
+              activeTurnId: "turn-studio",
+            },
+            latestTurn: null,
+            activities: [],
+          },
+        ],
+        updatedAt: NOW,
+      },
+    });
+
+    await expect(
+      Effect.runPromise(makeProjectVcsWith(deps.value).setBackend({ backend: "jj" })),
+    ).rejects.toThrow("has an active turn");
+    expect(deps.setVcsBackend).not.toHaveBeenCalled();
+  });
+
   it("rejects project operations whose persisted binding differs from the global backend", async () => {
     const deps = dependencies({
       project: project({ epoch: 3, binding: jjBinding }),
@@ -257,9 +359,7 @@ describe("ProjectVcs", () => {
   });
 
   it("detects and persists only the explicitly selected backend", async () => {
-    const gitExecute = vi.fn(() =>
-      Effect.succeed({ code: 0, stdout: "/repo\n", stderr: "" }),
-    );
+    const gitExecute = vi.fn(() => Effect.succeed({ code: 0, stdout: "/repo\n", stderr: "" }));
     const jjDetect = vi.fn(() =>
       Effect.succeed({
         workspaceRoot: "/repo",
@@ -348,8 +448,7 @@ describe("ProjectVcs", () => {
       project: project({ epoch: 0, binding: null }),
       vcsBackend: "jj",
       git: {
-        execute: () =>
-          Effect.succeed({ code: 0, stdout: "/repo\n", stderr: "" }),
+        execute: () => Effect.succeed({ code: 0, stdout: "/repo\n", stderr: "" }),
       },
       jj: { detectRepository, initRepository },
     });
@@ -369,12 +468,8 @@ describe("ProjectVcs", () => {
   it("preserves Git initialization through the first backend selection", async () => {
     const execute = vi
       .fn()
-      .mockReturnValueOnce(
-        Effect.succeed({ code: 1, stdout: "", stderr: "not a repository" }),
-      )
-      .mockReturnValueOnce(
-        Effect.succeed({ code: 0, stdout: "/repo\n", stderr: "" }),
-      );
+      .mockReturnValueOnce(Effect.succeed({ code: 1, stdout: "", stderr: "not a repository" }))
+      .mockReturnValueOnce(Effect.succeed({ code: 0, stdout: "/repo\n", stderr: "" }));
     const initRepo = vi.fn(() => Effect.void);
     const deps = dependencies({
       project: project({ epoch: 0, binding: null }, "/repo"),
@@ -410,8 +505,7 @@ describe("ProjectVcs", () => {
     const deps = dependencies({
       project: project({ epoch: 0, binding: null }),
       git: {
-        execute: () =>
-          Effect.succeed({ code: 1, stdout: "", stderr: "not a repository" }),
+        execute: () => Effect.succeed({ code: 1, stdout: "", stderr: "not a repository" }),
         initRepo,
         withMutation: (_cwd, effect) => effect,
       },
@@ -426,9 +520,7 @@ describe("ProjectVcs", () => {
           expectedEpoch: 0,
         }),
       ),
-    ).rejects.toThrow(
-      "already inside a JJ workspace without a Git working tree",
-    );
+    ).rejects.toThrow("already inside a JJ workspace without a Git working tree");
     expect(initRepo).not.toHaveBeenCalled();
     expect(deps.dispatched).toHaveLength(0);
   });
@@ -456,8 +548,7 @@ describe("ProjectVcs", () => {
         initRepository,
       },
       git: {
-        execute: () =>
-          Effect.succeed({ code: 0, stdout: "/repo\n", stderr: "" }),
+        execute: () => Effect.succeed({ code: 0, stdout: "/repo\n", stderr: "" }),
       },
     });
     const service = makeProjectVcsWith(deps.value);
@@ -603,6 +694,53 @@ describe("ProjectVcs", () => {
     expect(deps.setVcsBackend).toHaveBeenCalledOnce();
   });
 
+  it("does not switch the global backend while project configuration is in flight", async () => {
+    let releaseDetection: (() => void) | undefined;
+    let markDetectionStarted: (() => void) | undefined;
+    const detectionStarted = new Promise<void>((resolve) => {
+      markDetectionStarted = resolve;
+    });
+    const detectGit = vi.fn(() =>
+      Effect.promise(
+        () =>
+          new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+            releaseDetection = () => resolve({ code: 0, stdout: "/repo\n", stderr: "" });
+            markDetectionStarted?.();
+          }),
+      ),
+    );
+    const unboundProject = project({ epoch: 0, binding: null }, "/repo");
+    const deps = dependencies({
+      project: unboundProject,
+      vcsBackend: "git",
+      commandReadModel: {
+        snapshotSequence: 1,
+        spaces: [],
+        projects: [{ ...unboundProject, deletedAt: null }],
+        threads: [],
+        updatedAt: NOW,
+      },
+      git: { execute: detectGit },
+    });
+    const service = makeProjectVcsWith(deps.value);
+
+    const configure = Effect.runPromise(
+      service.configureProject({
+        projectId: PROJECT_ID,
+        expectedEpoch: 0,
+      }),
+    );
+    await detectionStarted;
+    const switchBackend = Effect.runPromise(service.setBackend({ backend: "jj" }));
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(deps.setVcsBackend).not.toHaveBeenCalled();
+
+    releaseDetection?.();
+    await configure;
+    await switchBackend;
+    expect(deps.setVcsBackend).toHaveBeenCalledWith("jj");
+  });
+
   it("derives a thread workspace cwd and routes status only to JJ", async () => {
     const jjStatus = vi.fn(() =>
       Effect.succeed({
@@ -674,7 +812,159 @@ describe("ProjectVcs", () => {
     });
   });
 
-  it("uses a persisted local working directory as the thread VCS cwd", async () => {
+  it("derives an ephemeral Studio target from the persisted reference folder", async () => {
+    const gitExecute = vi.fn(() =>
+      Effect.succeed({
+        code: 0,
+        stdout: "/workspace/repo\n",
+        stderr: "",
+      }),
+    );
+    const deps = dependencies({
+      project: {
+        ...project({ epoch: 0, binding: null }, "/studio"),
+        kind: "studio",
+      },
+      vcsBackend: "git",
+      thread: {
+        id: THREAD_ID,
+        projectId: PROJECT_ID,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        workingDirectory: "/workspace/repo/folder",
+      },
+      git: { execute: gitExecute },
+    });
+    const service = makeProjectVcsWith(deps.value);
+
+    const result = await Effect.runPromise(
+      service.resolveTarget({
+        projectId: PROJECT_ID,
+        threadId: THREAD_ID,
+        expectedEpoch: 0,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      backend: "git",
+      epoch: 0,
+      binding: {
+        backend: "git",
+        repoRoot: "/workspace/repo",
+        projectRelativePath: "folder",
+      },
+      cwd: "/workspace/repo/folder",
+    });
+    expect(gitExecute).toHaveBeenCalledWith({
+      operation: "ProjectVcs.detectGitRepository",
+      cwd: "/workspace/repo/folder",
+      args: ["rev-parse", "--show-toplevel"],
+      allowNonZeroExit: true,
+    });
+  });
+
+  it("prepares a Studio pull request in its persisted reference folder", async () => {
+    const preparePullRequestThread = vi.fn(() =>
+      Effect.succeed({
+        pullRequest,
+        branch: "feature/studio-pr",
+        worktreePath: null,
+      }),
+    );
+    const deps = dependencies({
+      project: {
+        ...project({ epoch: 0, binding: null }, "/studio"),
+        kind: "studio",
+      },
+      vcsBackend: "git",
+      thread: {
+        id: THREAD_ID,
+        projectId: PROJECT_ID,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        workingDirectory: "/workspace/repo/folder",
+      },
+      git: {
+        execute: () =>
+          Effect.succeed({
+            code: 0,
+            stdout: "/workspace/repo\n",
+            stderr: "",
+          }),
+      },
+      gitManager: { preparePullRequestThread },
+    });
+    const service = makeProjectVcsWith(deps.value);
+
+    const result = await Effect.runPromise(
+      service.preparePullRequestThread({
+        projectId: PROJECT_ID,
+        threadId: THREAD_ID,
+        expectedEpoch: 0,
+        reference: "#42",
+        mode: "local",
+      }),
+    );
+
+    expect(preparePullRequestThread).toHaveBeenCalledWith({
+      cwd: "/workspace/repo/folder",
+      reference: "#42",
+      mode: "local",
+    });
+    expect(result).toEqual({
+      backend: "git",
+      epoch: 0,
+      pullRequest,
+      branch: "feature/studio-pr",
+      workspacePath: null,
+    });
+  });
+
+  it("rejects managed PR workspaces for Studio reference folders", async () => {
+    const preparePullRequestThread = vi.fn();
+    const deps = dependencies({
+      project: {
+        ...project({ epoch: 0, binding: null }, "/studio"),
+        kind: "studio",
+      },
+      vcsBackend: "git",
+      thread: {
+        id: THREAD_ID,
+        projectId: PROJECT_ID,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        workingDirectory: "/workspace/repo/folder",
+      },
+      git: {
+        execute: () =>
+          Effect.succeed({
+            code: 0,
+            stdout: "/workspace/repo\n",
+            stderr: "",
+          }),
+      },
+      gitManager: { preparePullRequestThread },
+    });
+    const service = makeProjectVcsWith(deps.value);
+
+    await expect(
+      Effect.runPromise(
+        service.preparePullRequestThread({
+          projectId: PROJECT_ID,
+          threadId: THREAD_ID,
+          expectedEpoch: 0,
+          reference: "#42",
+          mode: "workspace",
+        }),
+      ),
+    ).rejects.toThrow("cannot create a managed workspace");
+    expect(preparePullRequestThread).not.toHaveBeenCalled();
+  });
+
+  it("does not let an ordinary thread working directory bypass its project binding", async () => {
     const deps = dependencies({
       project: project({ epoch: 3, binding: jjBinding }),
       thread: {
@@ -683,7 +973,7 @@ describe("ProjectVcs", () => {
         envMode: "local",
         branch: null,
         worktreePath: null,
-        workingDirectory: "/workspace/studio-folder",
+        workingDirectory: "/outside/repository",
       },
     });
     const service = makeProjectVcsWith(deps.value);
@@ -696,7 +986,7 @@ describe("ProjectVcs", () => {
       }),
     );
 
-    expect(result.cwd).toBe("/workspace/studio-folder");
+    expect(result.cwd).toBe("/repo/app");
   });
 
   it("uses the thread bookmark to disambiguate JJ bookmarks at the same revision", async () => {
@@ -883,25 +1173,22 @@ describe("ProjectVcs", () => {
   });
 
   it("reports mapped fork status and resolves its owner-qualified pull request", async () => {
-    const listOpenPullRequests = vi.fn(
-      ({ headSelector }: { headSelector: string }) =>
-        Effect.succeed(
-          headSelector === "alice:main"
-            ? [
-                {
-                  number: 42,
-                  title: "Fork main",
-                  url: "https://github.com/example/synara/pull/42",
-                  baseRefName: "main",
-                  headRefName: "main",
-                },
-              ]
-            : [],
-        ),
+    const listOpenPullRequests = vi.fn(({ headSelector }: { headSelector: string }) =>
+      Effect.succeed(
+        headSelector === "alice:main"
+          ? [
+              {
+                number: 42,
+                title: "Fork main",
+                url: "https://github.com/example/synara/pull/42",
+                baseRefName: "main",
+                headRefName: "main",
+              },
+            ]
+          : [],
+      ),
     );
-    const compareBookmarkToRemote = vi.fn(() =>
-      Effect.succeed({ aheadCount: 1, behindCount: 0 }),
-    );
+    const compareBookmarkToRemote = vi.fn(() => Effect.succeed({ aheadCount: 1, behindCount: 0 }));
     const deps = dependencies({
       project: project({ epoch: 3, binding: jjBinding }),
       git: {
@@ -999,9 +1286,7 @@ describe("ProjectVcs", () => {
   });
 
   it("uses the default remote bookmark as a JJ branch-diff base", async () => {
-    const readRangeDiff = vi.fn(() =>
-      Effect.succeed({ patch: "diff --git", files: [] }),
-    );
+    const readRangeDiff = vi.fn(() => Effect.succeed({ patch: "diff --git", files: [] }));
     const deps = dependencies({
       project: project({ epoch: 2, binding: jjBinding }),
       jj: {
@@ -1068,27 +1353,17 @@ describe("ProjectVcs", () => {
       epoch: 2,
       patch: "diff --git",
     });
-    expect(readRangeDiff).toHaveBeenCalledWith(
-      "/repo/app",
-      "main@origin",
-      "@",
-    );
+    expect(readRangeDiff).toHaveBeenCalledWith("/repo/app", "main@origin", "@");
   });
 
   it("uses the mapped fork head as a JJ branch-diff base", async () => {
-    const readRangeDiff = vi.fn(() =>
-      Effect.succeed({ patch: "diff --git", files: [] }),
-    );
+    const readRangeDiff = vi.fn(() => Effect.succeed({ patch: "diff --git", files: [] }));
     const deps = dependencies({
       project: project({ epoch: 2, binding: jjBinding }),
       git: {
         readConfigValue: (_cwd, key) =>
           Effect.succeed(
-            key.endsWith(".remote")
-              ? "alice"
-              : key.endsWith(".merge")
-                ? "refs/heads/main"
-                : null,
+            key.endsWith(".remote") ? "alice" : key.endsWith(".merge") ? "refs/heads/main" : null,
           ),
       },
       jj: {
@@ -1149,11 +1424,7 @@ describe("ProjectVcs", () => {
       }),
     );
 
-    expect(readRangeDiff).toHaveBeenCalledWith(
-      "/repo/app",
-      "main@alice",
-      "@",
-    );
+    expect(readRangeDiff).toHaveBeenCalledWith("/repo/app", "main@alice", "@");
   });
 
   it("rejects staged diff for JJ instead of falling back to Git", async () => {
@@ -1362,12 +1633,12 @@ describe("ProjectVcs", () => {
       }),
     );
 
-    expect(
-      references.references.find((reference) => reference.name === "main"),
-    ).toMatchObject({ workspacePath: null });
-    expect(
-      references.references.find((reference) => reference.name === "feature"),
-    ).toMatchObject({ workspacePath: "/workspaces/feature/app" });
+    expect(references.references.find((reference) => reference.name === "main")).toMatchObject({
+      workspacePath: null,
+    });
+    expect(references.references.find((reference) => reference.name === "feature")).toMatchObject({
+      workspacePath: "/workspaces/feature/app",
+    });
   });
 
   it("resolves a JJ workspace source in the caller workspace without invoking Git", async () => {
@@ -1451,6 +1722,41 @@ describe("ProjectVcs", () => {
     });
   });
 
+  it("removes a generated parent when Git workspace creation fails", async () => {
+    const removeDirectory = vi.fn(async () => undefined);
+    const deps = dependencies({
+      project: project({
+        epoch: 5,
+        binding: { ...jjBinding, backend: "git" },
+      }),
+      git: {
+        createDetachedWorktree: () =>
+          Effect.fail(
+            new GitCommandError({
+              operation: "test",
+              command: "worktree add",
+              cwd: "/repo/app",
+              detail: "failed",
+            }),
+          ),
+      },
+      removeDirectory,
+    });
+
+    await expect(
+      Effect.runPromise(
+        makeProjectVcsWith(deps.value).createWorkspace({
+          projectId: PROJECT_ID,
+          expectedEpoch: 5,
+          sourceRef: "HEAD",
+          path: null,
+          copyChangesFromCurrent: false,
+        }),
+      ),
+    ).rejects.toThrow("worktree add");
+    expect(removeDirectory).toHaveBeenCalledWith("/managed/abc123");
+  });
+
   it("rejects a JJ copy request whose source is not the current change", async () => {
     const createWorkspace = vi.fn();
     const removeDirectory = vi.fn(async () => undefined);
@@ -1515,7 +1821,7 @@ describe("ProjectVcs", () => {
       project: project({ epoch: 7, binding: jjBinding }),
       git: {
         createBranch: gitCreateBranch,
-        checkout: gitCheckout,
+        checkoutBranch: gitCheckout,
       },
       jj: {
         createBookmark,
@@ -1593,11 +1899,7 @@ describe("ProjectVcs", () => {
     });
 
     expect(createBookmark).toHaveBeenCalledWith("/repo/app", "feature", "@-");
-    expect(pushBookmark).toHaveBeenCalledWith(
-      "/repo/app",
-      "feature",
-      "origin",
-    );
+    expect(pushBookmark).toHaveBeenCalledWith("/repo/app", "feature", "origin");
     expect(startNewChange).not.toHaveBeenCalled();
     expect(gitCreateBranch).not.toHaveBeenCalled();
     expect(gitCheckout).not.toHaveBeenCalled();
@@ -1728,10 +2030,7 @@ describe("ProjectVcs", () => {
       epoch: 7,
       ref: "remote-feature",
     });
-    expect(trackBookmark).toHaveBeenCalledWith(
-      "/repo/app",
-      "remote-feature@origin",
-    );
+    expect(trackBookmark).toHaveBeenCalledWith("/repo/app", "remote-feature@origin");
     expect(startNewChange).toHaveBeenCalledWith(
       "/repo/app",
       "remote-feature",
@@ -1948,11 +2247,7 @@ describe("ProjectVcs", () => {
       }),
     );
 
-    expect(createBookmark).toHaveBeenCalledWith(
-      "/repo/app",
-      "feature",
-      "source-commit",
-    );
+    expect(createBookmark).toHaveBeenCalledWith("/repo/app", "feature", "source-commit");
     expect(startNewChange).toHaveBeenCalledWith(
       "/repo/app",
       "source-commit",
@@ -1971,12 +2266,117 @@ describe("ProjectVcs", () => {
     });
   });
 
-  it("merges a JJ thread workspace into local before forgetting it", async () => {
-    const execute = vi.fn(() =>
-      Effect.succeed({ code: 0, stdout: "", stderr: "" }),
+  it("removes a new JJ workspace when the local continuation cannot advance", async () => {
+    const startNewChange = vi.fn(() =>
+      Effect.fail(
+        new JjCommandError({
+          operation: "test",
+          command: "jj new",
+          cwd: "/repo/app",
+          detail: "failed to advance local workspace",
+        }),
+      ),
     );
     const forgetWorkspace = vi.fn(() => Effect.void);
     const removeDirectory = vi.fn(async () => undefined);
+    const status = (cwd: string) =>
+      Effect.succeed({
+        repository: {
+          workspaceRoot: cwd,
+          repositoryStorePath: "/store",
+          gitStorePath: "/repo",
+        },
+        revision:
+          cwd === "/repo/app"
+            ? {
+                changeId: "source-change",
+                commitId: "source-commit",
+                description: "wip: source",
+              }
+            : {
+                changeId: "workspace-change",
+                commitId: "workspace-commit",
+                description: "wip: workspace",
+              },
+        currentBookmark: null,
+        upstreamBookmark: null,
+        aheadCount: 0,
+        behindCount: 0,
+        bookmarks: [],
+        files: [],
+        hasChanges: cwd === "/repo/app",
+        hasConflicts: false,
+      });
+    const deps = dependencies({
+      project: project({ epoch: 8, binding: jjBinding }),
+      thread: {
+        id: THREAD_ID,
+        projectId: PROJECT_ID,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        associatedWorktreePath: null,
+        associatedWorktreeBranch: null,
+        associatedWorktreeRef: null,
+      },
+      jj: {
+        status,
+        createWorkspace: (workspaceInput) =>
+          Effect.succeed({
+            name: workspaceInput.workspaceName,
+            path: workspaceInput.workspacePath,
+            revision: {
+              changeId: "workspace-change",
+              commitId: "workspace-commit",
+              description: workspaceInput.message,
+            },
+          }),
+        getWorkspaceRegistration: () => Effect.succeed({ kind: "absent" as const }),
+        listWorkspaces: () =>
+          Effect.succeed([
+            {
+              name: "synara-abc123",
+              registration: {
+                kind: "present" as const,
+                root: "/managed/abc123/synara",
+              },
+            },
+          ]),
+        forgetWorkspace,
+        startNewChange,
+      },
+      removeDirectory,
+    });
+
+    await expect(
+      Effect.runPromise(
+        makeProjectVcsWith(deps.value).handoffThread({
+          commandId: CommandId.makeUnsafe("cmd-jj-handoff-inspection-failure"),
+          projectId: PROJECT_ID,
+          threadId: THREAD_ID,
+          expectedEpoch: 8,
+          targetMode: "workspace",
+          preferredLocalReference: null,
+          preferredWorkspaceBaseReference: null,
+          preferredNewWorkspaceName: null,
+        }),
+      ),
+    ).rejects.toThrow("failed to advance local workspace");
+    expect(startNewChange).toHaveBeenCalledWith(
+      "/repo/app",
+      "source-commit",
+      "wip: Synara local workspace continuation",
+    );
+    expect(forgetWorkspace).toHaveBeenCalledWith("/repo", "synara-abc123");
+    expect(removeDirectory).toHaveBeenCalledWith("/managed/abc123/synara");
+  });
+
+  it("keeps a successful JJ local handoff durable when workspace cleanup fails", async () => {
+    const execute = vi.fn(() => Effect.succeed({ code: 0, stdout: "", stderr: "" }));
+    const forgetWorkspace = vi.fn(() => Effect.void);
+    const removeDirectory = vi.fn(async () => {
+      throw new Error("permission denied");
+    });
     const deps = dependencies({
       project: project({ epoch: 9, binding: jjBinding }),
       thread: {
@@ -2077,6 +2477,7 @@ describe("ProjectVcs", () => {
       associatedWorkspacePath: "/workspaces/feature/app",
       changesTransferred: true,
       conflictsDetected: false,
+      message: expect.stringContaining("could not be removed automatically"),
     });
   });
 
@@ -2121,9 +2522,7 @@ describe("ProjectVcs", () => {
   });
 
   it("resolves a pull request through the JJ Git backing store", async () => {
-    const resolvePullRequest = vi.fn(() =>
-      Effect.succeed({ pullRequest }),
-    );
+    const resolvePullRequest = vi.fn(() => Effect.succeed({ pullRequest }));
     const deps = dependencies({
       project: project({ epoch: 10, binding: jjBinding }),
       gitManager: { resolvePullRequest },
@@ -2247,13 +2646,7 @@ describe("ProjectVcs", () => {
       "feature/jj",
       "wip: Synara pull request #42",
     );
-    expect(operations).toEqual([
-      "materialize",
-      "import",
-      "bookmarks",
-      "revision",
-      "new",
-    ]);
+    expect(operations).toEqual(["materialize", "import", "bookmarks", "revision", "new"]);
     expect(result).toEqual({
       backend: "jj",
       epoch: 11,
@@ -2282,12 +2675,7 @@ describe("ProjectVcs", () => {
       project: project({ epoch: 11, binding: jjBinding }),
       git: {
         readConfigValue: (_cwd, key) =>
-          Effect.succeed(
-            key ===
-              "branch.synara/pr-42/feature-fork.remote"
-              ? "alice"
-              : null,
-          ),
+          Effect.succeed(key === "branch.synara/pr-42/feature-fork.remote" ? "alice" : null),
       },
       gitManager: {
         materializePullRequestHead: () =>
@@ -2364,14 +2752,8 @@ describe("ProjectVcs", () => {
       "feature/fork",
       "synara/pr-42/feature-fork",
     );
-    expect(trackBookmark).toHaveBeenCalledWith(
-      "/repo/app",
-      "feature/fork@alice",
-    );
-    expect(deleteBookmark).toHaveBeenCalledWith(
-      "/repo/app",
-      "synara/pr-42/feature-fork",
-    );
+    expect(trackBookmark).toHaveBeenCalledWith("/repo/app", "feature/fork@alice");
+    expect(deleteBookmark).toHaveBeenCalledWith("/repo/app", "synara/pr-42/feature-fork");
     expect(startNewChange).toHaveBeenCalledWith(
       "/repo/app",
       "feature/fork",
@@ -2400,8 +2782,7 @@ describe("ProjectVcs", () => {
       ],
       pathExists: async (path) => path === "/workspaces/pr/app",
       gitManager: {
-        materializePullRequestHead: () =>
-          Effect.succeed({ pullRequest, branch: "feature/jj" }),
+        materializePullRequestHead: () => Effect.succeed({ pullRequest, branch: "feature/jj" }),
       },
       jj: {
         detectRepository: () =>
@@ -2508,9 +2889,7 @@ describe("ProjectVcs", () => {
     const status = vi
       .fn()
       .mockReturnValueOnce(Effect.succeed(baseStatus))
-      .mockReturnValueOnce(
-        Effect.succeed({ ...baseStatus, behindCount: 2 }),
-      );
+      .mockReturnValueOnce(Effect.succeed({ ...baseStatus, behindCount: 2 }));
     const fetchGit = vi.fn(() => Effect.void);
     const advanceBookmark = vi.fn(() => Effect.void);
     const gitPull = vi.fn();
@@ -2529,12 +2908,7 @@ describe("ProjectVcs", () => {
     );
 
     expect(fetchGit).toHaveBeenCalledWith("/repo/app", "origin");
-    expect(advanceBookmark).toHaveBeenCalledWith(
-      "/repo/app",
-      "feature",
-      "origin",
-      "feature",
-    );
+    expect(advanceBookmark).toHaveBeenCalledWith("/repo/app", "feature", "origin", "feature");
     expect(gitPull).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       backend: "jj",

@@ -200,6 +200,7 @@ export function useKanbanBoard(): KanbanBoard {
       branch: draftThread.branch,
       envMode: draftThread.envMode,
       worktreePath: draftThread.worktreePath,
+      workingDirectory: draftThread.workingDirectory ?? null,
     });
   }
 

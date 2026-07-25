@@ -8,6 +8,7 @@ import type {
   GitStashInfoResult,
   NativeApi,
   ProjectId,
+  ProjectKind,
   ProjectVcsState,
   ThreadId,
   VcsBackend,
@@ -30,9 +31,7 @@ import {
   useTransition,
 } from "react";
 
-import {
-  invalidateGitQueries,
-} from "../lib/gitReactQuery";
+import { invalidateGitQueries } from "../lib/gitReactQuery";
 import {
   invalidateVcsQueries,
   makeVcsQueryTarget,
@@ -89,6 +88,7 @@ export type BranchSelectorVariant = "toolbar" | "panel";
 
 interface BranchToolbarBranchSelectorProps {
   projectId: ProjectId;
+  projectKind: ProjectKind;
   projectVcs: ProjectVcsState;
   vcsBackend: VcsBackend;
   activeThreadId: ThreadId | null;
@@ -96,6 +96,7 @@ interface BranchToolbarBranchSelectorProps {
   activeThreadBranch: string | null;
   activeWorktreePath: string | null;
   branchCwd: string | null;
+  threadWorkingDirectory: string | null;
   effectiveEnvMode: EnvMode;
   envLocked: boolean;
   hasServerThread: boolean;
@@ -357,10 +358,7 @@ function getBranchTriggerLabel(input: {
   return resolvedActiveBranch;
 }
 
-function getCreateBranchActionLabel(
-  trimmedBranchQuery: string,
-  isJjBackend: boolean,
-): string {
+function getCreateBranchActionLabel(trimmedBranchQuery: string, isJjBackend: boolean): string {
   return trimmedBranchQuery.length > 0
     ? `Create and switch to "${trimmedBranchQuery}"`
     : `Create and switch to a new ${isJjBackend ? "bookmark" : "branch"}...`;
@@ -387,6 +385,7 @@ function getCurrentBranchChangeSummary(
 
 export function BranchToolbarBranchSelector({
   projectId,
+  projectKind,
   projectVcs,
   vcsBackend,
   activeThreadId,
@@ -394,6 +393,7 @@ export function BranchToolbarBranchSelector({
   activeThreadBranch,
   activeWorktreePath,
   branchCwd,
+  threadWorkingDirectory,
   effectiveEnvMode,
   envLocked,
   hasServerThread,
@@ -403,7 +403,6 @@ export function BranchToolbarBranchSelector({
   variant = "toolbar",
 }: BranchToolbarBranchSelectorProps) {
   const isPanel = variant === "panel";
-  const isJjBackend = projectVcs.binding?.backend === "jj";
   const queryClient = useQueryClient();
   const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false);
   const [isCreateBranchDialogOpen, setIsCreateBranchDialogOpen] = useState(false);
@@ -412,10 +411,13 @@ export function BranchToolbarBranchSelector({
   const deferredBranchQuery = useDeferredValue(branchQuery);
 
   const vcsTarget = makeVcsQueryTarget(
-    { id: projectId, vcs: projectVcs },
+    { id: projectId, kind: projectKind, vcs: projectVcs },
     hasServerThread ? activeThreadId : null,
     vcsBackend,
+    { threadWorkingDirectory },
   );
+  const activeBackend = vcsTarget.backend;
+  const isJjBackend = activeBackend === "jj";
   const branchesQuery = useQuery(vcsReferencesQueryOptions(vcsTarget));
   const branchStatusQuery = useQuery(vcsStatusQueryOptions(vcsTarget));
   const branches = useMemo(
@@ -456,7 +458,7 @@ export function BranchToolbarBranchSelector({
   const isSelectingWorktreeBase =
     effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath;
   const checkoutPullRequestItemValue =
-    projectVcs.binding && prReference && onCheckoutPullRequestRequest
+    activeBackend && prReference && onCheckoutPullRequestRequest
       ? `__checkout_pull_request__:${prReference}`
       : null;
   const canPrefillCreateBranch = !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
@@ -576,7 +578,7 @@ export function BranchToolbarBranchSelector({
 
   const selectBranch = (branch: GitBranch) => {
     const api = readNativeApi();
-    if (!api || !branchCwd || isBranchActionPending || !projectVcs.binding) return;
+    if (!api || !branchCwd || isBranchActionPending || !activeBackend) return;
 
     // In new-worktree mode, selecting a branch sets the base branch.
     if (isSelectingWorktreeBase) {
@@ -604,14 +606,15 @@ export function BranchToolbarBranchSelector({
     }
 
     const selectedBranchName = branch.isRemote
-      ? projectVcs.binding.backend === "jj"
+      ? activeBackend === "jj"
         ? branch.name.replace(/@[^@]+$/u, "")
         : deriveLocalBranchNameFromRemoteRef(branch.name)
       : branch.name;
     const switchTarget = makeVcsQueryTarget(
-      { id: projectId, vcs: projectVcs },
+      { id: projectId, kind: projectKind, vcs: projectVcs },
       hasServerThread ? activeThreadId : null,
       vcsBackend,
+      { threadWorkingDirectory },
     );
 
     setIsBranchMenuOpen(false);
@@ -634,7 +637,7 @@ export function BranchToolbarBranchSelector({
         });
         await invalidateVcsQueries(queryClient);
       } catch (error) {
-        if (projectVcs.binding.backend === "git") {
+        if (activeBackend === "git") {
           handleCheckoutError(error, {
             api,
             branch: branch.name,
@@ -666,7 +669,7 @@ export function BranchToolbarBranchSelector({
   const createBranch = (rawName: string) => {
     const name = rawName.trim();
     const api = readNativeApi();
-    if (!api || !branchCwd || !name || isBranchActionPending || !projectVcs.binding) return;
+    if (!api || !branchCwd || !name || isBranchActionPending || !activeBackend) return;
 
     setIsBranchMenuOpen(false);
     onComposerFocusRequest?.();
@@ -690,7 +693,7 @@ export function BranchToolbarBranchSelector({
             ref: name,
           });
         } catch (error) {
-          if (projectVcs.binding.backend === "git") {
+          if (activeBackend === "git") {
             handleCheckoutError(error, {
               api,
               branch: name,
@@ -721,10 +724,7 @@ export function BranchToolbarBranchSelector({
       } catch (error) {
         toastManager.add({
           type: "error",
-          title:
-            projectVcs.binding.backend === "jj"
-              ? "Failed to create bookmark."
-              : "Failed to create branch.",
+          title: activeBackend === "jj" ? "Failed to create bookmark." : "Failed to create branch.",
           description: toBranchActionErrorMessage(error),
         });
         return;
@@ -956,9 +956,7 @@ export function BranchToolbarBranchSelector({
             onChange={(event) => setBranchQuery(event.target.value)}
           />
         </div>
-        <ComboboxEmpty>
-          {isJjBackend ? "No bookmarks found." : "No branches found."}
-        </ComboboxEmpty>
+        <ComboboxEmpty>{isJjBackend ? "No bookmarks found." : "No branches found."}</ComboboxEmpty>
 
         <ComboboxList ref={setBranchListRef} className="max-h-56">
           {shouldVirtualizeBranchList ? (

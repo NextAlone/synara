@@ -36,6 +36,7 @@ export function shouldInvalidateGitQueriesForEvent(event: OrchestrationEvent): b
     event.payload.branch !== undefined ||
     event.payload.envMode !== undefined ||
     event.payload.worktreePath !== undefined ||
+    event.payload.workingDirectory !== undefined ||
     event.payload.associatedWorktreePath !== undefined ||
     event.payload.associatedWorktreeBranch !== undefined ||
     event.payload.associatedWorktreeRef !== undefined
@@ -109,5 +110,6 @@ export function resolveGitInvalidationCwdForThreadId(
     projectCwd,
     envMode: thread.envMode,
     worktreePath: thread.worktreePath,
+    workingDirectory: thread.workingDirectory,
   });
 }

@@ -19,6 +19,7 @@ import {
 } from "../../git/Services/GitHubCli";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery";
 import { ProjectVcs } from "../../vcs/Services/ProjectVcs";
+import { resolveProjectVcsState } from "../../vcs/projectVcsState";
 import {
   ProjectPullRequestPins,
   type ProjectPullRequestPinsShape,
@@ -73,9 +74,7 @@ export interface PullRequestServiceDependencies {
   readonly resolveRepositories: (
     project: OrchestrationProject,
   ) => Effect.Effect<GitHubRepositoryInventory, unknown>;
-  readonly resolveGitHubCwd: (
-    project: OrchestrationProject,
-  ) => Effect.Effect<string, unknown>;
+  readonly resolveGitHubCwd: (project: OrchestrationProject) => Effect.Effect<string, unknown>;
 }
 
 /** Exact gh error shape for a PR number that is known not to exist. Generic 404/auth failures are
@@ -583,12 +582,13 @@ export const PullRequestServiceLive = Layer.effect(
       github,
       pins,
       getSnapshot: () => projection.getSnapshot(),
-      resolveRepositories: (project) =>
-        project.vcs.binding
+      resolveRepositories: (project) => {
+        const projectVcsState = resolveProjectVcsState(project);
+        return projectVcsState.binding
           ? projectVcs
               .githubRepository({
                 projectId: project.id,
-                expectedEpoch: project.vcs.epoch,
+                expectedEpoch: projectVcsState.epoch,
               })
               .pipe(
                 Effect.map((result) => ({
@@ -600,12 +600,15 @@ export const PullRequestServiceLive = Layer.effect(
               new Error(
                 "Configure this project for the global source control backend before loading pull requests.",
               ),
-            ),
-      resolveGitHubCwd: (project) =>
-        projectVcs.remoteGitCwd({
+            );
+      },
+      resolveGitHubCwd: (project) => {
+        const projectVcsState = resolveProjectVcsState(project);
+        return projectVcs.remoteGitCwd({
           projectId: project.id,
-          expectedEpoch: project.vcs.epoch,
-        }),
+          expectedEpoch: projectVcsState.epoch,
+        });
+      },
     });
   }),
 );

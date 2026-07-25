@@ -121,10 +121,7 @@ it.effect("accepts project-scoped VCS pull request preparation", () =>
       },
     });
 
-    assert.strictEqual(
-      parsed.body._tag,
-      WS_METHODS.vcsPreparePullRequestThread,
-    );
+    assert.strictEqual(parsed.body._tag, WS_METHODS.vcsPreparePullRequestThread);
   }),
 );
 

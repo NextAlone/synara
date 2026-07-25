@@ -119,6 +119,7 @@ export interface KanbanDraftThreadSnapshot {
   branch: string | null;
   envMode?: ThreadEnvironmentMode | null;
   worktreePath?: string | null;
+  workingDirectory?: string | null;
 }
 
 export interface KanbanCard {
@@ -138,6 +139,8 @@ export interface KanbanCard {
   /** Environment intent for the local/worktree badge; mirrored from the thread or draft. */
   envMode: ThreadEnvironmentMode | null;
   worktreePath: string | null;
+  /** Fixed local reference folder, used by Studio cards. */
+  workingDirectory?: string | null;
   /** Backing summary; null for local-only draft threads that have not been promoted yet. */
   thread: SidebarThreadSummary | null;
   /** Trimmed composer prompt a draft card dispatches when dropped on In Progress. */
@@ -300,6 +303,7 @@ function buildThreadCard(
     branch: thread.branch,
     envMode: thread.envMode ?? null,
     worktreePath: thread.worktreePath,
+    workingDirectory: thread.workingDirectory ?? null,
     thread,
     draftPrompt: column === "draft" ? composerDraft.prompt : "",
     draftHasAttachments: column === "draft" ? composerDraft.hasAttachments : false,
@@ -339,6 +343,7 @@ function buildUnsentPromptCard(
     branch: thread.branch,
     envMode: thread.envMode ?? null,
     worktreePath: thread.worktreePath,
+    workingDirectory: thread.workingDirectory ?? null,
     thread,
     draftPrompt: composerDraft.prompt,
     draftHasAttachments: composerDraft.hasAttachments,
@@ -372,6 +377,7 @@ function buildLocalDraftCard(
     branch: draftThread.branch,
     envMode: draftThread.envMode ?? null,
     worktreePath: draftThread.worktreePath ?? null,
+    workingDirectory: draftThread.workingDirectory ?? null,
     thread: null,
     draftPrompt: composerDraft.prompt,
     draftHasAttachments: composerDraft.hasAttachments,
@@ -427,6 +433,7 @@ function buildSyntheticOptimisticCard(
     branch: null,
     envMode: null,
     worktreePath: null,
+    workingDirectory: null,
     thread: null,
     draftPrompt: "",
     draftHasAttachments: false,

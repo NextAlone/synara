@@ -32,14 +32,11 @@ export const ProjectVcsErrorReason = Schema.Literals([
 export type ProjectVcsErrorReason = typeof ProjectVcsErrorReason.Type;
 
 /** A project-aware VCS request failed before a backend command was dispatched. */
-export class ProjectVcsError extends Schema.TaggedErrorClass<ProjectVcsError>()(
-  "ProjectVcsError",
-  {
-    operation: Schema.String,
-    reason: ProjectVcsErrorReason,
-    detail: Schema.String,
-  },
-) {
+export class ProjectVcsError extends Schema.TaggedErrorClass<ProjectVcsError>()("ProjectVcsError", {
+  operation: Schema.String,
+  reason: ProjectVcsErrorReason,
+  detail: Schema.String,
+}) {
   override get message(): string {
     return `Project VCS failed in ${this.operation}: ${this.detail}`;
   }

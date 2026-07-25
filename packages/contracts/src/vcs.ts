@@ -146,12 +146,7 @@ export const VcsStatusResult = Schema.Struct({
 });
 export type VcsStatusResult = typeof VcsStatusResult.Type;
 
-export const VcsDiffScope = Schema.Literals([
-  "workingTree",
-  "unstaged",
-  "staged",
-  "branch",
-]);
+export const VcsDiffScope = Schema.Literals(["workingTree", "unstaged", "staged", "branch"]);
 export type VcsDiffScope = typeof VcsDiffScope.Type;
 
 export const VcsReadDiffInput = Schema.Struct({

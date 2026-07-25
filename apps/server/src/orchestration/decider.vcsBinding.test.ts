@@ -5,6 +5,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
+  type OrchestrationEvent,
 } from "@synara/contracts";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
@@ -65,10 +66,14 @@ describe("project VCS binding decider", () => {
       }),
     );
     expect(Array.isArray(first)).toBe(false);
-    if (Array.isArray(first) || first.type !== "project.meta-updated") {
+    if (Array.isArray(first)) {
       throw new Error("Expected project.meta-updated.");
     }
-    expect(first.payload.vcs).toEqual({
+    const firstEvent = first as OrchestrationEvent;
+    if (firstEvent.type !== "project.meta-updated") {
+      throw new Error("Expected project.meta-updated.");
+    }
+    expect(firstEvent.payload.vcs).toEqual({
       epoch: 1,
       binding: {
         backend: "jj",
@@ -77,7 +82,7 @@ describe("project VCS binding decider", () => {
       },
     });
 
-    const bound = await Effect.runPromise(projectEvent(initial, { ...first, sequence: 2 }));
+    const bound = await Effect.runPromise(projectEvent(initial, { ...firstEvent, sequence: 2 }));
     expect(bound.projects[0]?.vcs?.binding?.backend).toBe("jj");
 
     await expect(
@@ -117,10 +122,14 @@ describe("project VCS binding decider", () => {
         readModel: bound,
       }),
     );
-    if (Array.isArray(switched) || switched.type !== "project.meta-updated") {
+    if (Array.isArray(switched)) {
       throw new Error("Expected project.meta-updated.");
     }
-    expect(switched.payload.vcs).toEqual({
+    const switchedEvent = switched as OrchestrationEvent;
+    if (switchedEvent.type !== "project.meta-updated") {
+      throw new Error("Expected project.meta-updated.");
+    }
+    expect(switchedEvent.payload.vcs).toEqual({
       epoch: 2,
       binding: {
         backend: "git",
@@ -152,8 +161,9 @@ describe("project VCS binding decider", () => {
     if (Array.isArray(gitBindingEvent)) {
       throw new Error("Expected one binding event.");
     }
+    const singleGitBindingEvent = gitBindingEvent as OrchestrationEvent;
     const bound = await Effect.runPromise(
-      projectEvent(initial, { ...gitBindingEvent, sequence: 2 }),
+      projectEvent(initial, { ...singleGitBindingEvent, sequence: 2 }),
     );
     const threadId = ThreadId.makeUnsafe("thread-stale-git-reference");
     const withThread = await Effect.runPromise(
@@ -505,8 +515,9 @@ describe("project VCS binding decider", () => {
     if (Array.isArray(bindingEvent)) {
       throw new Error("Expected one binding event.");
     }
+    const singleBindingEvent = bindingEvent as OrchestrationEvent;
     const bound = await Effect.runPromise(
-      projectEvent(initial, { ...bindingEvent, sequence: 2 }),
+      projectEvent(initial, { ...singleBindingEvent, sequence: 2 }),
     );
     const threadId = ThreadId.makeUnsafe("thread-root-change");
     const withThread = await Effect.runPromise(

@@ -74,6 +74,7 @@ export function resolveDiffEnvironmentState(input: {
   projectCwd?: string | null | undefined;
   envMode?: ThreadEnvironmentMode | null | undefined;
   worktreePath?: string | null | undefined;
+  workingDirectory?: string | null | undefined;
 }): DiffEnvironmentState {
   const pending = isPendingThreadWorktree(input);
   return {
@@ -84,6 +85,7 @@ export function resolveDiffEnvironmentState(input: {
           projectCwd: input.projectCwd,
           envMode: input.envMode,
           worktreePath: input.worktreePath,
+          workingDirectory: input.workingDirectory,
         }),
     disabledReason: pending
       ? "Diff and summary will be available once the worktree is ready for this chat."

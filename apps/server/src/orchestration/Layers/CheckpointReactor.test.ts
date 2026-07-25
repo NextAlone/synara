@@ -245,7 +245,7 @@ async function waitForGitRefExists(cwd: string, ref: string, timeoutMs = 30_000)
 
 describe("CheckpointReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | CheckpointReactor | CheckpointStore,
+    OrchestrationEngineService | CheckpointReactor | CheckpointStore | ServerSettingsService,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -271,6 +271,7 @@ describe("CheckpointReactor", () => {
   async function createHarness(options?: {
     readonly hasSession?: boolean;
     readonly seedFilesystemCheckpoints?: boolean;
+    readonly projectKind?: "project" | "studio";
     readonly projectWorkspaceRoot?: string;
     readonly threadWorktreePath?: string | null;
     readonly providerSessionCwd?: string;
@@ -307,10 +308,7 @@ describe("CheckpointReactor", () => {
       Layer.provideMerge(TurnCheckpointCoordinatorLive),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(
-        CheckpointStoreLive.pipe(
-          Layer.provide(GitCoreLive),
-          Layer.provide(JjCoreLive),
-        ),
+        CheckpointStoreLive.pipe(Layer.provide(GitCoreLive), Layer.provide(JjCoreLive)),
       ),
       Layer.provideMerge(ServerConfigLayer),
       Layer.provideMerge(ServerSettingsService.layerTest()),
@@ -322,6 +320,7 @@ describe("CheckpointReactor", () => {
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const reactor = await runtime.runPromise(Effect.service(CheckpointReactor));
     const checkpointStore = await runtime.runPromise(Effect.service(CheckpointStore));
+    const serverSettings = await runtime.runPromise(Effect.service(ServerSettingsService));
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(reactor.start.pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(reactor.drain);
@@ -343,6 +342,7 @@ describe("CheckpointReactor", () => {
         commandId: CommandId.makeUnsafe("cmd-project-create"),
         projectId: asProjectId("project-1"),
         title: "Test Project",
+        kind: options?.projectKind,
         workspaceRoot: options?.projectWorkspaceRoot ?? cwd,
         defaultModelSelection: {
           provider: "codex",
@@ -351,20 +351,22 @@ describe("CheckpointReactor", () => {
         createdAt,
       }),
     );
-    await Effect.runPromise(
-      engine.dispatch({
-        type: "project.vcs-binding.set",
-        commandId: CommandId.makeUnsafe("cmd-project-vcs"),
-        projectId: asProjectId("project-1"),
-        expectedEpoch: 0,
-        binding: {
-          backend: "git",
-          repoRoot: cwd,
-          projectRelativePath: ".",
-        },
-        updatedAt: createdAt,
-      }),
-    );
+    if (options?.projectKind !== "studio") {
+      await Effect.runPromise(
+        engine.dispatch({
+          type: "project.vcs-binding.set",
+          commandId: CommandId.makeUnsafe("cmd-project-vcs"),
+          projectId: asProjectId("project-1"),
+          expectedEpoch: 0,
+          binding: {
+            backend: "git",
+            repoRoot: cwd,
+            projectRelativePath: ".",
+          },
+          updatedAt: createdAt,
+        }),
+      );
+    }
     await Effect.runPromise(
       engine.dispatch({
         type: "thread.create",
@@ -379,7 +381,7 @@ describe("CheckpointReactor", () => {
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         branch: null,
-        worktreePath: options?.threadWorktreePath ?? cwd,
+        worktreePath: options?.threadWorktreePath === undefined ? cwd : options.threadWorktreePath,
         createdAt,
       }),
     );
@@ -414,6 +416,7 @@ describe("CheckpointReactor", () => {
       engine,
       provider,
       checkpointStore,
+      serverSettings,
       cwd,
       drain,
       captureMessageStartBaseline,
@@ -501,6 +504,110 @@ describe("CheckpointReactor", () => {
         "README.md",
       ),
     ).toBe("v2\n");
+  });
+
+  it("captures checkpoints from a persisted Studio reference folder without a project binding", async () => {
+    const studioRoot = fs.mkdtempSync(path.join(os.tmpdir(), "synara-studio-root-"));
+    tempDirs.push(studioRoot);
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      projectKind: "studio",
+      projectWorkspaceRoot: studioRoot,
+      threadWorktreePath: null,
+    });
+    const createdAt = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("turn-studio-reference");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-studio-reference-folder"),
+        threadId,
+        workingDirectory: harness.cwd,
+      }),
+    );
+
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-studio-turn-started"),
+      provider: "codex",
+      createdAt,
+      threadId,
+      turnId,
+    });
+    await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, turnId));
+
+    fs.writeFileSync(path.join(harness.cwd, "studio.txt"), "created\n", "utf8");
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-studio-turn-completed"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.length === 1 &&
+        entry.checkpoints[0]?.files?.some((file) => file.path === "studio.txt") === true,
+    );
+    expect(thread.checkpoints[0]?.status).toBe("ready");
+  });
+
+  it("restores a Studio checkpoint from its original backend after the global backend changes", async () => {
+    const studioRoot = fs.mkdtempSync(path.join(os.tmpdir(), "synara-studio-root-"));
+    tempDirs.push(studioRoot);
+    const harness = await createHarness({
+      projectKind: "studio",
+      projectWorkspaceRoot: studioRoot,
+      threadWorktreePath: null,
+    });
+    const createdAt = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-studio-revert-reference-folder"),
+        threadId,
+        workingDirectory: harness.cwd,
+      }),
+    );
+    for (const turnCount of [1, 2] as const) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.makeUnsafe(`cmd-studio-revert-diff-${turnCount}`),
+          threadId,
+          turnId: asTurnId(`turn-${turnCount}`),
+          completedAt: createdAt,
+          checkpointRef: checkpointRefForThreadTurn(threadId, turnCount),
+          status: "ready",
+          files: [],
+          checkpointTurnCount: turnCount,
+          createdAt,
+        }),
+      );
+    }
+    await Effect.runPromise(harness.serverSettings.updateSettings({ vcsBackend: "jj" }));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("cmd-studio-revert-after-backend-change"),
+        threadId,
+        turnCount: 1,
+        scope: "thread",
+        createdAt,
+      }),
+    );
+
+    await waitForEvent(harness.engine, (event) => event.type === "thread.reverted");
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v2\n");
   });
 
   it("summarizes only files changed after each turn's start checkpoint", async () => {
@@ -1227,17 +1334,10 @@ describe("CheckpointReactor", () => {
       turnId,
     });
 
-    await waitForGitRefExists(
-      harness.cwd,
-      checkpointRefForThreadTurn(threadId, 0),
-    );
+    await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurn(threadId, 0));
     await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, turnId));
     expect(
-      gitShowFileAtRef(
-        harness.cwd,
-        checkpointRefForThreadTurn(threadId, 0),
-        "README.md",
-      ),
+      gitShowFileAtRef(harness.cwd, checkpointRefForThreadTurn(threadId, 0), "README.md"),
     ).toBe("v1\n");
   });
 

@@ -1,5 +1,6 @@
 import type {
   ProjectId,
+  ProjectKind,
   ProjectVcsState,
   ModelSelection,
   ProviderStartOptions,
@@ -36,15 +37,24 @@ export function makeVcsQueryTarget(
   project:
     | {
         readonly id: ProjectId;
+        readonly kind?: ProjectKind | undefined;
         readonly vcs?: ProjectVcsState | undefined;
       }
     | null
     | undefined,
   threadId: ThreadId | null | undefined,
   selectedBackend: VcsBackend,
+  options?: {
+    readonly threadWorkingDirectory?: string | null;
+  },
 ): VcsQueryTarget {
   const vcs = project?.vcs ?? { epoch: 0, binding: null };
-  const backend = vcs.binding?.backend ?? null;
+  const backend =
+    project?.kind === "studio"
+      ? threadId && options?.threadWorkingDirectory
+        ? selectedBackend
+        : null
+      : (vcs.binding?.backend ?? null);
   return {
     projectId: project?.id ?? null,
     threadId: threadId ?? null,
@@ -75,23 +85,9 @@ export const vcsQueryKeys = {
   githubRepositories: ["vcs", "github-repository"] as const,
   pullRequests: ["vcs", "pull-request"] as const,
   status: (target: VcsQueryTarget) =>
-    [
-      "vcs",
-      "status",
-      target.projectId,
-      target.threadId,
-      target.epoch,
-      target.backend,
-    ] as const,
+    ["vcs", "status", target.projectId, target.threadId, target.epoch, target.backend] as const,
   referencesFor: (target: VcsQueryTarget) =>
-    [
-      "vcs",
-      "references",
-      target.projectId,
-      target.threadId,
-      target.epoch,
-      target.backend,
-    ] as const,
+    ["vcs", "references", target.projectId, target.threadId, target.epoch, target.backend] as const,
   diff: (target: VcsQueryTarget, scope: VcsReadDiffInput["scope"]) =>
     [
       "vcs",
@@ -103,13 +99,7 @@ export const vcsQueryKeys = {
       scope,
     ] as const,
   workspacesFor: (target: VcsQueryTarget) =>
-    [
-      "vcs",
-      "workspaces",
-      target.projectId,
-      target.epoch,
-      target.backend,
-    ] as const,
+    ["vcs", "workspaces", target.projectId, target.threadId, target.epoch, target.backend] as const,
   githubRepository: (target: VcsQueryTarget) =>
     [
       "vcs",
@@ -178,15 +168,11 @@ export function invalidateVcsQueries(queryClient: QueryClient) {
   return queryClient.invalidateQueries({ queryKey: vcsQueryKeys.all });
 }
 
-export function vcsStatusQueryOptions(
-  target: VcsQueryTarget,
-  options?: { enabled?: boolean },
-) {
+export function vcsStatusQueryOptions(target: VcsQueryTarget, options?: { enabled?: boolean }) {
   return queryOptions({
     queryKey: vcsQueryKeys.status(target),
     queryFn: () => ensureNativeApi().vcs.status(requestTarget(target)),
-    enabled:
-      (options?.enabled ?? true) && target.projectId !== null && target.backend !== null,
+    enabled: (options?.enabled ?? true) && target.projectId !== null && target.backend !== null,
     staleTime: VCS_STATUS_STALE_TIME_MS,
     refetchOnWindowFocus: true,
     refetchOnReconnect: "always",
@@ -194,15 +180,11 @@ export function vcsStatusQueryOptions(
   });
 }
 
-export function vcsReferencesQueryOptions(
-  target: VcsQueryTarget,
-  options?: { enabled?: boolean },
-) {
+export function vcsReferencesQueryOptions(target: VcsQueryTarget, options?: { enabled?: boolean }) {
   return queryOptions({
     queryKey: vcsQueryKeys.referencesFor(target),
     queryFn: () => ensureNativeApi().vcs.listReferences(requestTarget(target)),
-    enabled:
-      (options?.enabled ?? true) && target.projectId !== null && target.backend !== null,
+    enabled: (options?.enabled ?? true) && target.projectId !== null && target.backend !== null,
     staleTime: VCS_REFERENCES_STALE_TIME_MS,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
@@ -226,24 +208,18 @@ export function vcsResolvePullRequestQueryOptions(input: {
       });
     },
     enabled:
-      input.target.projectId !== null &&
-      input.target.backend !== null &&
-      input.reference !== null,
+      input.target.projectId !== null && input.target.backend !== null && input.reference !== null,
     staleTime: 30_000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
 }
 
-export function vcsGithubRepositoryQueryOptions(
-  target: VcsQueryTarget,
-  enabled = true,
-) {
+export function vcsGithubRepositoryQueryOptions(target: VcsQueryTarget, enabled = true) {
   return queryOptions({
     queryKey: vcsQueryKeys.githubRepository(target),
     queryFn: () => ensureNativeApi().vcs.githubRepository(requestTarget(target)),
-    enabled:
-      enabled && target.projectId !== null && target.backend !== null,
+    enabled: enabled && target.projectId !== null && target.backend !== null,
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -273,9 +249,7 @@ export function vcsPullRequestSnapshotQueryOptions(input: {
       input.reference !== null,
     staleTime: 30_000,
     refetchInterval: (query) =>
-      query.state.data && query.state.data.pullRequest.state !== "open"
-        ? false
-        : 60_000,
+      query.state.data && query.state.data.pullRequest.state !== "open" ? false : 60_000,
     refetchOnWindowFocus: (query) =>
       !query.state.data || query.state.data.pullRequest.state === "open",
     refetchOnReconnect: true,
@@ -302,9 +276,7 @@ export function vcsDiffQueryOptions(input: {
       input.target.backend !== null &&
       !(input.target.backend === "jj" && scope === "staged"),
     staleTime: VCS_DIFF_STALE_TIME_MS,
-    ...(input.refetchInterval !== undefined
-      ? { refetchInterval: input.refetchInterval }
-      : {}),
+    ...(input.refetchInterval !== undefined ? { refetchInterval: input.refetchInterval } : {}),
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
@@ -355,8 +327,7 @@ export function vcsRemoveWorkspaceMutationOptions(input: { queryClient: QueryCli
 export function vcsHandoffThreadMutationOptions(input: { queryClient: QueryClient }) {
   return mutationOptions({
     mutationKey: ["vcs", "mutation", "handoff-thread"] as const,
-    mutationFn: (request: VcsHandoffThreadInput) =>
-      ensureNativeApi().vcs.handoffThread(request),
+    mutationFn: (request: VcsHandoffThreadInput) => ensureNativeApi().vcs.handoffThread(request),
     onSettled: mutationInvalidation(input.queryClient),
   });
 }
@@ -367,9 +338,7 @@ export function vcsPreparePullRequestThreadMutationOptions(input: {
 }) {
   return mutationOptions({
     mutationKey: vcsMutationKeys.preparePullRequestThread(input.target),
-    mutationFn: (
-      request: Pick<VcsPreparePullRequestThreadInput, "reference" | "mode">,
-    ) =>
+    mutationFn: (request: Pick<VcsPreparePullRequestThreadInput, "reference" | "mode">) =>
       ensureNativeApi().vcs.preparePullRequestThread({
         ...requestTarget(input.target),
         ...request,
@@ -398,16 +367,10 @@ export function vcsRunStackedActionMutationOptions(input: {
       ensureNativeApi().vcs.runStackedAction({
         ...requestTarget(input.target),
         ...request,
-        ...(input.codexHomePath
-          ? { codexHomePath: input.codexHomePath }
-          : {}),
+        ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
         ...(input.model ? { textGenerationModel: input.model } : {}),
-        ...(input.modelSelection
-          ? { textGenerationModelSelection: input.modelSelection }
-          : {}),
-        ...(input.providerOptions
-          ? { providerOptions: input.providerOptions }
-          : {}),
+        ...(input.modelSelection ? { textGenerationModelSelection: input.modelSelection } : {}),
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       }),
     onSettled: mutationInvalidation(input.queryClient),
   });

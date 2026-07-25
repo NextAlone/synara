@@ -39,6 +39,7 @@ import { runWorktreeSetupScript } from "../../worktreeSetup.ts";
 import type { ProjectionTurn } from "../../persistence/Services/ProjectionTurns.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProjectVcs } from "../../vcs/Services/ProjectVcs.ts";
+import { resolveProjectVcsState } from "../../vcs/projectVcsState.ts";
 import { AutomationServiceError } from "../Errors.ts";
 import { AutomationService, type AutomationServiceShape } from "../Services/AutomationService.ts";
 import { buildAutomationProposalActivity } from "../proposalActivity.ts";
@@ -596,10 +597,11 @@ export const AutomationServiceLive = Layer.effect(
       if (input.environment.envMode !== "worktree" || !path) {
         return Effect.void;
       }
+      const projectVcsState = resolveProjectVcsState(input.project);
       return projectVcs
         .removeWorkspace({
           projectId: input.project.id,
-          expectedEpoch: input.project.vcs.epoch,
+          expectedEpoch: projectVcsState.epoch,
           path,
           force: true,
         })
@@ -778,6 +780,7 @@ export const AutomationServiceLive = Layer.effect(
       project: OrchestrationProjectShell,
       beforeWorktreeCreate: () => Effect.Effect<void, AutomationServiceError> = () => Effect.void,
     ): Effect.Effect<ThreadEnvironment, AutomationServiceError> => {
+      const projectVcsState = resolveProjectVcsState(project);
       const requireLocalCheckoutAcknowledgement = () =>
         definition.acknowledgedRisks.includes("local-checkout")
           ? Effect.void
@@ -791,7 +794,7 @@ export const AutomationServiceLive = Layer.effect(
         return requireLocalCheckoutAcknowledgement().pipe(Effect.as(localThreadEnvironment));
       }
 
-      const binding = project.vcs.binding;
+      const binding = projectVcsState.binding;
       if (!binding) {
         return definition.worktreeMode === "worktree"
           ? Effect.fail(
@@ -806,7 +809,7 @@ export const AutomationServiceLive = Layer.effect(
       return projectVcs
         .resolveTarget({
           projectId: project.id,
-          expectedEpoch: project.vcs.epoch,
+          expectedEpoch: projectVcsState.epoch,
         })
         .pipe(
           Effect.mapError(toServiceError("Failed to inspect project VCS workspace.")),
@@ -815,7 +818,7 @@ export const AutomationServiceLive = Layer.effect(
             projectVcs
               .createWorkspace({
                 projectId: project.id,
-                expectedEpoch: project.vcs.epoch,
+                expectedEpoch: projectVcsState.epoch,
                 sourceRef: binding.backend === "jj" ? "@" : "HEAD",
                 path: null,
                 copyChangesFromCurrent: true,

@@ -9,17 +9,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { GitCoreShape } from "../git/Services/GitCore.ts";
 import type { GitHubCliShape } from "../git/Services/GitHubCli.ts";
 import type { TextGenerationShape } from "../git/Services/TextGeneration.ts";
-import type {
-  JjCoreShape,
-  JjWorkingCopyStatus,
-} from "./Services/JjCore.ts";
+import type { JjCoreShape, JjWorkingCopyStatus } from "./Services/JjCore.ts";
 import { makeJjActions } from "./jjActions.ts";
 
 const PROJECT_ID = ProjectId.makeUnsafe("jj-actions-project");
 
-function workingCopy(
-  overrides: Partial<JjWorkingCopyStatus> = {},
-): JjWorkingCopyStatus {
+function workingCopy(overrides: Partial<JjWorkingCopyStatus> = {}): JjWorkingCopyStatus {
   return {
     repository: {
       workspaceRoot: "/repo",
@@ -59,9 +54,7 @@ function workingCopy(
   };
 }
 
-function crossForkWorkingCopy(
-  synced: boolean,
-): JjWorkingCopyStatus {
+function crossForkWorkingCopy(synced: boolean): JjWorkingCopyStatus {
   const localTarget = "change-local";
   return workingCopy({
     currentBookmark: "synara/pr-42/main",
@@ -94,9 +87,7 @@ function crossForkWorkingCopy(
   });
 }
 
-function actionInput(
-  overrides: Partial<VcsRunStackedActionInput> = {},
-): VcsRunStackedActionInput {
+function actionInput(overrides: Partial<VcsRunStackedActionInput> = {}): VcsRunStackedActionInput {
   return {
     projectId: PROJECT_ID,
     expectedEpoch: 3,
@@ -186,10 +177,7 @@ describe("JJ actions", () => {
       ),
     );
 
-    expect(pushBookmark).toHaveBeenCalledWith(
-      "/repo",
-      "feature-z",
-    );
+    expect(pushBookmark).toHaveBeenCalledWith("/repo", "feature-z");
     expect(result.push).toMatchObject({
       status: "pushed",
       branch: "feature-z",
@@ -202,24 +190,15 @@ describe("JJ actions", () => {
     const status = vi
       .fn()
       .mockReturnValueOnce(Effect.succeed(workingCopy()))
-      .mockReturnValueOnce(
-        Effect.succeed(workingCopy({ behindCount: 2 })),
-      );
+      .mockReturnValueOnce(Effect.succeed(workingCopy({ behindCount: 2 })));
     const service = actions({
       jj: { status, fetchGit, advanceBookmark },
     });
 
-    const result = await Effect.runPromise(
-      service.pull({ cwd: "/repo", epoch: 3 }),
-    );
+    const result = await Effect.runPromise(service.pull({ cwd: "/repo", epoch: 3 }));
 
     expect(fetchGit).toHaveBeenCalledWith("/repo", "origin");
-    expect(advanceBookmark).toHaveBeenCalledWith(
-      "/repo",
-      "feature",
-      "origin",
-      "feature",
-    );
+    expect(advanceBookmark).toHaveBeenCalledWith("/repo", "feature", "origin", "feature");
     expect(result).toEqual({
       backend: "jj",
       epoch: 3,
@@ -235,17 +214,13 @@ describe("JJ actions", () => {
         status: vi
           .fn()
           .mockReturnValueOnce(Effect.succeed(workingCopy()))
-          .mockReturnValueOnce(
-            Effect.succeed(
-              workingCopy({ aheadCount: 1, behindCount: 1 }),
-            ),
-          ),
+          .mockReturnValueOnce(Effect.succeed(workingCopy({ aheadCount: 1, behindCount: 1 }))),
         fetchGit: () => Effect.void,
       },
     });
-    await expect(
-      Effect.runPromise(diverged.pull({ cwd: "/repo", epoch: 3 })),
-    ).rejects.toThrow("diverged");
+    await expect(Effect.runPromise(diverged.pull({ cwd: "/repo", epoch: 3 }))).rejects.toThrow(
+      "diverged",
+    );
 
     const advanceBookmark = vi.fn(() => Effect.void);
     const localAhead = actions({
@@ -253,18 +228,12 @@ describe("JJ actions", () => {
         status: vi
           .fn()
           .mockReturnValueOnce(Effect.succeed(workingCopy()))
-          .mockReturnValueOnce(
-            Effect.succeed(
-              workingCopy({ aheadCount: 1, behindCount: 0 }),
-            ),
-          ),
+          .mockReturnValueOnce(Effect.succeed(workingCopy({ aheadCount: 1, behindCount: 0 }))),
         fetchGit: () => Effect.void,
         advanceBookmark,
       },
     });
-    const result = await Effect.runPromise(
-      localAhead.pull({ cwd: "/repo", epoch: 3 }),
-    );
+    const result = await Effect.runPromise(localAhead.pull({ cwd: "/repo", epoch: 3 }));
 
     expect(result.status).toBe("skipped_up_to_date");
     expect(advanceBookmark).not.toHaveBeenCalled();
@@ -276,9 +245,7 @@ describe("JJ actions", () => {
       .mockReturnValueOnce(Effect.succeed(crossForkWorkingCopy(false)))
       .mockReturnValueOnce(Effect.succeed(crossForkWorkingCopy(false)));
     const fetchGit = vi.fn(() => Effect.void);
-    const compareBookmarkToRemote = vi.fn(() =>
-      Effect.succeed({ aheadCount: 0, behindCount: 1 }),
-    );
+    const compareBookmarkToRemote = vi.fn(() => Effect.succeed({ aheadCount: 0, behindCount: 1 }));
     const advanceBookmark = vi.fn(() => Effect.void);
     const service = actions({
       jj: {
@@ -290,18 +257,12 @@ describe("JJ actions", () => {
       git: {
         readConfigValue: (_cwd, key) =>
           Effect.succeed(
-            key.endsWith(".remote")
-              ? "alice"
-              : key.endsWith(".merge")
-                ? "refs/heads/main"
-                : null,
+            key.endsWith(".remote") ? "alice" : key.endsWith(".merge") ? "refs/heads/main" : null,
           ),
       },
     });
 
-    const result = await Effect.runPromise(
-      service.pull({ cwd: "/repo", epoch: 3 }),
-    );
+    const result = await Effect.runPromise(service.pull({ cwd: "/repo", epoch: 3 }));
 
     expect(fetchGit).toHaveBeenCalledWith("/repo", "alice");
     expect(compareBookmarkToRemote).toHaveBeenCalledWith(
@@ -310,12 +271,7 @@ describe("JJ actions", () => {
       "alice",
       "main",
     );
-    expect(advanceBookmark).toHaveBeenCalledWith(
-      "/repo",
-      "synara/pr-42/main",
-      "alice",
-      "main",
-    );
+    expect(advanceBookmark).toHaveBeenCalledWith("/repo", "synara/pr-42/main", "alice", "main");
     expect(result).toEqual({
       backend: "jj",
       epoch: 3,
@@ -384,8 +340,7 @@ describe("JJ actions", () => {
     const service = actions({
       jj: {
         status,
-        readRevisionDiff: () =>
-          Effect.succeed({ patch: "diff --git", files: dirty.files }),
+        readRevisionDiff: () => Effect.succeed({ patch: "diff --git", files: dirty.files }),
         commitWorkingCopy,
         setBookmark,
         pushBookmark,
@@ -409,21 +364,9 @@ describe("JJ actions", () => {
       ),
     );
 
-    expect(commitWorkingCopy).toHaveBeenCalledWith(
-      "/repo",
-      "feat: native jj",
-      ["src/a.ts"],
-    );
-    expect(setBookmark).toHaveBeenCalledWith(
-      "/repo",
-      "feature",
-      "commit-committed",
-    );
-    expect(pushBookmark).toHaveBeenCalledWith(
-      "/repo",
-      "feature",
-      "origin",
-    );
+    expect(commitWorkingCopy).toHaveBeenCalledWith("/repo", "feat: native jj", ["src/a.ts"]);
+    expect(setBookmark).toHaveBeenCalledWith("/repo", "feature", "commit-committed");
+    expect(pushBookmark).toHaveBeenCalledWith("/repo", "feature", "origin");
     expect(result).toMatchObject({
       commit: { status: "created", commitSha: "commit-committed" },
       push: {
@@ -503,15 +446,8 @@ describe("JJ actions", () => {
       ),
     );
 
-    expect(createBookmark).toHaveBeenCalledWith(
-      "/repo",
-      "feature/feat-generated",
-      "@-",
-    );
-    expect(pushBookmark).toHaveBeenCalledWith(
-      "/repo",
-      "feature/feat-generated",
-    );
+    expect(createBookmark).toHaveBeenCalledWith("/repo", "feature/feat-generated", "@-");
+    expect(pushBookmark).toHaveBeenCalledWith("/repo", "feature/feat-generated");
   });
 
   it("uses the explicit Git remote fallback for a colliding cross-fork bookmark", async () => {
@@ -522,12 +458,10 @@ describe("JJ actions", () => {
       .mockReturnValueOnce(Effect.succeed(before))
       .mockReturnValueOnce(Effect.succeed(before))
       .mockReturnValueOnce(Effect.succeed(after));
-    const jjExecute = vi.fn(() =>
+    const jjExecute = vi.fn<JjCoreShape["execute"]>(() =>
       Effect.succeed({ code: 0, stdout: "", stderr: "" }),
     );
-    const gitExecute = vi.fn(() =>
-      Effect.succeed({ code: 0, stdout: "", stderr: "" }),
-    );
+    const gitExecute = vi.fn(() => Effect.succeed({ code: 0, stdout: "", stderr: "" }));
     const pushBookmark = vi.fn();
     const service = actions({
       jj: {
@@ -539,21 +473,14 @@ describe("JJ actions", () => {
       git: {
         readConfigValue: (_cwd, key) =>
           Effect.succeed(
-            key.endsWith(".remote")
-              ? "alice"
-              : key.endsWith(".merge")
-                ? "refs/heads/main"
-                : null,
+            key.endsWith(".remote") ? "alice" : key.endsWith(".merge") ? "refs/heads/main" : null,
           ),
         execute: gitExecute,
       },
     });
 
     const result = await Effect.runPromise(
-      service.runStackedAction(
-        { cwd: "/repo", epoch: 3 },
-        actionInput({ action: "push" }),
-      ),
+      service.runStackedAction({ cwd: "/repo", epoch: 3 }, actionInput({ action: "push" })),
     );
 
     expect(pushBookmark).not.toHaveBeenCalled();
@@ -564,12 +491,7 @@ describe("JJ actions", () => {
     expect(gitExecute).toHaveBeenCalledWith({
       operation: "JjActions.pushRemoteFallback.push",
       cwd: "/repo/.git",
-      args: [
-        "push",
-        "--porcelain",
-        "alice",
-        "refs/heads/synara/pr-42/main:refs/heads/main",
-      ],
+      args: ["push", "--porcelain", "alice", "refs/heads/synara/pr-42/main:refs/heads/main"],
     });
     expect(result.push).toEqual({
       status: "pushed",
@@ -601,10 +523,7 @@ describe("JJ actions", () => {
     });
 
     const result = await Effect.runPromise(
-      service.runStackedAction(
-        { cwd: "/repo", epoch: 3 },
-        actionInput({ action: "create_pr" }),
-      ),
+      service.runStackedAction({ cwd: "/repo", epoch: 3 }, actionInput({ action: "create_pr" })),
     );
 
     expect(listOpenPullRequests).toHaveBeenCalledWith({
@@ -645,40 +564,32 @@ describe("JJ actions", () => {
         },
       ],
     });
-    const listOpenPullRequests = vi.fn(
-      ({ headSelector }: { headSelector: string }) =>
-        Effect.succeed(
-          headSelector === "alice:feature/fork"
-            ? [
-                {
-                  number: 44,
-                  title: "Fork JJ",
-                  url: "https://github.com/acme/repo/pull/44",
-                  baseRefName: "main",
-                  headRefName: "feature/fork",
-                },
-              ]
-            : [],
-        ),
+    const listOpenPullRequests = vi.fn(({ headSelector }: { headSelector: string }) =>
+      Effect.succeed(
+        headSelector === "alice:feature/fork"
+          ? [
+              {
+                number: 44,
+                title: "Fork JJ",
+                url: "https://github.com/acme/repo/pull/44",
+                baseRefName: "main",
+                headRefName: "feature/fork",
+              },
+            ]
+          : [],
+      ),
     );
     const service = actions({
       jj: { status: () => Effect.succeed(fork) },
       git: {
         readConfigValue: (_cwd, key) =>
-          Effect.succeed(
-            key === "remote.alice.url"
-              ? "git@github.com:alice/repo.git"
-              : null,
-          ),
+          Effect.succeed(key === "remote.alice.url" ? "git@github.com:alice/repo.git" : null),
       },
       gitHubCli: { listOpenPullRequests },
     });
 
     const result = await Effect.runPromise(
-      service.runStackedAction(
-        { cwd: "/repo", epoch: 3 },
-        actionInput({ action: "create_pr" }),
-      ),
+      service.runStackedAction({ cwd: "/repo", epoch: 3 }, actionInput({ action: "create_pr" })),
     );
 
     expect(listOpenPullRequests).toHaveBeenCalledWith({
@@ -715,9 +626,7 @@ describe("JJ actions", () => {
         },
       ],
     });
-    const readRangeDiff = vi.fn(() =>
-      Effect.succeed({ patch: "diff --git", files: [] }),
-    );
+    const readRangeDiff = vi.fn(() => Effect.succeed({ patch: "diff --git", files: [] }));
     const createPullRequest = vi.fn(() => Effect.void);
     const service = actions({
       jj: {
@@ -756,8 +665,7 @@ describe("JJ actions", () => {
           }),
       },
       git: {
-        readConfigValue: () =>
-          Effect.succeed("https://github.com/alice/repo.git"),
+        readConfigValue: () => Effect.succeed("https://github.com/alice/repo.git"),
       },
       gitHubCli: {
         listOpenPullRequests: () => Effect.succeed([]),
@@ -765,23 +673,15 @@ describe("JJ actions", () => {
         createPullRequest,
       },
       textGeneration: {
-        generatePrContent: () =>
-          Effect.succeed({ title: "Fork PR", body: "Body" }),
+        generatePrContent: () => Effect.succeed({ title: "Fork PR", body: "Body" }),
       },
     });
 
     await Effect.runPromise(
-      service.runStackedAction(
-        { cwd: "/repo", epoch: 3 },
-        actionInput({ action: "create_pr" }),
-      ),
+      service.runStackedAction({ cwd: "/repo", epoch: 3 }, actionInput({ action: "create_pr" })),
     );
 
-    expect(readRangeDiff).toHaveBeenCalledWith(
-      "/repo",
-      "main@origin",
-      "feature/fork",
-    );
+    expect(readRangeDiff).toHaveBeenCalledWith("/repo", "main@origin", "feature/fork");
     expect(createPullRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         baseBranch: "main",

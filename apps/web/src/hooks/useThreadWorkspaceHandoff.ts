@@ -31,9 +31,7 @@ export function useThreadWorkspaceHandoff(input: {
   ) => Promise<ProjectScriptRunResult | null>;
 }) {
   const queryClient = useQueryClient();
-  const handoffThreadMutation = useMutation(
-    vcsHandoffThreadMutationOptions({ queryClient }),
-  );
+  const handoffThreadMutation = useMutation(vcsHandoffThreadMutationOptions({ queryClient }));
   const [worktreeHandoffDialogOpen, setWorktreeHandoffDialogOpen] = useState(false);
   const [worktreeHandoffName, setWorktreeHandoffName] = useState("");
 

@@ -2735,6 +2735,7 @@ export default function Sidebar() {
         projectCwd: projectCwdById.get(thread.projectId) ?? null,
         envMode: thread.envMode,
         worktreePath: thread.worktreePath,
+        workingDirectory: thread.workingDirectory,
       });
       const clicked = await api.contextMenu.show(
         [
@@ -3736,8 +3737,12 @@ export default function Sidebar() {
             projectCwd: project?.cwd ?? null,
             envMode: thread.envMode,
             worktreePath: thread.worktreePath,
+            workingDirectory: thread.workingDirectory,
           }),
-          vcsTarget: makeVcsQueryTarget(project, thread.id, appSettings.vcsBackend),
+          vcsTarget: makeVcsQueryTarget(project, thread.id, appSettings.vcsBackend, {
+            threadWorkingDirectory:
+              project?.kind === "studio" ? (thread.workingDirectory ?? null) : null,
+          }),
         };
       }),
     [appSettings.vcsBackend, projectById, visibleSidebarThreads],
@@ -3803,12 +3808,7 @@ export default function Sidebar() {
       map.set(target.threadId, livePr ?? storedPrByThreadId.get(target.threadId) ?? null);
     }
     return map;
-  }, [
-    threadVcsStatusQueries,
-    threadVcsTargets,
-    threadStoredPrQueries,
-    threadStoredPrTargets,
-  ]);
+  }, [threadVcsStatusQueries, threadVcsTargets, threadStoredPrQueries, threadStoredPrTargets]);
   const isManualProjectSorting = appSettings.sidebarProjectSortOrder === "manual";
   const threadJumpCommandByThreadId = useMemo(() => {
     const mapping = new Map<ThreadId, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();

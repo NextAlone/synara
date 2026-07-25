@@ -70,7 +70,7 @@ describe("CheckpointStoreLive", () => {
         const store = yield* CheckpointStore;
         const input = {
           cwd: "/repo",
-          backend: "git",
+          backend: "git" as const,
           checkpointRef: CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/message"),
         };
 
@@ -129,7 +129,7 @@ describe("CheckpointStoreLive", () => {
         const store = yield* CheckpointStore;
         const input = {
           cwd: "/repo",
-          backend: "git",
+          backend: "git" as const,
           checkpointRef: CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/message"),
         };
 
@@ -303,10 +303,7 @@ describe("CheckpointStoreLive", () => {
     );
     const jj = {
       execute,
-      withMutation: <A, E, R>(
-        _cwd: string,
-        effect: Effect.Effect<A, E, R>,
-      ) => effect,
+      withMutation: <A, E, R>(_cwd: string, effect: Effect.Effect<A, E, R>) => effect,
     } as unknown as JjCoreShape;
     const layer = CheckpointStoreLive.pipe(
       Layer.provide(
@@ -335,8 +332,7 @@ describe("CheckpointStoreLive", () => {
     expect(
       execute.mock.calls
         .map(([input]) => input)
-        .find((input) => input.operation === "CheckpointStore.copyCheckpointRef.jj")
-        ?.args,
+        .find((input) => input.operation === "CheckpointStore.copyCheckpointRef.jj")?.args,
     ).toEqual([
       "bookmark",
       "set",
@@ -355,27 +351,21 @@ describe("CheckpointStoreLive", () => {
   });
 
   it("captures a JJ checkpoint without advancing the working copy", async () => {
-    const checkpointRef = CheckpointRef.makeUnsafe(
-      "refs/synara-checkpoints/thread/jj-message",
-    );
+    const checkpointRef = CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/jj-message");
     const execute = vi.fn<JjCoreShape["execute"]>(() =>
       Effect.succeed({ code: 0, stdout: "", stderr: "" }),
     );
-    const readRevisionIdentity = vi.fn<JjCoreShape["readRevisionIdentity"]>(
-      (_cwd, revision) =>
-        Effect.succeed({
-          changeId: "checkpoint-change",
-          commitId: "checkpoint-commit",
-          description: revision ?? "",
-        }),
+    const readRevisionIdentity = vi.fn<JjCoreShape["readRevisionIdentity"]>((_cwd, revision) =>
+      Effect.succeed({
+        changeId: "checkpoint-change",
+        commitId: "checkpoint-commit",
+        description: revision ?? "",
+      }),
     );
     const jj = {
       execute,
       readRevisionIdentity,
-      withMutation: <A, E, R>(
-        _cwd: string,
-        effect: Effect.Effect<A, E, R>,
-      ) => effect,
+      withMutation: <A, E, R>(_cwd: string, effect: Effect.Effect<A, E, R>) => effect,
     } as unknown as JjCoreShape;
     const layer = CheckpointStoreLive.pipe(
       Layer.provide(
@@ -405,9 +395,7 @@ describe("CheckpointStoreLive", () => {
     expect(duplicate?.args[0]).toBe("--config");
     expect(duplicate?.args[1]).toContain("templates.duplicate_description=");
     expect(duplicate?.args.slice(2)).toEqual(["duplicate", "@"]);
-    expect(
-      execute.mock.calls.some(([input]) => input.args.includes("new")),
-    ).toBe(false);
+    expect(execute.mock.calls.some(([input]) => input.args.includes("new"))).toBe(false);
     expect(readRevisionIdentity).toHaveBeenCalledWith(
       "/repo",
       expect.stringContaining("description(substring:"),
@@ -415,8 +403,7 @@ describe("CheckpointStoreLive", () => {
     expect(
       execute.mock.calls
         .map(([input]) => input)
-        .find((input) => input.operation === "CheckpointStore.captureCheckpoint.jjAnchor")
-        ?.args,
+        .find((input) => input.operation === "CheckpointStore.captureCheckpoint.jjAnchor")?.args,
     ).toEqual([
       "bookmark",
       "set",
@@ -428,12 +415,8 @@ describe("CheckpointStoreLive", () => {
   });
 
   it("reverses a JJ checkpoint only when touched paths still match the turn end", async () => {
-    const fromRef = CheckpointRef.makeUnsafe(
-      "refs/synara-checkpoints/thread/jj-turn/start",
-    );
-    const toRef = CheckpointRef.makeUnsafe(
-      "refs/synara-checkpoints/thread/jj-turn/end",
-    );
+    const fromRef = CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/jj-turn/start");
+    const toRef = CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/jj-turn/end");
     const execute = vi.fn<JjCoreShape["execute"]>((input) => {
       if (input.operation === "CheckpointStore.resolveJjCheckpointRevision") {
         const bookmark = input.args.join(" ");
@@ -464,10 +447,7 @@ describe("CheckpointStoreLive", () => {
     const jj = {
       execute,
       readRangeDiff,
-      withMutation: <A, E, R>(
-        _cwd: string,
-        effect: Effect.Effect<A, E, R>,
-      ) => effect,
+      withMutation: <A, E, R>(_cwd: string, effect: Effect.Effect<A, E, R>) => effect,
     } as unknown as JjCoreShape;
     const layer = CheckpointStoreLive.pipe(
       Layer.provide(
@@ -493,17 +473,12 @@ describe("CheckpointStoreLive", () => {
     );
 
     expect(result).toBe(true);
-    expect(readRangeDiff).toHaveBeenCalledWith(
-      "/repo",
-      "from-commit",
-      "to-commit",
-    );
+    expect(readRangeDiff).toHaveBeenCalledWith("/repo", "from-commit", "to-commit");
     expect(
       execute.mock.calls
         .map(([input]) => input)
         .find(
-          (input) =>
-            input.operation === "CheckpointStore.reverseCheckpointDiff.jjVerifyCurrent",
+          (input) => input.operation === "CheckpointStore.reverseCheckpointDiff.jjVerifyCurrent",
         )?.args,
     ).toEqual([
       "--ignore-working-copy",
@@ -520,8 +495,7 @@ describe("CheckpointStoreLive", () => {
     expect(
       execute.mock.calls
         .map(([input]) => input)
-        .find((input) => input.operation === "CheckpointStore.reverseCheckpointDiff.jj")
-        ?.args,
+        .find((input) => input.operation === "CheckpointStore.reverseCheckpointDiff.jj")?.args,
     ).toEqual([
       "restore",
       "--from",

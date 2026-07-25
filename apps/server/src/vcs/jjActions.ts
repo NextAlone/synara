@@ -6,6 +6,7 @@ import * as nodePath from "node:path";
 import type {
   GitActionProgressEvent,
   GitRunStackedActionResult,
+  VcsPullResult,
   VcsRunStackedActionInput,
 } from "@synara/contracts";
 import { resolveAutoFeatureBranchName } from "@synara/shared/git";
@@ -70,9 +71,7 @@ function isCommitAction(action: VcsRunStackedActionInput["action"]): boolean {
 
 function fallbackCommitSubject(status: JjWorkingCopyStatus): string {
   const firstPath = status.files[0]?.path;
-  return firstPath
-    ? `chore: update ${nodePath.basename(firstPath)}`
-    : "chore: update working copy";
+  return firstPath ? `chore: update ${nodePath.basename(firstPath)}` : "chore: update working copy";
 }
 
 function formatGeneratedMessage(subject: string, body: string): string {
@@ -83,10 +82,7 @@ function formatGeneratedMessage(subject: string, body: string): string {
     : normalizedSubject;
 }
 
-function toPrStep(
-  status: "created" | "opened_existing",
-  pullRequest: GitHubPullRequestSummary,
-) {
+function toPrStep(status: "created" | "opened_existing", pullRequest: GitHubPullRequestSummary) {
   return {
     status,
     url: pullRequest.url,
@@ -105,9 +101,7 @@ export function makeJjActions(dependencies: JjActionDependencies) {
       if (
         !preferred ||
         preferred === status.currentBookmark ||
-        !status.bookmarks.some(
-          (bookmark) => bookmark.name === preferred && bookmark.isLocal,
-        )
+        !status.bookmarks.some((bookmark) => bookmark.name === preferred && bookmark.isLocal)
       ) {
         return status;
       }
@@ -197,7 +191,7 @@ export function makeJjActions(dependencies: JjActionDependencies) {
           status: "skipped_up_to_date",
           ref: bookmark,
           upstreamRef: refreshedRemote.remoteRevision,
-        };
+        } satisfies VcsPullResult;
       }
 
       yield* dependencies.jj.advanceBookmark(
@@ -212,21 +206,17 @@ export function makeJjActions(dependencies: JjActionDependencies) {
         status: "pulled",
         ref: bookmark,
         upstreamRef: refreshedRemote.remoteRevision,
-      };
+      } satisfies VcsPullResult;
     });
 
-  const findOpenPullRequest = (
-    gitCwd: string,
-    head: JjGitHubHeadContext,
-  ) =>
+  const findOpenPullRequest = (gitCwd: string, head: JjGitHubHeadContext) =>
     Effect.gen(function* () {
       for (const headSelector of head.selectors) {
-        const matches =
-          yield* dependencies.gitHubCli.listOpenPullRequests({
-            cwd: gitCwd,
-            headSelector,
-            limit: 10,
-          });
+        const matches = yield* dependencies.gitHubCli.listOpenPullRequests({
+          cwd: gitCwd,
+          headSelector,
+          limit: 10,
+        });
         if (matches[0]) {
           return matches[0];
         }
@@ -314,18 +304,9 @@ export function makeJjActions(dependencies: JjActionDependencies) {
       const bookmarks = yield* dependencies.jj.listBookmarks(target.cwd);
       const base = bookmarks.find((entry) => entry.name === baseBranch);
       const baseRemote = selectBaseRemote(base);
-      const baseRevision = baseRemote
-        ? `${baseBranch}@${baseRemote.name}`
-        : baseBranch;
-      const range = yield* dependencies.jj.readRangeDiff(
-        target.cwd,
-        baseRevision,
-        bookmark,
-      );
-      const headRevision = yield* dependencies.jj.readRevisionIdentity(
-        target.cwd,
-        bookmark,
-      );
+      const baseRevision = baseRemote ? `${baseBranch}@${baseRemote.name}` : baseBranch;
+      const range = yield* dependencies.jj.readRangeDiff(target.cwd, baseRevision, bookmark);
+      const headRevision = yield* dependencies.jj.readRevisionIdentity(target.cwd, bookmark);
       const generated = yield* dependencies.textGeneration.generatePrContent({
         cwd: target.cwd,
         baseBranch,
@@ -363,12 +344,9 @@ export function makeJjActions(dependencies: JjActionDependencies) {
         .pipe(
           Effect.as(null),
           Effect.catch((error) =>
-            findOpenPullRequest(gitCwd, headContext)
-              .pipe(
-                Effect.flatMap((match) =>
-                  match ? Effect.succeed(match) : Effect.fail(error),
-                ),
-              ),
+            findOpenPullRequest(gitCwd, headContext).pipe(
+              Effect.flatMap((match) => (match ? Effect.succeed(match) : Effect.fail(error))),
+            ),
           ),
           Effect.ensuring(
             Effect.tryPromise({
@@ -396,9 +374,7 @@ export function makeJjActions(dependencies: JjActionDependencies) {
     target: JjActionTarget,
     input: VcsRunStackedActionInput,
     options?: {
-      readonly publishProgress?: (
-        event: GitActionProgressEvent,
-      ) => Effect.Effect<void>;
+      readonly publishProgress?: (event: GitActionProgressEvent) => Effect.Effect<void>;
     },
   ) => {
     const emit = (payload: JjActionProgressPayload) =>
@@ -419,11 +395,8 @@ export function makeJjActions(dependencies: JjActionDependencies) {
         input.action === "commit_push" ||
         input.action === "commit_push_pr" ||
         (input.action === "create_pr" &&
-          (input.featureBranch ||
-            status.upstreamBookmark === null ||
-            status.aheadCount > 0));
-      const wantsPr =
-        input.action === "create_pr" || input.action === "commit_push_pr";
+          (input.featureBranch || status.upstreamBookmark === null || status.aheadCount > 0));
+      const wantsPr = input.action === "create_pr" || input.action === "commit_push_pr";
       const phases = [
         ...(input.featureBranch ? (["branch"] as const) : []),
         ...(wantsCommit ? (["commit"] as const) : []),
@@ -463,11 +436,7 @@ export function makeJjActions(dependencies: JjActionDependencies) {
           : status.files.filter((file) => selectedPaths.includes(file.path));
       const selectedDiff =
         wantsCommit && selectedFiles.length > 0
-          ? yield* dependencies.jj.readRevisionDiff(
-              target.cwd,
-              "@",
-              selectedPaths,
-            )
+          ? yield* dependencies.jj.readRevisionDiff(target.cwd, "@", selectedPaths)
           : null;
       let commitMessage = input.commitMessage?.trim() ?? "";
       let preferredFeatureName = commitMessage.split(/\r?\n/u)[0]?.trim() ?? "";
@@ -541,11 +510,7 @@ export function makeJjActions(dependencies: JjActionDependencies) {
             selectedPaths,
           );
           if (bookmark) {
-            yield* dependencies.jj.setBookmark(
-              target.cwd,
-              bookmark,
-              committed.commitId,
-            );
+            yield* dependencies.jj.setBookmark(target.cwd, bookmark, committed.commitId);
           }
           commitStep = {
             status: "created",
@@ -597,12 +562,8 @@ export function makeJjActions(dependencies: JjActionDependencies) {
                 beforePush.repository.gitStorePath,
               )
             : beforeRemote
-              ? dependencies.jj.pushBookmark(
-                  target.cwd,
-                  bookmark,
-                  beforeRemote.remoteName,
-                )
-            : dependencies.jj.pushBookmark(target.cwd, bookmark);
+              ? dependencies.jj.pushBookmark(target.cwd, bookmark, beforeRemote.remoteName)
+              : dependencies.jj.pushBookmark(target.cwd, bookmark);
           const afterPush = yield* readStatus(target);
           const afterRemote = yield* resolveJjBookmarkRemote({
             git: dependencies.git,
@@ -612,10 +573,7 @@ export function makeJjActions(dependencies: JjActionDependencies) {
           pushStep = {
             status: "pushed",
             branch: bookmark,
-            upstreamBranch:
-              afterRemote
-                ? afterRemote.remoteRevision
-                : `${bookmark}@origin`,
+            upstreamBranch: afterRemote ? afterRemote.remoteRevision : `${bookmark}@origin`,
             setUpstream: beforeRemote === null,
           };
           status = afterPush;

@@ -51,7 +51,7 @@ export type ProjectNormalizationInput = Pick<
   | "createdAt"
   | "updatedAt"
 > & {
-  vcs?: ProjectVcsState;
+  vcs?: ProjectVcsState | undefined;
 };
 
 export const MAX_THREAD_MESSAGES = 2_000;
@@ -325,7 +325,7 @@ export function normalizeProject(
   const scripts = normalizeProjectScripts(incoming.scripts, previous?.scripts);
   const incomingVcs = incoming.vcs ?? previous?.vcs ?? { epoch: 0, binding: null };
   const vcs =
-    previous && deepEqualJson(previous.vcs, incomingVcs) ? previous.vcs : incomingVcs;
+    previous?.vcs && deepEqualJson(previous.vcs, incomingVcs) ? previous.vcs : incomingVcs;
   const expanded =
     previous?.expanded ??
     (rememberedUiState.expandedProjectCount > 0

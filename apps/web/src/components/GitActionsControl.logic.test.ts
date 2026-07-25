@@ -1,8 +1,4 @@
-import type {
-  GitStatusResult,
-  VcsListReferencesResult,
-  VcsStatusResult,
-} from "@synara/contracts";
+import type { GitStatusResult, VcsListReferencesResult, VcsStatusResult } from "@synara/contracts";
 import { assert, describe, it } from "vitest";
 import {
   buildGitActionProgressStages,
@@ -276,15 +272,12 @@ describe("when: the selected backend is JJ", () => {
   });
 
   it("uses JJ and bookmark terminology in unavailable hints", () => {
-    assert.deepEqual(
-      resolveQuickAction(null, false, false, true, false, null, "bookmark", "JJ"),
-      {
-        label: "Commit",
-        disabled: true,
-        kind: "show_hint",
-        hint: "JJ status is unavailable.",
-      },
-    );
+    assert.deepEqual(resolveQuickAction(null, false, false, true, false, null, "bookmark", "JJ"), {
+      label: "Commit",
+      disabled: true,
+      kind: "show_hint",
+      hint: "JJ status is unavailable.",
+    });
     assert.deepEqual(
       resolvePullActionAvailability({
         gitStatus: status({ branch: null }),

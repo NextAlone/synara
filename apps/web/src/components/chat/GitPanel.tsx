@@ -10,6 +10,7 @@
 
 import { type FileDiffMetadata } from "@pierre/diffs/react";
 import { type ProjectId, type ThreadId } from "@synara/contracts";
+import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
@@ -23,15 +24,8 @@ import {
   splitRepoRelativePath,
   summarizeFileDiffStats,
 } from "~/lib/diffRendering";
-import {
-  gitStageFilesMutationOptions,
-  gitUnstageFilesMutationOptions,
-} from "~/lib/gitReactQuery";
-import {
-  invalidateVcsQueries,
-  makeVcsQueryTarget,
-  vcsDiffQueryOptions,
-} from "~/lib/vcsReactQuery";
+import { gitStageFilesMutationOptions, gitUnstageFilesMutationOptions } from "~/lib/gitReactQuery";
+import { invalidateVcsQueries, makeVcsQueryTarget, vcsDiffQueryOptions } from "~/lib/vcsReactQuery";
 import { PlusIcon, RefreshCwIcon, RotateCcwIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
@@ -213,19 +207,25 @@ export function GitPanel(props: {
     useMemo(() => createThreadSelector(props.hostThreadId), [props.hostThreadId]),
   );
   const hasServerThread = useStore(
-    useMemo(
-      () => createThreadExistsSelector(props.hostThreadId),
-      [props.hostThreadId],
-    ),
+    useMemo(() => createThreadExistsSelector(props.hostThreadId), [props.hostThreadId]),
   );
   const project = useStore(
     useMemo(() => createProjectSelector(props.projectId), [props.projectId]),
   );
-  const cwd = thread?.worktreePath ?? project?.cwd ?? null;
+  const cwd = resolveThreadWorkspaceCwd({
+    projectCwd: project?.cwd ?? null,
+    envMode: thread?.envMode,
+    worktreePath: thread?.worktreePath,
+    workingDirectory: thread?.workingDirectory,
+  });
   const vcsTarget = makeVcsQueryTarget(
     project,
     hasServerThread ? props.hostThreadId : null,
     settings.vcsBackend,
+    {
+      threadWorkingDirectory:
+        project?.kind === "studio" && hasServerThread ? (thread?.workingDirectory ?? null) : null,
+    },
   );
   const isGitBackend = vcsTarget.backend === "git";
 

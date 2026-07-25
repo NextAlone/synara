@@ -50,6 +50,7 @@ import { ToolInputError, errorText } from "./toolInput.ts";
 import { GatewayToolError, gatewayToolErrorResult } from "./toolRuntime.ts";
 import type { JjCoreShape } from "../vcs/Services/JjCore.ts";
 import type { ProjectVcsShape } from "../vcs/Services/ProjectVcs.ts";
+import { resolveProjectVcsState } from "../vcs/projectVcsState.ts";
 
 const CREATION_REPLAY_WAIT_MS = 60_000;
 
@@ -544,9 +545,10 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           let worktreeRef: string | null = null;
           let copyChangesFrom: string | null = null;
           let plannedWorktreePath: string | null = null;
+          const projectVcsState = resolveProjectVcsState(project);
           const vcsBinding =
-            project.vcs.binding?.backend === selectedVcsBackend
-              ? project.vcs.binding
+            projectVcsState.binding?.backend === selectedVcsBackend
+              ? projectVcsState.binding
               : null;
           if (environment === "worktree") {
             if (!vcsBinding) {
@@ -571,14 +573,16 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                 : project.workspaceRoot;
             const sourceJjStatus =
               vcsBinding.backend === "jj"
-                ? yield* jj.status(sourceCwd).pipe(
-                    Effect.mapError(
-                      (error) =>
-                        new ToolInputError(
-                          `JJ workspace "${sourceCwd}" is unavailable. ${errorText(error)}`,
-                        ),
-                    ),
-                  )
+                ? yield* jj
+                    .status(sourceCwd)
+                    .pipe(
+                      Effect.mapError(
+                        (error) =>
+                          new ToolInputError(
+                            `JJ workspace "${sourceCwd}" is unavailable. ${errorText(error)}`,
+                          ),
+                      ),
+                    )
                 : null;
             const pullRequest = parsePullRequestSelector(requestedRef);
             if (vcsBinding.backend === "git") {
@@ -635,7 +639,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                     : yield* projectVcs
                         .materializePullRequestHead({
                           projectId,
-                          expectedEpoch: project.vcs.epoch,
+                          expectedEpoch: projectVcsState.epoch,
                           reference: requestedRef,
                         })
                         .pipe(
@@ -647,17 +651,15 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                               ),
                           ),
                         );
-                worktreeRef = yield* jj
-                  .readRevisionIdentity(sourceCwd, jjRequestedRevision)
-                  .pipe(
-                    Effect.map((revision) => revision.commitId),
-                    Effect.mapError(
-                      (error) =>
-                        new ToolInputError(
-                          `JJ revision "${requestedRef}" is unavailable. ${errorText(error)}`,
-                        ),
-                    ),
-                  );
+                worktreeRef = yield* jj.readRevisionIdentity(sourceCwd, jjRequestedRevision).pipe(
+                  Effect.map((revision) => revision.commitId),
+                  Effect.mapError(
+                    (error) =>
+                      new ToolInputError(
+                        `JJ revision "${requestedRef}" is unavailable. ${errorText(error)}`,
+                      ),
+                  ),
+                );
               }
             }
             const sourceHead =
@@ -674,17 +676,20 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                       Effect.mapError((error) => new ToolInputError(errorText(error))),
                     )
                 : sourceJjStatus!.revision.commitId;
-            copyChangesFrom = sourceHead === worktreeRef ? sourceCwd : null;
+            // JJ status already snapshots the caller workspace and worktreeRef
+            // is that immutable commit. Requiring ProjectVcs to "copy current"
+            // would compare it with the primary workspace's distinct @ change
+            // and reject isolated callers. Only Git needs an explicit dirty
+            // working-tree copy alongside the resolved HEAD commit.
+            copyChangesFrom =
+              vcsBinding.backend === "git" && sourceHead === worktreeRef ? sourceCwd : null;
             const plannedRepositoryWorkspacePath = join(
               serverConfig.workspacesDir,
               stableGatewayDigest({ operationId, index }, 12),
             );
             plannedWorktreePath =
               vcsBinding.backend === "jj" && vcsBinding.projectRelativePath !== "."
-                ? join(
-                    plannedRepositoryWorkspacePath,
-                    vcsBinding.projectRelativePath,
-                  )
+                ? join(plannedRepositoryWorkspacePath, vcsBinding.projectRelativePath)
                 : plannedRepositoryWorkspacePath;
             if (existsSync(plannedRepositoryWorkspacePath)) {
               return yield* Effect.fail(
@@ -699,7 +704,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             spec,
             projectId,
             vcsBackend: vcsBinding?.backend ?? null,
-            vcsEpoch: project.vcs.epoch,
+            vcsEpoch: projectVcsState.epoch,
             workspaceRoot: project.workspaceRoot,
             target,
             environment,
@@ -791,95 +796,97 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           yield* Effect.forEach(
             [...createdWorktrees].reverse(),
             (worktree) =>
-              (worktree.backend === "jj"
-                ? Effect.gen(function* () {
-                    if (worktree.proof !== null) {
-                      const status = yield* jj.status(worktree.path);
-                      if (status.revision.commitId !== worktree.proof.head) {
-                        return yield* Effect.fail(
-                          new Error(
-                            "Refusing live JJ compensation because the workspace changed after ownership was recorded.",
-                          ),
-                        );
-                      }
+              Effect.gen(function* () {
+                if (worktree.backend === "jj") {
+                  if (worktree.proof !== null) {
+                    const status = yield* jj.status(worktree.path);
+                    if (status.revision.commitId !== worktree.proof.head) {
+                      return yield* Effect.fail(
+                        new Error(
+                          "Refusing live JJ compensation because the workspace changed after ownership was recorded.",
+                        ),
+                      );
                     }
-                    yield* projectVcs.removeWorkspace({
-                      projectId: worktree.projectId,
-                      expectedEpoch: worktree.epoch,
-                      path: worktree.path,
-                      force: true,
-                    });
-                  })
-                : git.withMutation(
-                    worktree.cwd,
-                    worktree.proof === null
-                      ? git
-                          .removeWorktree({
-                            cwd: worktree.cwd,
-                            path: worktree.path,
-                            // Ownership was never recorded for this path: creation failed
-                            // right after the worktree appeared, or the interruptible setup
-                            // script failed or was interrupted. Copied baseline changes and
-                            // partial setup output make a non-forced removal fail by
-                            // construction.
-                            force: true,
-                          })
-                          .pipe(
-                            Effect.flatMap(() =>
-                              worktree.branch === null
-                                ? Effect.void
-                                : git.deleteBranch({
-                                    cwd: worktree.cwd,
-                                    branch: worktree.branch,
-                                    force: false,
-                                  }),
-                            ),
-                          )
-                      : git
-                          .verifyWorktreeOwnership({
-                            path: worktree.path,
-                            proof: worktree.proof,
-                          })
-                          .pipe(
-                            Effect.flatMap((verification) =>
-                              verification.verified
-                                ? Effect.void
-                                : Effect.fail(
-                                    new Error(
-                                      `Refusing live compensation: ${verification.reason ?? "ownership verification failed"}.`,
-                                    ),
-                                  ),
-                            ),
-                            Effect.flatMap(() =>
-                              git.removeWorktree({
-                                cwd: worktree.cwd,
-                                path: worktree.path,
-                                force: true,
-                              }),
-                            ),
-                            Effect.flatMap(() =>
-                              worktree.branch === null
-                                ? Effect.void
-                                : git.deleteBranchIfUnchanged({
-                                    cwd: worktree.cwd,
-                                    branch: worktree.branch,
-                                    expectedHead: worktree.proof!.head,
-                                  }),
-                            ),
+                  }
+                  yield* projectVcs.removeWorkspace({
+                    projectId: worktree.projectId,
+                    expectedEpoch: worktree.epoch,
+                    path: worktree.path,
+                    force: true,
+                  });
+                  return;
+                }
+
+                yield* git.withMutation(
+                  worktree.cwd,
+                  worktree.proof === null
+                    ? git
+                        .removeWorktree({
+                          cwd: worktree.cwd,
+                          path: worktree.path,
+                          // Ownership was never recorded for this path: creation failed
+                          // right after the worktree appeared, or the interruptible setup
+                          // script failed or was interrupted. Copied baseline changes and
+                          // partial setup output make a non-forced removal fail by
+                          // construction.
+                          force: true,
+                        })
+                        .pipe(
+                          Effect.flatMap(() =>
+                            worktree.branch === null
+                              ? Effect.void
+                              : git.deleteBranch({
+                                  cwd: worktree.cwd,
+                                  branch: worktree.branch,
+                                  force: false,
+                                }),
                           ),
-                  ))
-                .pipe(
-                  Effect.tap(() =>
-                    Effect.sync(() => {
-                      compensatedWorktreeCount += 1;
-                    }),
-                  ),
-                  Effect.catch((error) =>
-                    Effect.sync(() =>
-                      compensationErrors.push(`worktree ${worktree.path}: ${errorText(error)}`),
-                    ),
+                        )
+                    : git
+                        .verifyWorktreeOwnership({
+                          path: worktree.path,
+                          proof: worktree.proof,
+                        })
+                        .pipe(
+                          Effect.flatMap((verification) =>
+                            verification.verified
+                              ? Effect.void
+                              : Effect.fail(
+                                  new Error(
+                                    `Refusing live compensation: ${verification.reason ?? "ownership verification failed"}.`,
+                                  ),
+                                ),
+                          ),
+                          Effect.flatMap(() =>
+                            git.removeWorktree({
+                              cwd: worktree.cwd,
+                              path: worktree.path,
+                              force: true,
+                            }),
+                          ),
+                          Effect.flatMap(() =>
+                            worktree.branch === null
+                              ? Effect.void
+                              : git.deleteBranchIfUnchanged({
+                                  cwd: worktree.cwd,
+                                  branch: worktree.branch,
+                                  expectedHead: worktree.proof!.head,
+                                }),
+                          ),
+                        ),
+                );
+              }).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    compensatedWorktreeCount += 1;
+                  }),
+                ),
+                Effect.catch((error) =>
+                  Effect.sync(() =>
+                    compensationErrors.push(`worktree ${worktree.path}: ${errorText(error)}`),
                   ),
                 ),
+              ),
             { discard: true },
           );
           // Do not make a task terminal before cleanup has been attempted. The
@@ -1108,8 +1115,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                                   expectedEpoch: entry.vcsEpoch,
                                   sourceRef: entry.worktreeRef!,
                                   path: entry.plannedWorktreePath,
-                                  copyChangesFromCurrent:
-                                    entry.copyChangesFrom !== null,
+                                  copyChangesFromCurrent: entry.copyChangesFrom !== null,
                                 })
                                 .pipe(
                                   Effect.map((result) => ({
@@ -1164,9 +1170,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                                 token: trackedWorktree.workspaceName!,
                                 gitDir: entry.workspaceRoot,
                                 branch: null,
-                                head: (
-                                  yield* jj.status(trackedWorktree.path)
-                                ).revision.commitId,
+                                head: (yield* jj.status(trackedWorktree.path)).revision.commitId,
                               }
                             : yield* git.recordWorktreeOwnership({
                                 path: trackedWorktree.path,

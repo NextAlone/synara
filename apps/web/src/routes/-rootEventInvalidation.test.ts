@@ -41,6 +41,11 @@ describe("root event invalidation", () => {
     expect(
       shouldInvalidateGitQueriesForEvent(event("thread.meta-updated", { branch: "feature/diff" })),
     ).toBe(true);
+    expect(
+      shouldInvalidateGitQueriesForEvent(
+        event("thread.meta-updated", { workingDirectory: "/repo/reference" }),
+      ),
+    ).toBe(true);
   });
 
   it("leaves unrelated events alone", () => {
@@ -122,10 +127,11 @@ describe("root event invalidation", () => {
     ).toBe(null);
   });
 
-  it("resolves local and worktree cwd from the current thread projection", () => {
+  it("resolves local, worktree, and reference-folder cwd from the current projection", () => {
     const projectId = ProjectId.makeUnsafe("project-1");
     const localThreadId = ThreadId.makeUnsafe("thread-local");
     const worktreeThreadId = ThreadId.makeUnsafe("thread-worktree");
+    const referenceThreadId = ThreadId.makeUnsafe("thread-reference");
     const localThread = makeThread({
       id: localThreadId,
       projectId,
@@ -138,20 +144,29 @@ describe("root event invalidation", () => {
       envMode: "worktree",
       worktreePath: "/repo/worktree",
     });
+    const referenceThread = makeThread({
+      id: referenceThreadId,
+      projectId,
+      envMode: "local",
+      worktreePath: null,
+      workingDirectory: "/repo/reference",
+    });
     const state: AppState = {
       spaces: [],
       projects: [{ id: projectId, cwd: "/repo/main" }] as AppState["projects"],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
-      threadIds: [localThreadId, worktreeThreadId],
+      threadIds: [localThreadId, worktreeThreadId, referenceThreadId],
       threadShellById: {
         [localThreadId]: localThread,
         [worktreeThreadId]: worktreeThread,
+        [referenceThreadId]: referenceThread,
       },
     };
 
     expect(resolveGitInvalidationCwdForThreadId(state, localThreadId)).toBe("/repo/main");
     expect(resolveGitInvalidationCwdForThreadId(state, worktreeThreadId)).toBe("/repo/worktree");
+    expect(resolveGitInvalidationCwdForThreadId(state, referenceThreadId)).toBe("/repo/reference");
   });
 });
 

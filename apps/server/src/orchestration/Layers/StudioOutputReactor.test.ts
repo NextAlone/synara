@@ -13,7 +13,7 @@ import {
   type ProviderRuntimeEvent,
 } from "@synara/contracts";
 import { Effect, Exit, Layer, ManagedRuntime, Option, PubSub, Scope, Stream } from "effect";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ProviderService,
@@ -33,6 +33,7 @@ import {
   CheckpointStore,
   type CheckpointStoreShape,
 } from "../../checkpointing/Services/CheckpointStore.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -71,6 +72,7 @@ describe("StudioOutputReactor", () => {
     const turnId = TurnId.makeUnsafe("studio-turn");
     const runtimeEvents = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
     const commands: OrchestrationCommand[] = [];
+    const isRepository = vi.fn<CheckpointStoreShape["isRepository"]>(() => Effect.succeed(false));
 
     const providerService = {
       streamEvents: Stream.fromPubSub(runtimeEvents),
@@ -110,7 +112,7 @@ describe("StudioOutputReactor", () => {
       Layer.provideMerge(Layer.succeed(ProjectionSnapshotQuery, projectionSnapshotQuery)),
       Layer.provideMerge(
         Layer.succeed(CheckpointStore, {
-          isRepository: () => Effect.succeed(false),
+          isRepository,
           captureCheckpoint: () => Effect.void,
           copyCheckpointRef: () => Effect.succeed(false),
           hasCheckpointRef: () => Effect.succeed(false),
@@ -120,6 +122,7 @@ describe("StudioOutputReactor", () => {
           deleteCheckpointRefs: () => Effect.void,
         } satisfies CheckpointStoreShape),
       ),
+      Layer.provideMerge(ServerSettingsService.layerTest({ vcsBackend: "git" })),
       Layer.provideMerge(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -130,6 +133,7 @@ describe("StudioOutputReactor", () => {
     // This file appears after the command reactor's awaited preparation but before
     // the provider acknowledges turn.started. A turn.started-time scan would miss it.
     await runtime.runPromise(reactor.captureBaselineBeforeTurn(threadId));
+    expect(isRepository).toHaveBeenCalledWith({ cwd: workspaceRoot, backend: "git" });
     await writeFile(path.join(workspaceRoot, "report.md"), "finished report");
 
     await Effect.runPromise(

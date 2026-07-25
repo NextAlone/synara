@@ -322,9 +322,7 @@ describe("ProviderCommandReactor", () => {
     const restoreCheckpoint = vi.fn<CheckpointStoreShape["restoreCheckpoint"]>(() =>
       Effect.succeed(true),
     );
-    const isRepository = vi.fn<CheckpointStoreShape["isRepository"]>(() =>
-      Effect.succeed(false),
-    );
+    const isRepository = vi.fn<CheckpointStoreShape["isRepository"]>(() => Effect.succeed(false));
     const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(() => Effect.void);
     const checkpointStore: CheckpointStoreShape = {
       isRepository,
@@ -403,9 +401,9 @@ describe("ProviderCommandReactor", () => {
     );
     const publishBranch = vi.fn(() => Effect.void);
     const withMutation: GitCoreShape["withMutation"] = (_cwd, effect) => effect;
-    const createAvailableBookmark = vi.fn<
-      JjCoreShape["createAvailableBookmark"]
-    >((_cwd, desiredName) => Effect.succeed(desiredName));
+    const createAvailableBookmark = vi.fn<JjCoreShape["createAvailableBookmark"]>(
+      (_cwd, desiredName) => Effect.succeed(desiredName),
+    );
     const pushBookmark = vi.fn<JjCoreShape["pushBookmark"]>(() => Effect.void);
     const generateBranchName = vi.fn<TextGenerationShape["generateBranchName"]>(() =>
       Effect.fail(
@@ -3493,6 +3491,93 @@ describe("ProviderCommandReactor", () => {
     expect(captureCheckpoint.mock.calls[0]?.[0].checkpointRef).toContain("/message-start/");
   });
 
+  it("captures a Studio reference-folder checkpoint with the selected backend before dispatch", async () => {
+    const isRepository = vi.fn<CheckpointStoreShape["isRepository"]>(() => Effect.succeed(true));
+    const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(() => Effect.void);
+    const harness = await createHarness({
+      vcsBackend: "jj",
+      checkpointStore: {
+        isRepository,
+        captureCheckpoint,
+      },
+    });
+    const now = new Date().toISOString();
+    const studioProjectId = asProjectId("project-studio-checkpoint");
+    const studioThreadId = ThreadId.makeUnsafe("thread-studio-checkpoint");
+    const workingDirectory = "/tmp/studio-reference-project";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-studio-checkpoint"),
+        projectId: studioProjectId,
+        kind: "studio",
+        title: "Studio",
+        workspaceRoot: "/tmp/studio-root",
+        defaultModelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-thread-studio-checkpoint"),
+        threadId: studioThreadId,
+        projectId: studioProjectId,
+        title: "Studio thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-studio-working-directory"),
+        threadId: studioThreadId,
+        workingDirectory,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-studio-checkpoint"),
+        threadId: studioThreadId,
+        message: {
+          messageId: asMessageId("user-message-studio-checkpoint"),
+          role: "user",
+          text: "inspect the reference folder",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(isRepository).toHaveBeenCalledWith({
+      cwd: workingDirectory,
+      backend: "jj",
+    });
+    expect(captureCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: workingDirectory,
+        backend: "jj",
+      }),
+    );
+  });
+
   for (const backend of ["git", "jj"] as const) {
     it(`continues provider dispatch when the ${backend} message-start checkpoint exceeds its budget`, async () => {
       const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(
@@ -3501,9 +3586,7 @@ describe("ProviderCommandReactor", () => {
       const harness = await createHarness({
         vcsBackend: backend,
         checkpointStore: {
-          isRepository: vi.fn<CheckpointStoreShape["isRepository"]>(
-            () => Effect.succeed(true),
-          ),
+          isRepository: vi.fn<CheckpointStoreShape["isRepository"]>(() => Effect.succeed(true)),
           captureCheckpoint,
         },
       });
@@ -3512,14 +3595,10 @@ describe("ProviderCommandReactor", () => {
       const dispatch = Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(
-            `cmd-turn-start-stuck-${backend}-checkpoint`,
-          ),
+          commandId: CommandId.makeUnsafe(`cmd-turn-start-stuck-${backend}-checkpoint`),
           threadId: ThreadId.makeUnsafe("thread-1"),
           message: {
-            messageId: asMessageId(
-              `user-message-stuck-${backend}-checkpoint`,
-            ),
+            messageId: asMessageId(`user-message-stuck-${backend}-checkpoint`),
             role: "user",
             text: "hello despite stuck checkpoint",
             attachments: [],
@@ -3547,9 +3626,7 @@ describe("ProviderCommandReactor", () => {
       const harness = await createHarness({
         vcsBackend: backend,
         checkpointStore: {
-          isRepository: vi.fn<CheckpointStoreShape["isRepository"]>(
-            () => Effect.succeed(true),
-          ),
+          isRepository: vi.fn<CheckpointStoreShape["isRepository"]>(() => Effect.succeed(true)),
           captureCheckpoint,
         },
       });
@@ -3558,14 +3635,10 @@ describe("ProviderCommandReactor", () => {
       await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(
-            `cmd-turn-start-${backend}-checkpoint-cooldown-first`,
-          ),
+          commandId: CommandId.makeUnsafe(`cmd-turn-start-${backend}-checkpoint-cooldown-first`),
           threadId: ThreadId.makeUnsafe("thread-1"),
           message: {
-            messageId: asMessageId(
-              `user-message-${backend}-checkpoint-cooldown-first`,
-            ),
+            messageId: asMessageId(`user-message-${backend}-checkpoint-cooldown-first`),
             role: "user",
             text: "first",
             attachments: [],
@@ -3577,9 +3650,7 @@ describe("ProviderCommandReactor", () => {
       );
       await waitFor(() => harness.sendTurn.mock.calls.length === 1, 4_000);
 
-      const secondThreadId = ThreadId.makeUnsafe(
-        `thread-${backend}-checkpoint-cooldown-second`,
-      );
+      const secondThreadId = ThreadId.makeUnsafe(`thread-${backend}-checkpoint-cooldown-second`);
       await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.create",
@@ -3603,14 +3674,10 @@ describe("ProviderCommandReactor", () => {
       await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(
-            `cmd-turn-start-${backend}-checkpoint-cooldown-second`,
-          ),
+          commandId: CommandId.makeUnsafe(`cmd-turn-start-${backend}-checkpoint-cooldown-second`),
           threadId: secondThreadId,
           message: {
-            messageId: asMessageId(
-              `user-message-${backend}-checkpoint-cooldown-second`,
-            ),
+            messageId: asMessageId(`user-message-${backend}-checkpoint-cooldown-second`),
             role: "user",
             text: "second",
             attachments: [],
@@ -4313,9 +4380,7 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(
-      async () =>
-        (await readHarnessThread(harness))?.branch ===
-        "synara/app-startup-crash",
+      async () => (await readHarnessThread(harness))?.branch === "synara/app-startup-crash",
     );
     expect(await readHarnessThread(harness)).toMatchObject({
       branch: "synara/app-startup-crash",

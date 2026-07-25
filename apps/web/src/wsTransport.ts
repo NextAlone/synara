@@ -458,16 +458,8 @@ export class WsTransport {
 
       const client = await awaitWithAbort(this.getClient(), abortScope.signal);
 
-      if (
-        method === WS_METHODS.gitRunStackedAction ||
-        method === WS_METHODS.vcsRunStackedAction
-      ) {
-        return (await this.runActionStream(
-          client,
-          method,
-          params,
-          abortScope.signal,
-        )) as T;
+      if (method === WS_METHODS.gitRunStackedAction || method === WS_METHODS.vcsRunStackedAction) {
+        return (await this.runActionStream(client, method, params, abortScope.signal)) as T;
       }
 
       if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
@@ -1157,9 +1149,7 @@ export class WsTransport {
 
   private async runActionStream(
     client: RpcClientInstance,
-    method:
-      | typeof WS_METHODS.gitRunStackedAction
-      | typeof WS_METHODS.vcsRunStackedAction,
+    method: typeof WS_METHODS.gitRunStackedAction | typeof WS_METHODS.vcsRunStackedAction,
     params: unknown,
     signal?: AbortSignal,
   ): Promise<GitRunStackedActionResult> {

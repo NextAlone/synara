@@ -65,8 +65,7 @@ describe("makePullRequestOperations", () => {
       },
       findProject: () => Effect.succeed(project),
       validateRepository: (repository) => Effect.succeed(repository),
-      validateProjectRepository: (_project, repository) =>
-        Effect.succeed(repository),
+      validateProjectRepository: (_project, repository) => Effect.succeed(repository),
       resolveGitHubCwd: () => Effect.succeed("/jj/git-store"),
       loadMergeCapabilities: () =>
         Effect.succeed({

@@ -375,10 +375,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.vcsGithubRepository, VcsGitHubRepositoryInput),
   tagRequestBody(WS_METHODS.vcsResolvePullRequest, VcsResolvePullRequestInput),
   tagRequestBody(WS_METHODS.vcsPullRequestSnapshot, VcsPullRequestSnapshotInput),
-  tagRequestBody(
-    WS_METHODS.vcsPreparePullRequestThread,
-    VcsPreparePullRequestThreadInput,
-  ),
+  tagRequestBody(WS_METHODS.vcsPreparePullRequestThread, VcsPreparePullRequestThreadInput),
   tagRequestBody(WS_METHODS.vcsRunStackedAction, VcsRunStackedActionInput),
 
   // Git methods

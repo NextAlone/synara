@@ -10,6 +10,7 @@ import type {
   PullRequestAction,
   PullRequestDetailInput,
   PullRequestMergeMethod,
+  ThreadId,
 } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useMemo, useRef, useState } from "react";
@@ -78,7 +79,7 @@ import { ensureNativeApi } from "~/nativeApi";
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { useStore } from "~/store";
-import { createProjectSelector } from "~/storeSelectors";
+import { createProjectSelector, createThreadSelector } from "~/storeSelectors";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
@@ -134,11 +135,13 @@ function DetailSkeleton() {
 
 export function PullRequestDetailPanel({
   input,
+  hostThreadId,
   initialTab = "summary",
   onClose,
   pollingEnabled = true,
 }: {
   input: PullRequestDetailInput;
+  hostThreadId?: ThreadId | undefined;
   initialTab?: DetailTab;
   onClose?: () => void;
   pollingEnabled?: boolean;
@@ -182,7 +185,16 @@ export function PullRequestDetailPanel({
   const project = useStore(
     useMemo(() => createProjectSelector(input.projectId), [input.projectId]),
   );
-  const vcsTarget = makeVcsQueryTarget(project, null, settings.vcsBackend);
+  const hostThread = useStore(useMemo(() => createThreadSelector(hostThreadId), [hostThreadId]));
+  const isStudioProject = project?.kind === "studio";
+  const vcsTarget = makeVcsQueryTarget(
+    project,
+    isStudioProject ? (hostThreadId ?? null) : null,
+    settings.vcsBackend,
+    {
+      threadWorkingDirectory: isStudioProject ? (hostThread?.workingDirectory ?? null) : null,
+    },
+  );
   // Use the configured global backend for local PR preparation. Hosted PR
   // metadata remains GitHub-backed, while checkout/workspace creation stays
   // native to Git or JJ.
@@ -230,7 +242,10 @@ export function PullRequestDetailPanel({
   ) => {
     if (!detail || preparingThread !== null) return;
     setPreparingThread(kind);
-    const mode = settings.defaultThreadEnvMode;
+    // Studio reference folders are ordinary local directories, not lifecycle-
+    // managed workspaces. Preparing a second workspace here would leave it
+    // detached from Studio's deliberately local-only thread metadata.
+    const mode = isStudioProject ? "local" : settings.defaultThreadEnvMode;
     void prepareThreadMutation
       .mutateAsync({
         reference: detail.url,
@@ -242,6 +257,11 @@ export function PullRequestDetailPanel({
             branch: prepared.branch,
             worktreePath: prepared.workspacePath,
             envMode: mode,
+            ...(isStudioProject
+              ? {
+                  workingDirectory: prepared.workspacePath ?? hostThread?.workingDirectory ?? null,
+                }
+              : {}),
             // This action is an explicit handoff from the PR browser. Reusing the project's
             // existing draft can leave the user on the PR route and insert the prompt into a
             // hidden composer, making the button appear inert.

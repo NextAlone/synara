@@ -7,10 +7,7 @@ import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 
 import { createLocalPreviewGrant } from "../../localImageFiles";
 import { WorkspaceEntries } from "../Services/WorkspaceEntries";
-import {
-  WorkspaceFileBinaryError,
-  WorkspaceFileSystem,
-} from "../Services/WorkspaceFileSystem";
+import { WorkspaceFileBinaryError, WorkspaceFileSystem } from "../Services/WorkspaceFileSystem";
 import { WorkspaceEntriesLive } from "./WorkspaceEntries";
 import { WorkspaceFileSystemLive } from "./WorkspaceFileSystem";
 import { WorkspacePathsLive } from "./WorkspacePaths";
@@ -100,9 +97,7 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
           await NodeFs.writeFile(absolutePath, Uint8Array.from([0x50, 0x4b, 0x03, 0x04, 0x00]));
         });
 
-        const error = yield* workspaceFileSystem
-          .readFile({ cwd, relativePath })
-          .pipe(Effect.flip);
+        const error = yield* workspaceFileSystem.readFile({ cwd, relativePath }).pipe(Effect.flip);
 
         expect(Schema.is(WorkspaceFileBinaryError)(error)).toBe(true);
         if (!Schema.is(WorkspaceFileBinaryError)(error)) {

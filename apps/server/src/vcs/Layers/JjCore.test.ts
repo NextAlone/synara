@@ -24,9 +24,7 @@ describe("JjCore", () => {
       }
       if (input.operation === "JjCore.readRevisionIdentity") {
         return Effect.succeed(
-          result(
-            '{"changeId":"change-1","commitId":"commit-1","description":"feat: current"}\n',
-          ),
+          result('{"changeId":"change-1","commitId":"commit-1","description":"feat: current"}\n'),
         );
       }
       if (input.operation === "JjCore.detectRepository.root") {
@@ -87,9 +85,7 @@ describe("JjCore", () => {
     };
     const core = await Effect.runPromise(makeJjCore({ executeOverride }));
 
-    const diff = await Effect.runPromise(
-      core.readRevisionDiff("/repo", "@", ["new.txt"]),
-    );
+    const diff = await Effect.runPromise(core.readRevisionDiff("/repo", "@", ["new.txt"]));
 
     expect(diff.patch).toContain("diff --git");
     expect(diff.files).toEqual([
@@ -117,9 +113,7 @@ describe("JjCore", () => {
           return Effect.succeed(result());
         case "JjCore.readRevisionIdentity":
           return Effect.succeed(
-            result(
-              '{"changeId":"change-1","commitId":"commit-1","description":""}\n',
-            ),
+            result('{"changeId":"change-1","commitId":"commit-1","description":""}\n'),
           );
         case "JjCore.detectRepository.root":
         case "JjCore.detectRepository.gitRoot":
@@ -153,36 +147,25 @@ describe("JjCore", () => {
       aheadCount: 2,
       behindCount: 1,
     });
-    const aheadArgs = calls.find(
-      (call) => call.operation === "JjCore.status.ahead",
-    )?.args;
-    const behindArgs = calls.find(
-      (call) => call.operation === "JjCore.status.behind",
-    )?.args;
+    const aheadArgs = calls.find((call) => call.operation === "JjCore.status.ahead")?.args;
+    const behindArgs = calls.find((call) => call.operation === "JjCore.status.behind")?.args;
     expect(aheadArgs?.join(" ")).toContain(
-      "remote_bookmarks(exact:\"feature\", exact:\"origin\")..bookmarks(exact:\"feature\")",
+      'remote_bookmarks(exact:"feature", exact:"origin")..bookmarks(exact:"feature")',
     );
     expect(behindArgs?.join(" ")).toContain(
-      "bookmarks(exact:\"feature\")..remote_bookmarks(exact:\"feature\", exact:\"origin\")",
+      'bookmarks(exact:"feature")..remote_bookmarks(exact:"feature", exact:"origin")',
     );
   });
 
   it("compares and advances a local bookmark against a differently named remote bookmark", async () => {
-    const repositoryRoot = nodePath.resolve(
-      import.meta.dirname,
-      "../../../../..",
-    );
+    const repositoryRoot = nodePath.resolve(import.meta.dirname, "../../../../..");
     const calls: ExecuteJjInput[] = [];
     const executeOverride: JjCoreShape["execute"] = (input) => {
       calls.push(input);
-      if (
-        input.operation === "JjCore.compareBookmarkToRemote.ahead"
-      ) {
+      if (input.operation === "JjCore.compareBookmarkToRemote.ahead") {
         return Effect.succeed(result("ahead-1\n"));
       }
-      if (
-        input.operation === "JjCore.compareBookmarkToRemote.behind"
-      ) {
+      if (input.operation === "JjCore.compareBookmarkToRemote.behind") {
         return Effect.succeed(result("behind-1\nbehind-2\n"));
       }
       if (
@@ -196,42 +179,30 @@ describe("JjCore", () => {
     const core = await Effect.runPromise(makeJjCore({ executeOverride }));
 
     const comparison = await Effect.runPromise(
-      core.compareBookmarkToRemote(
-        repositoryRoot,
-        "synara/pr-42/main",
-        "alice",
-        "main",
-      ),
+      core.compareBookmarkToRemote(repositoryRoot, "synara/pr-42/main", "alice", "main"),
     );
     await Effect.runPromise(
-      core.advanceBookmark(
-        repositoryRoot,
-        "synara/pr-42/main",
-        "alice",
-        "main",
-      ),
+      core.advanceBookmark(repositoryRoot, "synara/pr-42/main", "alice", "main"),
     );
 
     expect(comparison).toEqual({ aheadCount: 1, behindCount: 2 });
     expect(
-      calls.find(
-        (call) =>
-          call.operation === "JjCore.compareBookmarkToRemote.ahead",
-      )?.args.join(" "),
+      calls
+        .find((call) => call.operation === "JjCore.compareBookmarkToRemote.ahead")
+        ?.args.join(" "),
     ).toContain(
       'remote_bookmarks(exact:"main", exact:"alice")..bookmarks(exact:"synara/pr-42/main")',
     );
-    expect(
-      calls.find(
-        (call) => call.operation === "JjCore.advanceBookmark.move",
-      )?.args,
-    ).toEqual([
+    expect(calls.find((call) => call.operation === "JjCore.advanceBookmark.move")?.args).toEqual([
       "bookmark",
       "set",
       "synara/pr-42/main",
       "--revision",
       "main@alice",
     ]);
+    expect(
+      calls.findIndex((call) => call.operation === "JjCore.advanceBookmark.rebase"),
+    ).toBeLessThan(calls.findIndex((call) => call.operation === "JjCore.advanceBookmark.move"));
   });
 
   it("reports a non-repository without attempting dependent probes", async () => {
@@ -258,9 +229,10 @@ describe("JjCore", () => {
 
     await Effect.runPromise(core.initRepository("/new-repo"));
 
-    expect(
-      calls.find((call) => call.operation === "JjCore.initRepository")?.args,
-    ).toEqual(["git", "init"]);
+    expect(calls.find((call) => call.operation === "JjCore.initRepository")?.args).toEqual([
+      "git",
+      "init",
+    ]);
   });
 
   it("starts a described change at a bookmark and returns its identity", async () => {
@@ -324,9 +296,7 @@ describe("JjCore", () => {
         );
       }
       if (input.operation === "JjCore.listGitRemotes") {
-        return Effect.succeed(
-          result("upstream https://github.com/acme/repo.git\n"),
-        );
+        return Effect.succeed(result("upstream https://github.com/acme/repo.git\n"));
       }
       return Effect.succeed(result());
     };
@@ -335,26 +305,14 @@ describe("JjCore", () => {
     const committed = await Effect.runPromise(
       core.commitWorkingCopy(repositoryRoot, "feat: native jj", ["src/a.ts"]),
     );
-    await Effect.runPromise(
-      core.setBookmark(repositoryRoot, "feature", committed.commitId),
-    );
-    await Effect.runPromise(
-      core.trackBookmark(repositoryRoot, "feature@upstream"),
-    );
-    const remotes = await Effect.runPromise(
-      core.listGitRemotes(repositoryRoot),
-    );
-    await Effect.runPromise(
-      core.deleteBookmark(repositoryRoot, "temporary"),
-    );
+    await Effect.runPromise(core.setBookmark(repositoryRoot, "feature", committed.commitId));
+    await Effect.runPromise(core.trackBookmark(repositoryRoot, "feature@upstream"));
+    const remotes = await Effect.runPromise(core.listGitRemotes(repositoryRoot));
+    await Effect.runPromise(core.deleteBookmark(repositoryRoot, "temporary"));
     await Effect.runPromise(core.importGit(repositoryRoot));
     await Effect.runPromise(core.fetchGit(repositoryRoot, "upstream"));
-    await Effect.runPromise(
-      core.advanceBookmark(repositoryRoot, "feature", "upstream"),
-    );
-    await Effect.runPromise(
-      core.pushBookmark(repositoryRoot, "feature", "upstream"),
-    );
+    await Effect.runPromise(core.advanceBookmark(repositoryRoot, "feature", "upstream"));
+    await Effect.runPromise(core.pushBookmark(repositoryRoot, "feature", "upstream"));
 
     expect(committed.commitId).toBe("commit-committed");
     expect(remotes).toEqual([
@@ -363,30 +321,30 @@ describe("JjCore", () => {
         url: "https://github.com/acme/repo.git",
       },
     ]);
-    expect(
-      calls.find((call) => call.operation === "JjCore.commitWorkingCopy")?.args,
-    ).toEqual([
+    expect(calls.find((call) => call.operation === "JjCore.commitWorkingCopy")?.args).toEqual([
       "commit",
       "--message",
       "feat: native jj",
       "--",
       "src/a.ts",
     ]);
-    expect(
-      calls.find((call) => call.operation === "JjCore.setBookmark")?.args,
-    ).toEqual([
+    expect(calls.find((call) => call.operation === "JjCore.setBookmark")?.args).toEqual([
       "bookmark",
       "set",
       "feature",
       "--revision",
       "commit-committed",
     ]);
-    expect(
-      calls.find((call) => call.operation === "JjCore.trackBookmark")?.args,
-    ).toEqual(["bookmark", "track", "feature@upstream"]);
-    expect(
-      calls.find((call) => call.operation === "JjCore.deleteBookmark")?.args,
-    ).toEqual(["bookmark", "delete", "temporary"]);
+    expect(calls.find((call) => call.operation === "JjCore.trackBookmark")?.args).toEqual([
+      "bookmark",
+      "track",
+      "feature@upstream",
+    ]);
+    expect(calls.find((call) => call.operation === "JjCore.deleteBookmark")?.args).toEqual([
+      "bookmark",
+      "delete",
+      "temporary",
+    ]);
     expect(calls.find((call) => call.operation === "JjCore.fetchGit")?.args).toEqual([
       "git",
       "fetch",
@@ -397,21 +355,21 @@ describe("JjCore", () => {
       "git",
       "import",
     ]);
-    expect(
-      calls.find((call) => call.operation === "JjCore.advanceBookmark.move")?.args,
-    ).toEqual([
+    expect(calls.find((call) => call.operation === "JjCore.advanceBookmark.move")?.args).toEqual([
       "bookmark",
       "set",
       "feature",
       "--revision",
       "feature@upstream",
     ]);
-    expect(
-      calls.find((call) => call.operation === "JjCore.advanceBookmark.rebase")?.args,
-    ).toEqual(["rebase", "-s", "@", "-d", "feature"]);
-    expect(
-      calls.find((call) => call.operation === "JjCore.pushBookmark")?.args,
-    ).toEqual([
+    expect(calls.find((call) => call.operation === "JjCore.advanceBookmark.rebase")?.args).toEqual([
+      "rebase",
+      "-s",
+      "@",
+      "-d",
+      "feature@upstream",
+    ]);
+    expect(calls.find((call) => call.operation === "JjCore.pushBookmark")?.args).toEqual([
       "git",
       "push",
       "--remote",
@@ -434,9 +392,7 @@ describe("JjCore", () => {
       }
       if (input.operation === "JjCore.readRevisionIdentity") {
         return Effect.succeed(
-          result(
-            '{"changeId":"working-change","commitId":"working-commit","description":""}\n',
-          ),
+          result('{"changeId":"working-change","commitId":"working-commit","description":""}\n'),
         );
       }
       if (input.operation === "JjCore.listBookmarks") {
@@ -459,16 +415,8 @@ describe("JjCore", () => {
     );
 
     expect(bookmark).toBe("synara/topic-3");
-    expect(
-      calls.find(
-        (call) => call.operation === "JjCore.createAvailableBookmark",
-      )?.args,
-    ).toEqual([
-      "bookmark",
-      "create",
-      "--revision",
-      "@-",
-      "synara/topic-3",
-    ]);
+    expect(calls.find((call) => call.operation === "JjCore.createAvailableBookmark")?.args).toEqual(
+      ["bookmark", "create", "--revision", "@-", "synara/topic-3"],
+    );
   });
 });

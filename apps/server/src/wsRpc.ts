@@ -650,9 +650,9 @@ const makeWsRpcHandlersLayer = () =>
             Effect.provideService(Path.Path, path),
           ),
         resolveJjGitStorePath: (cwd) =>
-          jj.detectRepository(cwd).pipe(
-            Effect.map((repository) => repository?.gitStorePath ?? null),
-          ),
+          jj
+            .detectRepository(cwd)
+            .pipe(Effect.map((repository) => repository?.gitStorePath ?? null)),
       });
       const guardLegacyGitEffect = <A, E, R>(
         method: string,
@@ -1154,13 +1154,9 @@ const makeWsRpcHandlersLayer = () =>
                           Effect.andThen(Effect.fail(error)),
                         ),
                       ),
-                      Effect.tap((vcsResult) =>
-                        recordVcsHandoffResult(input.commandId, vcsResult),
-                      ),
+                      Effect.tap((vcsResult) => recordVcsHandoffResult(input.commandId, vcsResult)),
                     );
-              yield* dispatchOrchestrationCommand(
-                vcsHandoffMetadataCommand(input, result),
-              );
+              yield* dispatchOrchestrationCommand(vcsHandoffMetadataCommand(input, result));
               yield* completeGitHandoff(input.commandId);
               return result;
             }),
@@ -1169,15 +1165,9 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.vcsPull]: (input) =>
           rpcEffect(projectVcs.pull(input), "Failed to pull VCS reference"),
         [WS_METHODS.vcsGithubRepository]: (input) =>
-          rpcEffect(
-            projectVcs.githubRepository(input),
-            "Failed to resolve GitHub repository",
-          ),
+          rpcEffect(projectVcs.githubRepository(input), "Failed to resolve GitHub repository"),
         [WS_METHODS.vcsResolvePullRequest]: (input) =>
-          rpcEffect(
-            projectVcs.resolvePullRequest(input),
-            "Failed to resolve pull request",
-          ),
+          rpcEffect(projectVcs.resolvePullRequest(input), "Failed to resolve pull request"),
         [WS_METHODS.vcsPullRequestSnapshot]: (input) =>
           rpcEffect(
             projectVcs.pullRequestSnapshot(input),
@@ -1193,16 +1183,12 @@ const makeWsRpcHandlersLayer = () =>
             Stream.callback<GitActionProgressEvent, WsRpcError>((queue) =>
               projectVcs
                 .runStackedAction(input, {
-                  publishProgress: (event) =>
-                    Queue.offer(queue, event).pipe(Effect.asVoid),
+                  publishProgress: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
                 })
                 .pipe(
                   Effect.matchCauseEffect({
                     onFailure: (cause) =>
-                      Queue.fail(
-                        queue,
-                        toWsRpcError(cause, "VCS action failed"),
-                      ),
+                      Queue.fail(queue, toWsRpcError(cause, "VCS action failed")),
                     onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
                   }),
                 ),
@@ -1260,10 +1246,16 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.gitRunStackedAction]: (input) =>
           Stream.fromEffect(
-            assertLegacyGitBackendAllowed({
-              method: WS_METHODS.gitRunStackedAction,
-              cwd: input.cwd,
-            }),
+            Effect.gen(function* () {
+              yield* assertLegacyGitBackendAllowed({
+                method: WS_METHODS.gitRunStackedAction,
+                cwd: input.cwd,
+              });
+            }).pipe(
+              Effect.mapError((cause) =>
+                toWsRpcError(cause, "Legacy Git action boundary check failed"),
+              ),
+            ),
           ).pipe(
             Stream.flatMap(() =>
               bufferLiveUiStream(
@@ -1334,11 +1326,7 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(pullRequests.setPinned(input), "Failed to update pull request pin"),
         [WS_METHODS.gitListBranches]: (input) =>
           rpcEffect(
-            guardLegacyGitEffect(
-              WS_METHODS.gitListBranches,
-              input.cwd,
-              git.listBranches(input),
-            ),
+            guardLegacyGitEffect(WS_METHODS.gitListBranches, input.cwd, git.listBranches(input)),
             "Failed to list branches",
           ),
         [WS_METHODS.gitCreateWorktree]: (input) =>
@@ -1418,20 +1406,13 @@ const makeWsRpcHandlersLayer = () =>
             guardLegacyGitEffect(
               WS_METHODS.gitStashDrop,
               input.cwd,
-              refreshGitStatusAfter(
-                input.cwd,
-                git.withMutation(input.cwd, git.stashDrop(input)),
-              ),
+              refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.stashDrop(input))),
             ),
             "Failed to drop stash",
           ),
         [WS_METHODS.gitStashInfo]: (input) =>
           rpcEffect(
-            guardLegacyGitEffect(
-              WS_METHODS.gitStashInfo,
-              input.cwd,
-              git.stashInfo(input),
-            ),
+            guardLegacyGitEffect(WS_METHODS.gitStashInfo, input.cwd, git.stashInfo(input)),
             "Failed to read stash",
           ),
         [WS_METHODS.gitRemoveIndexLock]: (input) =>
@@ -1448,10 +1429,7 @@ const makeWsRpcHandlersLayer = () =>
             guardLegacyGitEffect(
               WS_METHODS.gitInit,
               input.cwd,
-              refreshGitStatusAfter(
-                input.cwd,
-                git.withMutation(input.cwd, git.initRepo(input)),
-              ),
+              refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.initRepo(input))),
             ),
             "Failed to initialize repository",
           ),
@@ -1511,9 +1489,7 @@ const makeWsRpcHandlersLayer = () =>
                           ),
                         ),
                       ).pipe(
-                        Effect.tap((gitResult) =>
-                          recordGitHandoffResult(commandId, gitResult),
-                        ),
+                        Effect.tap((gitResult) => recordGitHandoffResult(commandId, gitResult)),
                       );
                 yield* dispatchOrchestrationCommand(
                   gitHandoffMetadataCommand({ commandId, threadId }, result),
@@ -1596,7 +1572,10 @@ const makeWsRpcHandlersLayer = () =>
                     "Change the global VCS backend through vcs.setBackend so active turns and workspaces are checked first.",
                 }),
               )
-            : rpcEffect(serverSettings.updateSettingsView(input), "Failed to update server settings"),
+            : rpcEffect(
+                serverSettings.updateSettingsView(input),
+                "Failed to update server settings",
+              ),
         [WS_METHODS.serverRefreshProviders]: () =>
           rpcEffect(
             providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),

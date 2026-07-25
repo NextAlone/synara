@@ -47,7 +47,10 @@ import {
   PROVIDER_RUNTIME_INGESTION_CONSUMER,
   ProviderRuntimeEventRepository,
 } from "../../persistence/Services/ProviderRuntimeEvents.ts";
-import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import {
+  resolveProjectCheckpointBackend,
+  resolveThreadWorkspaceCwd,
+} from "../../checkpointing/Utils.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
@@ -881,9 +884,13 @@ const make = Effect.gen(function* () {
     if (!project) {
       return false;
     }
-    const backend = project.vcs?.binding?.backend;
     const selectedBackend = (yield* serverSettings.getSettings).vcsBackend;
-    if (!backend || backend !== selectedBackend) {
+    const backend = resolveProjectCheckpointBackend({
+      projectKind: project.kind,
+      boundBackend: project.vcs?.binding?.backend,
+      selectedBackend,
+    });
+    if (!backend) {
       return false;
     }
     const workspaceCwd = resolveThreadWorkspaceCwd({

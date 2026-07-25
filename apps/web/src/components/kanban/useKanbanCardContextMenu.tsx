@@ -48,6 +48,7 @@ function resolveCardWorkspacePath(card: KanbanCard): string | null {
     projectCwd: project?.cwd ?? null,
     envMode: card.envMode ?? undefined,
     worktreePath: card.worktreePath,
+    workingDirectory: card.workingDirectory ?? null,
   });
 }
 
@@ -76,9 +77,7 @@ async function setThreadPinned(threadId: ThreadId, isPinned: boolean) {
 export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
   const { settings } = useAppSettings();
   const queryClient = useQueryClient();
-  const removeWorktreeMutation = useMutation(
-    vcsRemoveWorkspaceMutationOptions({ queryClient }),
-  );
+  const removeWorktreeMutation = useMutation(vcsRemoveWorkspaceMutationOptions({ queryClient }));
   const clearComposerContent = useComposerDraftStore((store) => store.clearComposerContent);
   const clearDraftThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clearProjectDraftThreadById = useComposerDraftStore(

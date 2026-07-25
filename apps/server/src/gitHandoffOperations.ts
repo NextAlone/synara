@@ -121,10 +121,7 @@ const decodeVcsOperation = (
     ? parseVcsResult(row).pipe(Effect.map((result) => ({ phase: row.phase, result })))
     : Effect.succeed({ phase: row.phase });
 
-const beginHandoff = (input: {
-  readonly commandId: string;
-  readonly threadId: string;
-}) =>
+const beginHandoff = (input: { readonly commandId: string; readonly threadId: string }) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const inputJson = JSON.stringify(input);
@@ -158,9 +155,7 @@ export const beginGitHandoff = (input: GitHandoffThreadInput) =>
 export const beginVcsHandoff = (input: VcsHandoffThreadInput) =>
   Effect.gen(function* () {
     const begun = yield* beginHandoff(input);
-    return begun.row === null
-      ? ({ phase: "new" } as const)
-      : yield* decodeVcsOperation(begun.row);
+    return begun.row === null ? ({ phase: "new" } as const) : yield* decodeVcsOperation(begun.row);
   });
 
 const recordHandoffResult = (
@@ -178,15 +173,11 @@ const recordHandoffResult = (
     `.pipe(Effect.mapError(operationError("Failed to persist applied VCS handoff result.")));
   });
 
-export const recordGitHandoffResult = (
-  commandId: string,
-  result: GitHandoffThreadResult,
-) => recordHandoffResult(commandId, result);
+export const recordGitHandoffResult = (commandId: string, result: GitHandoffThreadResult) =>
+  recordHandoffResult(commandId, result);
 
-export const recordVcsHandoffResult = (
-  commandId: string,
-  result: VcsHandoffThreadResult,
-) => recordHandoffResult(commandId, result);
+export const recordVcsHandoffResult = (commandId: string, result: VcsHandoffThreadResult) =>
+  recordHandoffResult(commandId, result);
 
 export const completeGitHandoff = (commandId: string) =>
   Effect.gen(function* () {
@@ -273,11 +264,7 @@ export const recoverGitHandoffOperations = (
         try: () => JSON.parse(row.inputJson) as unknown,
         catch: operationError(`Invalid persisted VCS handoff input for ${row.commandId}.`),
       });
-      if (
-        typeof rawInput === "object" &&
-        rawInput !== null &&
-        "projectId" in rawInput
-      ) {
+      if (typeof rawInput === "object" && rawInput !== null && "projectId" in rawInput) {
         const input = yield* Effect.try({
           try: () =>
             Schema.decodeUnknownSync(VcsHandoffThreadInput)(
