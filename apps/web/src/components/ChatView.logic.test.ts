@@ -44,6 +44,7 @@ import {
   shouldConsumePendingCustomBinaryConfirmation,
   shouldEnableComposerPastedTextCollapse,
   shouldHandlePromptHistoryNavigationKey,
+  shouldCopyChangesFromCurrentForWorkspace,
   shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
@@ -1609,6 +1610,30 @@ describe("shouldStartActiveTurnLayoutGrace", () => {
 });
 
 describe("worktree setup snapshots", () => {
+  it("copies current changes only from the backend's actual current source", () => {
+    expect(
+      shouldCopyChangesFromCurrentForWorkspace({
+        backend: "jj",
+        sourceRef: "@",
+        activeReference: "main",
+      }),
+    ).toBe(true);
+    expect(
+      shouldCopyChangesFromCurrentForWorkspace({
+        backend: "jj",
+        sourceRef: "main",
+        activeReference: "main",
+      }),
+    ).toBe(false);
+    expect(
+      shouldCopyChangesFromCurrentForWorkspace({
+        backend: "git",
+        sourceRef: "main",
+        activeReference: "main",
+      }),
+    ).toBe(true);
+  });
+
   it("marks earlier steps done, the active step active, and later steps pending", () => {
     expect(createWorktreeSetupSnapshot("prepare-thread").steps).toEqual([
       { id: "create-worktree", label: "Creating branch and worktree", status: "done" },

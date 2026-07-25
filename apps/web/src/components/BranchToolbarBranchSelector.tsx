@@ -498,15 +498,10 @@ export function BranchToolbarBranchSelector({
       ? `__checkout_pull_request__:${prReference}`
       : null;
   const canPrefillCreateBranch =
-    !isSelectingWorktreeBase &&
-    !jjLocalDefaultWorkspace &&
-    trimmedBranchQuery.length > 0;
+    !isSelectingWorktreeBase && !jjLocalDefaultWorkspace && trimmedBranchQuery.length > 0;
   const hasExactBranchMatch = branchByName.has(trimmedBranchQuery);
   const branchPickerItems = useMemo(() => {
-    const items = [
-      ...jjWorktreeBaseSpecials.map((item) => item.value),
-      ...branchNames,
-    ];
+    const items = [...jjWorktreeBaseSpecials.map((item) => item.value), ...branchNames];
     if (checkoutPullRequestItemValue) {
       items.unshift(checkoutPullRequestItemValue);
     }

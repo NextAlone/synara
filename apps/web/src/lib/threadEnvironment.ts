@@ -30,15 +30,8 @@ export function resolveIsolatedWorkspaceNoun(
 
 export function formatIsolatedWorkspaceNoun(
   backend: VcsBackend | null | undefined,
-  options?: {
-    readonly capitalize?: boolean;
-  },
-): string {
-  const noun = resolveIsolatedWorkspaceNoun(backend);
-  if (options?.capitalize === false) {
-    return noun;
-  }
-  return noun === "workspace" ? "Workspace" : "Worktree";
+): "Worktree" | "Workspace" {
+  return backend === "jj" ? "Workspace" : "Worktree";
 }
 
 export interface ResolvedForkThreadEnvironment {
@@ -67,12 +60,7 @@ export interface ThreadEnvironmentPresentation {
   worktreeOptionLabel: "Worktree" | "Workspace";
   newIsolatedOptionLabel: "New worktree" | "New workspace";
   handOffToIsolatedLabel: "Hand off to new worktree" | "Hand off to new workspace";
-  worktreeBadgeLabel:
-    | "Worktree"
-    | "Worktree pending"
-    | "Workspace"
-    | "Workspace pending"
-    | null;
+  worktreeBadgeLabel: "Worktree" | "Worktree pending" | "Workspace" | "Workspace pending" | null;
 }
 
 export function resolveThreadEnvironmentPresentation(input: {
@@ -84,8 +72,7 @@ export function resolveThreadEnvironmentPresentation(input: {
   const workspaceState = resolveThreadWorkspaceState(input);
   const isolatedNoun = resolveIsolatedWorkspaceNoun(input.backend);
   const isolatedLabel = formatIsolatedWorkspaceNoun(input.backend);
-  const pendingLabel =
-    isolatedNoun === "workspace" ? "Workspace pending" : "Worktree pending";
+  const pendingLabel = isolatedNoun === "workspace" ? "Workspace pending" : "Worktree pending";
 
   return {
     mode,
@@ -94,12 +81,9 @@ export function resolveThreadEnvironmentPresentation(input: {
     shortLabel: mode === "worktree" ? isolatedLabel : "Local",
     localOptionLabel: "Local project",
     worktreeOptionLabel: isolatedLabel,
-    newIsolatedOptionLabel:
-      isolatedNoun === "workspace" ? "New workspace" : "New worktree",
+    newIsolatedOptionLabel: isolatedNoun === "workspace" ? "New workspace" : "New worktree",
     handOffToIsolatedLabel:
-      isolatedNoun === "workspace"
-        ? "Hand off to new workspace"
-        : "Hand off to new worktree",
+      isolatedNoun === "workspace" ? "Hand off to new workspace" : "Hand off to new worktree",
     worktreeBadgeLabel:
       workspaceState === "worktree-ready"
         ? isolatedLabel

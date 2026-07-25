@@ -541,6 +541,7 @@ import {
   type QueuedSteerGate,
   resolveQueuedSteerGateTransition,
   shouldRenderProviderHealthBanner,
+  shouldCopyChangesFromCurrentForWorkspace,
   resolveRuntimeModeAfterApprovalDecision,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
@@ -7296,8 +7297,7 @@ export default function ChatView({
       !nextThreadWorktreePath &&
       !nextThreadBranch
     ) {
-      nextThreadBranch =
-        settings.vcsBackend === "jj" ? "@" : (activeRootBranch ?? null);
+      nextThreadBranch = settings.vcsBackend === "jj" ? "@" : (activeRootBranch ?? null);
     }
 
     const baseBranchForWorktree =
@@ -7498,10 +7498,12 @@ export default function ChatView({
           projectId: targetProjectIdForSend,
           expectedEpoch: targetProjectVcsForSend.epoch,
           sourceRef: baseBranchForWorktree,
-          // JJ can only copy dirty files when the source is the current change (`@`).
-          // Git copies when the base is the currently checked-out branch.
-          copyChangesFromCurrent:
-            baseBranchForWorktree === "@" || baseBranchForWorktree === activeRootBranch,
+          path: null,
+          copyChangesFromCurrent: shouldCopyChangesFromCurrentForWorkspace({
+            backend: settings.vcsBackend,
+            sourceRef: baseBranchForWorktree,
+            activeReference: activeRootBranch,
+          }),
         });
         beginLocalDispatch({
           worktreeSetupStepId: "prepare-thread",

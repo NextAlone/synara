@@ -828,9 +828,7 @@ export interface WorktreeSetupDispatchOptions extends WorktreeSetupSnapshotOptio
 }
 
 function isolatedCreateStepLabel(backend?: "git" | "jj" | null): string {
-  return backend === "jj"
-    ? "Creating bookmark and workspace"
-    : "Creating branch and worktree";
+  return backend === "jj" ? "Creating bookmark and workspace" : "Creating branch and worktree";
 }
 
 function worktreeSetupStepDefinitions(
@@ -1101,6 +1099,16 @@ export function buildSuggestedWorktreeName(input: {
   title?: string | null;
 }): string {
   return buildSynaraBranchName(input.associatedWorktreeBranch ?? input.title);
+}
+
+export function shouldCopyChangesFromCurrentForWorkspace(input: {
+  backend: "git" | "jj";
+  sourceRef: string;
+  activeReference: string | null;
+}): boolean {
+  return input.backend === "jj"
+    ? input.sourceRef === "@"
+    : input.sourceRef === input.activeReference;
 }
 
 export function deriveComposerSendState(options: {

@@ -28,11 +28,7 @@ export function isJjLocalDefaultWorkspaceMode(input: {
   envMode: EnvMode;
   activeWorktreePath: string | null;
 }): boolean {
-  return (
-    input.backend === "jj" &&
-    input.envMode === "local" &&
-    input.activeWorktreePath === null
-  );
+  return input.backend === "jj" && input.envMode === "local" && input.activeWorktreePath === null;
 }
 
 export function resolveDefaultWorktreeBaseRef(input: {

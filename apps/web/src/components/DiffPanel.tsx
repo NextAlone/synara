@@ -1058,8 +1058,8 @@ export default function DiffPanel({
   );
   const showDiffToolbar = Boolean(
     activeThreadContext &&
-      !diffEnvironmentPending &&
-      (diffViewKind === "turn" || repoState === "ready"),
+    !diffEnvironmentPending &&
+    (diffViewKind === "turn" || repoState === "ready"),
   );
   const copyDiff = useCallback(() => {
     if (diffCopyText) {
@@ -1262,10 +1262,7 @@ export default function DiffPanel({
         <PanelStateMessage density="compact" fill="flex">
           {repoStatusError ?? "Failed to check source control repository."}
         </PanelStateMessage>
-      ) : diffViewKind === "repo" &&
-        repoState === "checking" &&
-        diffQueriesEnabled &&
-        activeCwd ? (
+      ) : diffViewKind === "repo" && repoState === "checking" && diffQueriesEnabled && activeCwd ? (
         <DiffPanelLoadingState label="Checking source control repository..." />
       ) : (
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">

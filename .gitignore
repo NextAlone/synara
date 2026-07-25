@@ -12,6 +12,7 @@ packages/*/dist
 build/
 .logs/
 release/
+release-mock/
 .synara
 /.synara/electron-dev
 /.synara/backups
