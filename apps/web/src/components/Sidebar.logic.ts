@@ -405,9 +405,9 @@ export function pruneProjectThreadListPagingForCollapsedProjects<
  * - The relative time now lives in the row hover card, so an idle row with no
  *   status/jump glyph and no meta chips reserves almost nothing — the title runs
  *   to the row edge instead of truncating against permanently reserved space.
- * - A status/loader (or keyboard-jump) glyph occupies a ~2.25rem slot, and each
- *   fork/worktree/handoff meta chip adds width; the reserve grows only for the
- *   badges that are present.
+ * - A status/loader occupies a compact trailing slot, while the keyboard-jump
+ *   hint needs room for two keycaps plus their gap. Each fork/worktree/handoff
+ *   meta chip adds width; the reserve grows only for the content that is present.
  * - The wider reserve that clears the hover pin/archive actions is applied only
  *   on hover/focus (mirroring the project header row), so the title gives up that
  *   width exactly when those actions appear and not a moment sooner.
@@ -416,13 +416,33 @@ export function pruneProjectThreadListPagingForCollapsedProjects<
  */
 export function resolveThreadRowTrailingReserveClass(input: {
   metaChipCount: number;
-  hasTrailingGlyph: boolean;
+  trailingSlot: "none" | "status" | "shortcut";
 }): string {
   // Hover/focus reveals the pin/archive actions; the meta chips + glyph fade out
   // at the same time, so the hover reserve is constant regardless of rest content.
   const hoverReserve =
     "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]";
-  const { metaChipCount, hasTrailingGlyph } = input;
+  const { metaChipCount, trailingSlot } = input;
+  if (trailingSlot === "shortcut") {
+    // A default jump hint is two 1.25rem keycaps with a 0.25rem gap. Include
+    // the row's 0.375rem right inset so title text stops before the whole group
+    // instead of showing through underneath the first keycap.
+    if (metaChipCount <= 0) {
+      return cn("pr-[3.25rem]", hoverReserve);
+    }
+    if (metaChipCount === 1) {
+      return cn("pr-[4.5rem]", hoverReserve);
+    }
+    if (metaChipCount === 2) {
+      return cn("pr-[5rem]", hoverReserve);
+    }
+    if (metaChipCount === 3) {
+      return cn("pr-[5.5rem]", hoverReserve);
+    }
+    return cn("pr-[6rem]", hoverReserve);
+  }
+
+  const hasTrailingGlyph = trailingSlot === "status";
   if (metaChipCount <= 0) {
     return cn(hasTrailingGlyph ? "pr-[1.75rem]" : "pr-2", hoverReserve);
   }

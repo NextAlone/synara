@@ -4076,7 +4076,7 @@ export default function Sidebar() {
               leadingPrStatus && "pl-8",
               resolveThreadRowTrailingReserveClass({
                 metaChipCount: rightMetaChips.length,
-                hasTrailingGlyph: hasTrailingStatusGlyph,
+                trailingSlot: threadJumpLabel ? "shortcut" : threadStatus ? "status" : "none",
               }),
               isActive
                 ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
@@ -4207,6 +4207,13 @@ export default function Sidebar() {
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
+    const trailingReserveClassName =
+      isSubagentThread && !threadJumpLabel
+        ? "pr-7.5"
+        : resolveThreadRowTrailingReserveClass({
+            metaChipCount: showCompactMeta ? rightMetaChips.length : 0,
+            trailingSlot: threadJumpLabel ? "shortcut" : threadStatus ? "status" : "none",
+          });
     const hoverAnchorId = createSidebarThreadHoverAnchorId({
       scope: topLevel ? "chat" : "project",
       threadId: thread.id,
@@ -4241,12 +4248,7 @@ export default function Sidebar() {
                     isSelected,
                   }),
                   leadingPrStatus ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
-                  isSubagentThread
-                    ? "pr-7.5"
-                    : resolveThreadRowTrailingReserveClass({
-                        metaChipCount: showCompactMeta ? rightMetaChips.length : 0,
-                        hasTrailingGlyph: Boolean(threadStatus) || Boolean(threadJumpLabel),
-                      }),
+                  trailingReserveClassName,
                 )}
                 draggable
                 onDragStart={(event) => {

@@ -42,6 +42,7 @@ import {
   resolveSidebarNewThreadEnvMode,
   resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
+  resolveThreadRowTrailingReserveClass,
   resolveThreadStatusPill,
   shouldShowDebugFeatureFlagsMenu,
   shouldPrunePinnedThreads,
@@ -974,6 +975,27 @@ describe("resolveThreadRowClassName", () => {
     const className = resolveThreadRowClassName({ isActive: false, isSelected: false });
     expect(className).toContain("hover:bg-[var(--sidebar-accent)]");
     expect(className).not.toContain("hover:bg-[var(--color-background-button-secondary-hover)]");
+  });
+});
+
+describe("resolveThreadRowTrailingReserveClass", () => {
+  it("reserves the full two-keycap width for thread jump hints", () => {
+    const className = resolveThreadRowTrailingReserveClass({
+      metaChipCount: 0,
+      trailingSlot: "shortcut",
+    });
+
+    expect(className).toContain("pr-[3.25rem]");
+    expect(className).not.toContain("pr-[1.75rem]");
+  });
+
+  it("keeps the compact reserve for a status glyph", () => {
+    const className = resolveThreadRowTrailingReserveClass({
+      metaChipCount: 0,
+      trailingSlot: "status",
+    });
+
+    expect(className).toContain("pr-[1.75rem]");
   });
 });
 
