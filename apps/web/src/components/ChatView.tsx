@@ -1363,6 +1363,11 @@ export default function ChatView({
     useState<Record<string, number>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [activeTaskListCompact, setActiveTaskListCompact] = useState(false);
+  const preserveTailForNextTaskBannerResizeRef = useRef(false);
+  const handleActiveTaskListCompactChange = useCallback((compact: boolean) => {
+    preserveTailForNextTaskBannerResizeRef.current = true;
+    setActiveTaskListCompact(compact);
+  }, []);
   const [subagentStripCompact, setSubagentStripCompact] = useState(false);
   const [workflowRunCardCompact, setWorkflowRunCardCompact] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
@@ -1497,6 +1502,7 @@ export default function ChatView({
   }, [threadId]);
   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const composerFormRef = useRef<HTMLFormElement>(null);
+  const composerStackedPanelsRef = useRef<HTMLDivElement>(null);
   // Set by whichever mounted GitActionsControl instance (header quick-action or the
   // Environment panel row) last registered — either performs the identical commit &
   // push mutation for this thread's repo, so it doesn't matter which one is "current".
@@ -5005,6 +5011,8 @@ export default function ChatView({
     if (!composerForm) return;
 
     let previousHeight = composerForm.getBoundingClientRect().height;
+    let previousStackedPanelsHeight =
+      composerStackedPanelsRef.current?.getBoundingClientRect().height ?? 0;
     let pendingScrollTimeout: number | null = null;
     const observer = new ResizeObserver((entries) => {
       const [entry] = entries;
@@ -5012,8 +5020,25 @@ export default function ChatView({
 
       const nextHeight = entry.contentRect.height;
       const heightDelta = nextHeight - previousHeight;
+      const nextStackedPanelsHeight =
+        composerStackedPanelsRef.current?.getBoundingClientRect().height ?? 0;
+      const stackedPanelsHeightChanged =
+        Math.abs(nextStackedPanelsHeight - previousStackedPanelsHeight) >= 0.5;
+      const preserveTaskBannerTail =
+        stackedPanelsHeightChanged && preserveTailForNextTaskBannerResizeRef.current;
       previousHeight = nextHeight;
+      previousStackedPanelsHeight = nextStackedPanelsHeight;
+      if (stackedPanelsHeightChanged) {
+        preserveTailForNextTaskBannerResizeRef.current = false;
+      }
       if (Math.abs(heightDelta) < 0.5) return;
+
+      // Task/tool/approval chrome is not transcript output. Let it resize the
+      // viewport without pulling the conversation upward; only intrinsic
+      // composer resizes (for example a growing draft) preserve a tail stick.
+      // A deliberate task-banner toggle is the exception: keep the tail visible
+      // while honoring the user's own expand/collapse action.
+      if (stackedPanelsHeightChanged && !preserveTaskBannerTail) return;
 
       const scrollContainer = legendListRef.current?.getScrollableNode?.();
       // A composer resize can make LegendList report `isAtEnd: false` after the viewport
@@ -10363,7 +10388,7 @@ export default function ChatView({
         activeTaskList={activeTaskList}
         backgroundTaskCount={composerBackgroundTaskCount}
         compact={activeTaskListCompact}
-        onCompactChange={setActiveTaskListCompact}
+        onCompactChange={handleActiveTaskListCompactChange}
         onOpenSidebar={() => setPlanSidebarOpen(true)}
         attachedToPrevious={attachedToPrevious}
       />
@@ -10385,7 +10410,7 @@ export default function ChatView({
           <ComposerColumnFrame>
             {/* A bare wrapper keeps the normal-flow panels' -mb-px seam onto the input shell
                 via margin collapse. */}
-            <div>
+            <div ref={composerStackedPanelsRef}>
               {showComposerLiveChangesHeader ? (
                 <ComposerLiveChangesHeader
                   fileCount={activeTurnLiveDiffState.fileCount}

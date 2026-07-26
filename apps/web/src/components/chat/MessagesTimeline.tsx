@@ -168,6 +168,12 @@ const MARKER_FINE_SCROLL_RETRY_TIMEOUT_MS = 900;
 const MARKER_FINE_SCROLL_MAX_RETRY_FRAMES = 90;
 const MESSAGE_SEND_ENTER_ANIMATION_MS = 180;
 const MESSAGE_SEND_ENTER_CLEANUP_BUFFER_MS = 60;
+// Streaming should follow growth inside the live message row only. Enabling every
+// LegendList trigger also treats composer/todo height changes as new transcript
+// output, which pulls the viewport upward even though no message content arrived.
+const LIVE_OUTPUT_SCROLL_AT_END = {
+  on: { itemLayout: true },
+} as const;
 // Treat any partially visible row (>= 1px) as in view, so the navigation trail's
 // "active" tick tracks the topmost rendered row rather than waiting for a turn to
 // be substantially on-screen.
@@ -2011,9 +2017,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         // has to be surfaced through extraData.
         extraData={timelineExtraData}
         initialScrollAtEnd
-        maintainScrollAtEnd={followLiveOutput}
+        maintainScrollAtEnd={followLiveOutput ? LIVE_OUTPUT_SCROLL_AT_END : false}
         maintainScrollAtEndThreshold={0.1}
-        {...(!followLiveOutput ? { maintainVisibleContentPosition: true } : {})}
+        maintainVisibleContentPosition={!followLiveOutput}
         onClickCapture={onMessagesClickCapture}
         onMouseUp={onMessagesMouseUp}
         onPointerCancel={onMessagesPointerCancel}

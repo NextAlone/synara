@@ -2455,6 +2455,115 @@ describe("ChatView timeline estimator parity (full app)", () => {
         interval: 16,
       });
 
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+      const scrollTopBeforeTaskList = scrollContainer.scrollTop;
+      scrollToCalls.length = 0;
+      syncActiveThread((thread) => ({
+        ...thread,
+        activities: [
+          ...thread.activities,
+          {
+            id: EventId.makeUnsafe("activity-auto-follow-tasks"),
+            createdAt: isoAt(1_207),
+            kind: "turn.tasks.updated",
+            summary: "Tasks updated",
+            tone: "info",
+            turnId: activeTurnId,
+            payload: {
+              tasks: [
+                { task: "Inspect the transcript", status: "inProgress" },
+                { task: "Keep the viewport stable", status: "pending" },
+              ],
+            },
+          },
+        ],
+        updatedAt: isoAt(1_207),
+      }));
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector('[data-testid="active-task-list-card"]')).not.toBeNull();
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+      await waitForLayout();
+      expect(scrollToCalls).toHaveLength(0);
+      expect(Math.abs(scrollContainer.scrollTop - scrollTopBeforeTaskList)).toBeLessThanOrEqual(1);
+
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+      const scrollTopBeforeTaskListGrowth = scrollContainer.scrollTop;
+      scrollToCalls.length = 0;
+      syncActiveThread((thread) => ({
+        ...thread,
+        activities: [
+          ...thread.activities,
+          {
+            id: EventId.makeUnsafe("activity-auto-follow-tasks-expanded"),
+            createdAt: isoAt(1_208),
+            kind: "turn.tasks.updated",
+            summary: "Tasks updated",
+            tone: "info",
+            turnId: activeTurnId,
+            payload: {
+              tasks: [
+                { task: "Inspect the transcript", status: "completed" },
+                { task: "Keep the viewport stable", status: "inProgress" },
+                { task: "Cover task-list growth", status: "pending" },
+                { task: "Cover task status changes", status: "pending" },
+              ],
+            },
+          },
+        ],
+        updatedAt: isoAt(1_208),
+      }));
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Cover task-list growth");
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+      await waitForLayout();
+      expect(scrollToCalls).toHaveLength(0);
+      expect(Math.abs(scrollContainer.scrollTop - scrollTopBeforeTaskListGrowth)).toBeLessThanOrEqual(
+        1,
+      );
+
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+      scrollToCalls.length = 0;
+      const streamedTailText = [
+        liveAssistantMessage.text,
+        "Streaming row growth must still follow the live assistant.",
+        "This extra line makes the row measurably taller.",
+        "The todo card must not disable real output following.",
+      ].join("\n\n");
+      syncActiveThread((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) =>
+          message.id === liveAssistantMessage.id
+            ? {
+                ...message,
+                text: streamedTailText,
+                updatedAt: isoAt(1_209),
+              }
+            : message,
+        ),
+        updatedAt: isoAt(1_209),
+      }));
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain(
+            "The todo card must not disable real output following.",
+          );
+          expect(scrollToCalls.length).toBeGreaterThan(0);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
       scrollToCalls.length = 0;
       syncActiveThread((thread) => ({
         ...thread,
@@ -2463,12 +2572,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
             ? {
                 ...message,
                 streaming: false,
-                completedAt: isoAt(1_207),
-                updatedAt: isoAt(1_207),
+                completedAt: isoAt(1_210),
+                updatedAt: isoAt(1_210),
               }
             : message,
         ),
-        updatedAt: isoAt(1_207),
+        updatedAt: isoAt(1_210),
       }));
       await vi.waitFor(() => expect(scrollToCalls.length).toBeGreaterThan(0), {
         timeout: 4_000,
