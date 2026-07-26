@@ -141,11 +141,13 @@ describe("desktop shutdown authorization", () => {
       provider: "codex",
       baseEnv: {
         PATH: process.env.PATH,
+        SYNARA_DESKTOP_PARENT_IPC: "1",
         SYNARA_DESKTOP_SHUTDOWN_TOKEN: SHUTDOWN_TOKEN,
       },
     });
 
     expect(providerEnvironment.PATH).toBe(process.env.PATH);
+    expect(providerEnvironment.SYNARA_DESKTOP_PARENT_IPC).toBeUndefined();
     expect(providerEnvironment.SYNARA_DESKTOP_SHUTDOWN_TOKEN).toBeUndefined();
   });
 });

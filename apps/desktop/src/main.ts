@@ -1900,7 +1900,7 @@ function restartAfterStartupBundleSwap(error: BundleChangedDuringStartupError): 
 // (updater retry racing a relaunch, a reinstall, a build copied over the bundle)
 // every archive read in this process — the synara:// protocol, the backend's static
 // files, lazily-loaded renderer chunks — resolves to stale offsets and silently
-// returns the wrong bytes. Detect the swap and offer a restart; continuing is
+// returns the wrong bytes. Detect the swap and require a restart; continuing is
 // never safe.
 function startBundleSwapWatcher(): void {
   if (!app.isPackaged || bundleSwapPollTimer) {
@@ -1931,30 +1931,28 @@ function startBundleSwapWatcher(): void {
     writeDesktopLogHeader(
       `bundle swap detected path=${bundlePath} size=${baseline.size}->${current?.size ?? "unknown"}`,
     );
-    // Re-arm on the new identity so declining the restart still catches the
-    // next replacement instead of re-prompting for the same one.
     baseline = current;
     bundleSwapPromptOpen = true;
     void dialog
       .showMessageBox({
         type: "warning",
-        title: "Synara was replaced on disk",
+        title: "Synara needs to restart",
         message: "The installed Synara app changed while it was running.",
         detail:
-          "The interface keeps running from a safeguarded copy, but parts of the app loaded later can still read the replaced file. Restart now to pick up the new version safely.",
-        buttons: ["Restart Now", "Later"],
+          "Synara cannot safely continue reading the replaced application bundle. Restart to use one consistent version.",
+        buttons: ["Restart Synara"],
         defaultId: 0,
-        cancelId: 1,
+        noLink: true,
       })
-      .then(({ response }) => {
-        bundleSwapPromptOpen = false;
-        if (response === 0) {
-          app.relaunch();
-          requestGracefulAppQuit("bundle-swap-restart");
-        }
+      .catch((error: unknown) => {
+        console.warn(
+          `[desktop] Failed to show required bundle restart prompt: ${formatErrorMessage(error)}`,
+        );
       })
-      .catch(() => {
+      .then(() => {
         bundleSwapPromptOpen = false;
+        app.relaunch();
+        requestGracefulAppQuit("bundle-swap-restart");
       });
   }, BUNDLE_SWAP_POLL_INTERVAL_MS);
   bundleSwapPollTimer.unref();
@@ -3170,10 +3168,13 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       ...backendEnv(),
       ELECTRON_RUN_AS_NODE: "1",
       SYNARA_SERVER_ENTRY: backendEntry,
+      SYNARA_DESKTOP_PARENT_IPC: "1",
     },
     // Keep output piped in every environment so startup blockers and readiness
-    // are observable even when packaged log setup is unavailable.
-    stdio: ["ignore", "pipe", "pipe"],
+    // are observable even when packaged log setup is unavailable. The IPC
+    // channel closes if Electron dies without running its shutdown path, which
+    // lets the backend release its database lock instead of becoming orphaned.
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   const listeningDetector = new ServerListeningDetector();
   const startupBlockDetector = new BackendStartupBlockDetector();

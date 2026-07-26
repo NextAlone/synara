@@ -10,6 +10,12 @@ import { version } from "../package.json" with { type: "json" };
 import { ServerLive } from "./effectServer";
 import { NetService } from "@synara/shared/Net";
 import { FetchHttpClient } from "effect/unstable/http";
+import {
+  consumeDesktopParentIpcFlag,
+  protectFromDesktopParentExit,
+} from "./desktopParentLifecycle";
+
+const DESKTOP_PARENT_FORCE_EXIT_DELAY_MS = 8_000;
 
 const RuntimeLayer = Layer.empty.pipe(
   Layer.provideMerge(CliConfig.layer),
@@ -20,6 +26,20 @@ const RuntimeLayer = Layer.empty.pipe(
   Layer.provideMerge(FetchHttpClient.layer),
 );
 
-Command.run(synaraCli, { version })
-  .pipe(Effect.provide(RuntimeLayer))
+const desktopParentIpcEnabled = consumeDesktopParentIpcFlag(process.env);
+const program = Command.run(synaraCli, { version }).pipe(Effect.provide(RuntimeLayer));
+
+protectFromDesktopParentExit({
+  program,
+  enabled: desktopParentIpcEnabled,
+  parent: process,
+  onDisconnect: Effect.sync(() => {
+    console.warn("[server] Desktop parent disconnected; shutting down.");
+    const forceExitTimer = setTimeout(() => {
+      console.error("[server] Desktop parent disconnect shutdown timed out; forcing exit.");
+      process.exit(1);
+    }, DESKTOP_PARENT_FORCE_EXIT_DELAY_MS);
+    forceExitTimer.unref();
+  }),
+})
   .pipe((program) => NodeRuntime.runMain(program as Effect.Effect<void, unknown, never>));
