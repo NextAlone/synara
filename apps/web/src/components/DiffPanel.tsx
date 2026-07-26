@@ -4,7 +4,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { ThreadId, type TurnId } from "@synara/contracts";
+import { ThreadId, type TurnId, type VcsBackend } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { Columns2Icon, CopyIcon, EllipsisIcon, FolderIcon, Rows3Icon, XIcon } from "~/lib/icons";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -38,7 +38,11 @@ import {
 import { resolveDiffEnvironmentState } from "../lib/threadEnvironment";
 import { disclosureWidthClassName } from "../lib/disclosureMotion";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
-import { type RepoDiffScope, useRepoDiffScopeStore } from "../repoDiffScopeStore";
+import {
+  resolveRepoDiffScopeLabel,
+  type RepoDiffScope,
+  useRepoDiffScopeStore,
+} from "../repoDiffScopeStore";
 import { useStore } from "../store";
 import { createProjectSelector } from "../storeSelectors";
 import { inferCheckpointTurnCountByTurnId } from "../session-logic";
@@ -92,11 +96,16 @@ import {
   MenuRadioItem,
   MenuTrigger,
 } from "./ui/menu";
-import { REPO_DIFF_SCOPE_LABELS } from "../repoDiffScopeStore";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { type SplitViewPanePanelState } from "../splitViewStore";
 import { formatShortTimestamp } from "../timestampFormat";
 import type { TurnDiffSummary } from "../types";
+import {
+  isTurnDiffSummaryReviewable,
+  resolveTurnDiffAvailability,
+  resolveTurnDiffCacheScope,
+  resolveTurnDiffMenuStatus,
+} from "../turnDiffAvailability";
 
 const EDITOR_DIFF_OPTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
 const JJ_DIFF_SCOPE_OPTIONS: ReadonlyArray<RepoDiffScope> = ["workingTree", "branch"];
@@ -113,6 +122,7 @@ function EditorDiffOptionsCountBadge(props: { count: number | undefined }) {
 }
 
 function EditorDiffOptionsMenu(props: {
+  vcsBackend: VcsBackend | null;
   scopePickerValue: string | null;
   repoScopeOptions: ReadonlyArray<RepoDiffScope>;
   scopeFileCounts: Partial<Record<RepoDiffScope, number>>;
@@ -138,6 +148,8 @@ function EditorDiffOptionsMenu(props: {
   onToggleCollapseAll: () => void;
 }) {
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const latestReviewableTurn =
+    props.orderedTurnDiffSummaries.find(isTurnDiffSummaryReviewable) ?? null;
 
   return (
     <Menu open={optionsOpen} onOpenChange={setOptionsOpen}>
@@ -191,14 +203,16 @@ function EditorDiffOptionsMenu(props: {
           >
             {props.repoScopeOptions.map((scope) => (
               <MenuRadioItem key={scope} value={scope}>
-                <span className="min-w-0 flex-1 truncate">{REPO_DIFF_SCOPE_LABELS[scope]}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {resolveRepoDiffScopeLabel(scope, props.vcsBackend)}
+                </span>
                 <EditorDiffOptionsCountBadge count={props.scopeFileCounts[scope]} />
               </MenuRadioItem>
             ))}
-            <MenuRadioItem value="allTurns">
+            <MenuRadioItem value="allTurns" disabled={!latestReviewableTurn}>
               <span className="min-w-0 flex-1 truncate">All turns</span>
             </MenuRadioItem>
-            <MenuRadioItem value="lastTurn">
+            <MenuRadioItem value="lastTurn" disabled={!latestReviewableTurn}>
               <span className="min-w-0 flex-1 truncate">Last turn</span>
             </MenuRadioItem>
           </MenuRadioGroup>
@@ -213,7 +227,7 @@ function EditorDiffOptionsMenu(props: {
                 props.onSelectTurn(value === "all-turns" ? null : (value as TurnId));
               }}
             >
-              <MenuRadioItem value="all-turns">
+              <MenuRadioItem value="all-turns" disabled={!latestReviewableTurn}>
                 <span className="min-w-0 flex-1 truncate">All turns</span>
               </MenuRadioItem>
               {props.orderedTurnDiffSummaries.map((summary) => {
@@ -221,11 +235,18 @@ function EditorDiffOptionsMenu(props: {
                   summary.checkpointTurnCount ??
                   props.inferredCheckpointTurnCountByTurnId[summary.turnId] ??
                   "?";
+                const statusLabel = resolveTurnDiffMenuStatus(summary);
+                const reviewable = isTurnDiffSummaryReviewable(summary);
                 return (
-                  <MenuRadioItem key={summary.turnId} value={summary.turnId}>
+                  <MenuRadioItem
+                    key={summary.turnId}
+                    value={summary.turnId}
+                    disabled={!reviewable}
+                  >
                     <span className="min-w-0 flex-1 truncate">Turn {turnNumber}</span>
                     <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
-                      {formatShortTimestamp(summary.completedAt, props.timestampFormat)}
+                      {statusLabel ??
+                        formatShortTimestamp(summary.completedAt, props.timestampFormat)}
                     </span>
                   </MenuRadioItem>
                 );
@@ -298,6 +319,7 @@ function EditorDiffOptionsMenu(props: {
 }
 
 function EditorDiffControls(props: {
+  vcsBackend: VcsBackend | null;
   scopePickerValue: string | null;
   repoScopeOptions: ReadonlyArray<RepoDiffScope>;
   scopeFileCounts: Partial<Record<RepoDiffScope, number>>;
@@ -325,6 +347,7 @@ function EditorDiffControls(props: {
   return (
     <div className="flex items-center gap-1">
       <EditorDiffOptionsMenu
+        vcsBackend={props.vcsBackend}
         scopePickerValue={props.scopePickerValue}
         repoScopeOptions={props.repoScopeOptions}
         scopeFileCounts={props.scopeFileCounts}
@@ -577,6 +600,10 @@ export default function DiffPanel({
       }),
     [inferredCheckpointTurnCountByTurnId, turnDiffSummaries],
   );
+  const latestReviewableTurn = useMemo(
+    () => orderedTurnDiffSummaries.find(isTurnDiffSummaryReviewable),
+    [orderedTurnDiffSummaries],
+  );
 
   const selectedFilePath = panelState
     ? (panelState.diffFilePath ?? null)
@@ -588,29 +615,23 @@ export default function DiffPanel({
   const selectedCheckpointTurnCount =
     selectedTurn &&
     (selectedTurn.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[selectedTurn.turnId]);
+  const selectedTurnAvailability = selectedTurn
+    ? resolveTurnDiffAvailability(selectedTurn)
+    : null;
   const selectedCheckpointRange = useMemo(
     () =>
-      typeof selectedCheckpointTurnCount === "number"
+      selectedTurnAvailability === "ready" && typeof selectedCheckpointTurnCount === "number"
         ? {
             fromTurnCount: Math.max(0, selectedCheckpointTurnCount - 1),
             toTurnCount: selectedCheckpointTurnCount,
           }
         : null,
-    [selectedCheckpointTurnCount],
+    [selectedCheckpointTurnCount, selectedTurnAvailability],
   );
-  const conversationCheckpointTurnCount = useMemo(() => {
-    const turnCounts = orderedTurnDiffSummaries
-      .map(
-        (summary) =>
-          summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId],
-      )
-      .filter((value): value is number => typeof value === "number");
-    if (turnCounts.length === 0) {
-      return undefined;
-    }
-    const latest = Math.max(...turnCounts);
-    return latest > 0 ? latest : undefined;
-  }, [inferredCheckpointTurnCountByTurnId, orderedTurnDiffSummaries]);
+  const conversationCheckpointTurnCount = latestReviewableTurn
+    ? (latestReviewableTurn.checkpointTurnCount ??
+      inferredCheckpointTurnCountByTurnId[latestReviewableTurn.turnId])
+    : undefined;
   const conversationCheckpointRange = useMemo(
     () =>
       !selectedTurn &&
@@ -628,10 +649,13 @@ export default function DiffPanel({
     : conversationCheckpointRange;
   const conversationCacheScope = useMemo(
     () =>
-      selectedTurn || orderedTurnDiffSummaries.length === 0
+      selectedTurn || !latestReviewableTurn
         ? null
-        : resolveConversationCacheScope(conversationCheckpointTurnCount),
-    [conversationCheckpointTurnCount, orderedTurnDiffSummaries.length, selectedTurn],
+        : resolveConversationCacheScope(
+            conversationCheckpointTurnCount,
+            resolveTurnDiffCacheScope(latestReviewableTurn),
+          ),
+    [conversationCheckpointTurnCount, latestReviewableTurn, selectedTurn],
   );
   const activeCheckpointDiffQuery = useQuery(
     checkpointDiffQueryOptions({
@@ -639,12 +663,14 @@ export default function DiffPanel({
       fromTurnCount: activeCheckpointRange?.fromTurnCount ?? null,
       toTurnCount: activeCheckpointRange?.toTurnCount ?? null,
       ignoreWhitespace: diffIgnoreWhitespace,
-      cacheScope: selectedTurn ? `turn:${selectedTurn.turnId}` : conversationCacheScope,
-      enabled: resolveDiffPanelCheckpointQueryEnabled({
-        queriesEnabled: diffQueriesEnabled,
-        diffEnvironmentPending,
-        diffViewKind,
-      }),
+      cacheScope: selectedTurn ? resolveTurnDiffCacheScope(selectedTurn) : conversationCacheScope,
+      enabled:
+        activeCheckpointRange !== null &&
+        resolveDiffPanelCheckpointQueryEnabled({
+          queriesEnabled: diffQueriesEnabled,
+          diffEnvironmentPending,
+          diffViewKind,
+        }),
     }),
   );
   const selectedTurnCheckpointDiff = selectedTurn
@@ -666,6 +692,25 @@ export default function DiffPanel({
   });
   const isLoadingCheckpointDiff = checkpointDiffDisplay.isLoading;
   const checkpointDiffError = checkpointDiffDisplay.error;
+  const selectedTurnUnavailable =
+    selectedTurnAvailability === "pending"
+      ? "This turn's checkpoint is still being prepared. Review will be available after capture completes."
+      : selectedTurnAvailability === "unavailable"
+        ? "No reviewable checkpoint was captured for this turn."
+        : null;
+  const conversationUnavailable =
+    !selectedTurn && !latestReviewableTurn
+      ? orderedTurnDiffSummaries.length === 0
+        ? "No completed turn checkpoints are available yet."
+        : "No reviewable turn checkpoints are available."
+      : null;
+  const partialConversationFromTurnCount =
+    diffViewKind === "turn" &&
+    !selectedTurn &&
+    activeCheckpointDiffQuery.data?.status === "ready" &&
+    activeCheckpointDiffQuery.data.fromTurnCount > 0
+      ? activeCheckpointDiffQuery.data.fromTurnCount
+      : null;
 
   const selectedPatch = selectedTurn ? selectedTurnCheckpointDiff : conversationCheckpointDiff;
   const hasResolvedPatch = typeof selectedPatch === "string";
@@ -1036,17 +1081,16 @@ export default function DiffPanel({
     selectTurn(null);
   }, [selectTurn]);
   const selectLastTurn = useCallback(() => {
-    const latestTurn = orderedTurnDiffSummaries[0];
     setTurnScopeIntent("last");
     setDiffViewKind("turn");
-    if (!latestTurn) {
+    if (!latestReviewableTurn) {
       if (selectedTurnId !== null) {
         updateDiffSelection({ turnId: null, filePath: null });
       }
       return;
     }
-    selectTurn(latestTurn.turnId);
-  }, [orderedTurnDiffSummaries, selectTurn, selectedTurnId, updateDiffSelection]);
+    selectTurn(latestReviewableTurn.turnId);
+  }, [latestReviewableTurn, selectTurn, selectedTurnId, updateDiffSelection]);
   const toggleCollapseAll = useCallback(() => {
     setCollapsedFiles((previous) => {
       if (areAllRenderableFilesCollapsed(renderableFiles, previous)) {
@@ -1071,7 +1115,7 @@ export default function DiffPanel({
       copyDiffToClipboard(diffCopyText, undefined);
     }
   }, [copyDiffToClipboard, diffCopyText]);
-  const latestTurnId = orderedTurnDiffSummaries[0]?.turnId ?? null;
+  const latestTurnId = latestReviewableTurn?.turnId ?? null;
   const scopePickerValue = useMemo(
     () =>
       resolveDiffPanelScopePickerValue({
@@ -1085,6 +1129,7 @@ export default function DiffPanel({
     () =>
       hideHeader ? (
         <EditorDiffControls
+          vcsBackend={vcsTarget.backend}
           scopePickerValue={scopePickerValue}
           repoScopeOptions={repoScopeOptions}
           scopeFileCounts={scopeFileCounts}
@@ -1132,6 +1177,7 @@ export default function DiffPanel({
       selectedTurnId,
       settings.timestampFormat,
       toggleCollapseAll,
+      vcsTarget.backend,
     ],
   );
   useEffect(() => {
@@ -1153,6 +1199,7 @@ export default function DiffPanel({
           key={activeThreadId ?? "no-thread"}
           activeCwd={activeCwd}
           activeThreadId={activeThreadId}
+          vcsBackend={vcsTarget.backend}
           viewSource={viewSource}
           turnScopeIntent={turnScopeIntent}
           repoScopeOptions={repoScopeOptions}
@@ -1245,6 +1292,7 @@ export default function DiffPanel({
       toggleFileTree,
       turnScopeIntent,
       viewSource,
+      vcsTarget.backend,
     ],
   );
 
@@ -1276,6 +1324,12 @@ export default function DiffPanel({
             className="diff-panel-viewport flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
             onMouseUp={diffSelectionAction.onContainerMouseUp}
           >
+            {partialConversationFromTurnCount !== null ? (
+              <div className="shrink-0 border-b border-border/60 bg-muted/35 px-3 py-2 text-[11px] text-muted-foreground">
+                Partial history: showing changes after turn {partialConversationFromTurnCount}.
+                Earlier checkpoints are unavailable.
+              </div>
+            ) : null}
             <DiffPanelPatchViewport
               renderablePatch={renderablePatch}
               renderableFiles={renderableFiles}
@@ -1292,7 +1346,10 @@ export default function DiffPanel({
               viewKind={diffViewKind}
               loadingLabel={
                 diffViewKind === "repo"
-                  ? `Loading ${REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()} diff...`
+                  ? `Loading ${resolveRepoDiffScopeLabel(
+                      repoDiffScope,
+                      vcsTarget.backend,
+                    ).toLowerCase()} diff...`
                   : "Loading checkpoint diff..."
               }
               emptyLabel={
@@ -1305,7 +1362,9 @@ export default function DiffPanel({
               unavailableLabel={
                 diffViewKind === "repo"
                   ? "No repo diff is available right now."
-                  : (checkpointDiffDisplay.unavailable ??
+                  : (selectedTurnUnavailable ??
+                    conversationUnavailable ??
+                    checkpointDiffDisplay.unavailable ??
                     "No patch is available for this selection.")
               }
             />

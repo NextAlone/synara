@@ -5,7 +5,7 @@
 // Layer: Diff panel UI
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";
-import type { ThreadId, TurnId } from "@synara/contracts";
+import type { ThreadId, TurnId, VcsBackend } from "@synara/contracts";
 import { FaPlusMinus } from "react-icons/fa6";
 import { useState, type ReactNode } from "react";
 
@@ -28,8 +28,12 @@ import { cn } from "~/lib/utils";
 import type { TimestampFormat } from "~/appSettings";
 import type { TurnDiffSummary } from "~/types";
 import type { RepoDiffScope } from "~/repoDiffScopeStore";
-import { REPO_DIFF_SCOPE_LABELS } from "~/repoDiffScopeStore";
+import { resolveRepoDiffScopeLabel } from "~/repoDiffScopeStore";
 import { formatShortTimestamp } from "~/timestampFormat";
+import {
+  isTurnDiffSummaryReviewable,
+  resolveTurnDiffMenuStatus,
+} from "~/turnDiffAvailability";
 import {
   resolveDiffPanelPickerLabel,
   resolveDiffPanelScopePickerValue,
@@ -76,6 +80,7 @@ function DiffPanelToolbarDivider() {
 interface DiffPanelToolbarProps {
   activeCwd: string | null;
   activeThreadId: ThreadId | null;
+  vcsBackend: VcsBackend | null;
   viewSource: DiffPanelViewSource;
   turnScopeIntent: DiffPanelTurnScopeIntent;
   repoScopeOptions: ReadonlyArray<RepoDiffScope>;
@@ -122,14 +127,21 @@ function ScopeCountBadge(props: { count: number | undefined }) {
   );
 }
 
-function resolveScopeMenuIcon(scope: RepoDiffScope | "lastTurn") {
+function resolveScopeMenuIcon(
+  scope: RepoDiffScope | "lastTurn",
+  vcsBackend: VcsBackend | null,
+) {
   switch (scope) {
     case "unstaged":
       return <ChangesIcon className={DIFF_PANEL_MENU_ICON_CLASS_NAME} />;
     case "staged":
       return <ListChecksIcon className={DIFF_PANEL_MENU_ICON_CLASS_NAME} />;
     case "branch":
-      return <GitBranchIcon className={DIFF_PANEL_MENU_ICON_CLASS_NAME} />;
+      return vcsBackend === "jj" ? (
+        <GitCommitIcon className={DIFF_PANEL_MENU_ICON_CLASS_NAME} />
+      ) : (
+        <GitBranchIcon className={DIFF_PANEL_MENU_ICON_CLASS_NAME} />
+      );
     case "lastTurn":
       return (
         <span className="inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
@@ -152,7 +164,11 @@ function resolveTurnNumber(
 
 export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolbarProps) {
   const [visibleTurnCount, setVisibleTurnCount] = useState(INITIAL_VISIBLE_TURN_COUNT);
-  const scopePickerLabel = resolveDiffPanelPickerLabel(props.viewSource, props.turnScopeIntent);
+  const scopePickerLabel = resolveDiffPanelPickerLabel(
+    props.viewSource,
+    props.turnScopeIntent,
+    props.vcsBackend,
+  );
 
   let scopePickerIcon: ReactNode;
   if (props.viewSource.kind === "turn") {
@@ -178,7 +194,9 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
           }`
         : "Turns";
 
-  const latestTurnId = props.orderedTurnDiffSummaries[0]?.turnId ?? null;
+  const latestReviewableTurn =
+    props.orderedTurnDiffSummaries.find(isTurnDiffSummaryReviewable) ?? null;
+  const latestTurnId = latestReviewableTurn?.turnId ?? null;
   const scopePickerValue = resolveDiffPanelScopePickerValue({
     viewSource: props.viewSource,
     latestTurnId,
@@ -259,17 +277,19 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
             >
               {props.repoScopeOptions.map((scope) => (
                 <MenuRadioItem key={scope} value={scope}>
-                  {resolveScopeMenuIcon(scope)}
-                  <span className="min-w-0 flex-1 truncate">{REPO_DIFF_SCOPE_LABELS[scope]}</span>
+                  {resolveScopeMenuIcon(scope, props.vcsBackend)}
+                  <span className="min-w-0 flex-1 truncate">
+                    {resolveRepoDiffScopeLabel(scope, props.vcsBackend)}
+                  </span>
                   <ScopeCountBadge count={props.scopeFileCounts[scope]} />
                 </MenuRadioItem>
               ))}
-              <MenuRadioItem value="allTurns">
+              <MenuRadioItem value="allTurns" disabled={!latestReviewableTurn}>
                 <GitCommitIcon className={DIFF_PANEL_MENU_ICON_CLASS_NAME} />
                 <span className="min-w-0 flex-1 truncate">All turns</span>
               </MenuRadioItem>
-              <MenuRadioItem value="lastTurn">
-                {resolveScopeMenuIcon("lastTurn")}
+              <MenuRadioItem value="lastTurn" disabled={!latestReviewableTurn}>
+                {resolveScopeMenuIcon("lastTurn", props.vcsBackend)}
                 <span className="min-w-0 flex-1 truncate">Last turn</span>
               </MenuRadioItem>
             </MenuRadioGroup>
@@ -439,21 +459,30 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
                   props.onSelectTurn(value as TurnId);
                 }}
               >
-                <MenuRadioItem value="all-turns">
+                <MenuRadioItem value="all-turns" disabled={!latestReviewableTurn}>
                   <GitCommitIcon className={DIFF_PANEL_MENU_ICON_CLASS_NAME} />
                   <span className="min-w-0 flex-1 truncate">All turns</span>
                 </MenuRadioItem>
-                {visibleTurnSummaries.map((summary) => (
-                  <MenuRadioItem key={summary.turnId} value={summary.turnId}>
-                    <FaPlusMinus className="size-2.5 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate">
-                      Turn {resolveTurnNumber(summary, props.inferredCheckpointTurnCountByTurnId)}
-                    </span>
-                    <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
-                      {formatShortTimestamp(summary.completedAt, props.timestampFormat)}
-                    </span>
-                  </MenuRadioItem>
-                ))}
+                {visibleTurnSummaries.map((summary) => {
+                  const statusLabel = resolveTurnDiffMenuStatus(summary);
+                  const reviewable = isTurnDiffSummaryReviewable(summary);
+                  return (
+                    <MenuRadioItem
+                      key={summary.turnId}
+                      value={summary.turnId}
+                      disabled={!reviewable}
+                    >
+                      <FaPlusMinus className="size-2.5 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate">
+                        Turn {resolveTurnNumber(summary, props.inferredCheckpointTurnCountByTurnId)}
+                      </span>
+                      <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                        {statusLabel ??
+                          formatShortTimestamp(summary.completedAt, props.timestampFormat)}
+                      </span>
+                    </MenuRadioItem>
+                  );
+                })}
               </MenuRadioGroup>
               {hiddenTurnCount > 0 ? (
                 <button

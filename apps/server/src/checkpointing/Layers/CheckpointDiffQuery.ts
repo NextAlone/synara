@@ -110,6 +110,88 @@ const make = Effect.gen(function* () {
     return null;
   });
 
+  const resolveFullThreadBaseline = Effect.fnUntraced(function* (input: {
+    readonly threadId: OrchestrationGetTurnDiffResultType["threadId"];
+    readonly toTurnCount: number;
+    readonly cwd: string;
+    readonly backend: VcsBackend;
+    readonly initialCheckpointRef: CheckpointRef | null;
+    readonly initialCheckpointStatus: "ready" | "missing" | "error" | null;
+  }) {
+    const checkpointWorkspace = { cwd: input.cwd, backend: input.backend };
+    if (input.initialCheckpointRef && input.initialCheckpointStatus === "ready") {
+      const initialBaselineRef =
+        checkpointRefForThreadTurnInManagedFamily(
+          input.initialCheckpointRef,
+          input.threadId,
+          0,
+        ) ?? checkpointRefForThreadTurn(input.threadId, 0);
+      if (
+        yield* checkpointStore.hasCheckpointRef({
+          ...checkpointWorkspace,
+          checkpointRef: initialBaselineRef,
+        })
+      ) {
+        return { checkpointRef: initialBaselineRef, fromTurnCount: 0 };
+      }
+    }
+
+    // Older conversations can predate durable turn-0 aliases. Recover the
+    // broadest verifiable range from a retained turn-start snapshot, then from
+    // a retained completed-turn snapshot. The returned fromTurnCount makes the
+    // degraded range explicit to the client.
+    const checkpointContext = yield* projectionSnapshotQuery.getThreadCheckpointContext(
+      input.threadId,
+    );
+    if (Option.isNone(checkpointContext)) {
+      return null;
+    }
+    const candidates = checkpointContext.value.checkpoints
+      .filter(
+        (checkpoint) =>
+          checkpoint.checkpointTurnCount <= input.toTurnCount &&
+          !checkpoint.checkpointRef.startsWith("provider-diff:"),
+      )
+      .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount);
+
+    for (const checkpoint of candidates) {
+      if (checkpoint.status === "ready") {
+        const turnStartCheckpointRef =
+          checkpointRefForThreadTurnStartInManagedFamily(
+            checkpoint.checkpointRef,
+            input.threadId,
+            checkpoint.turnId,
+          ) ?? checkpointRefForThreadTurnStart(input.threadId, checkpoint.turnId);
+        if (
+          yield* checkpointStore.hasCheckpointRef({
+            ...checkpointWorkspace,
+            checkpointRef: turnStartCheckpointRef,
+          })
+        ) {
+          return {
+            checkpointRef: turnStartCheckpointRef,
+            fromTurnCount: Math.max(0, checkpoint.checkpointTurnCount - 1),
+          };
+        }
+      }
+
+      if (checkpoint.checkpointTurnCount >= input.toTurnCount) {
+        continue;
+      }
+      const completedTurnCheckpointExists = yield* checkpointStore.hasCheckpointRef({
+        ...checkpointWorkspace,
+        checkpointRef: checkpoint.checkpointRef,
+      });
+      if (completedTurnCheckpointExists) {
+        return {
+          checkpointRef: checkpoint.checkpointRef,
+          fromTurnCount: checkpoint.checkpointTurnCount,
+        };
+      }
+    }
+    return null;
+  });
+
   const getTurnDiff: CheckpointDiffQueryShape["getTurnDiff"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointDiffQuery.getTurnDiff";
@@ -438,18 +520,6 @@ const make = Effect.gen(function* () {
           message: `The checkpoint for turn ${input.toTurnCount} was not captured.`,
         });
       }
-      if (
-        !threadContext.value.baselineCheckpointRef ||
-        threadContext.value.baselineCheckpointStatus !== "ready"
-      ) {
-        return buildUnavailableTurnDiffResult({
-          threadId: input.threadId,
-          fromTurnCount: 0,
-          toTurnCount: input.toTurnCount,
-          code: "BASELINE_MISSING",
-          message: "The initial checkpoint for this conversation was not captured.",
-        });
-      }
       const backend = yield* resolveCheckpointBackend({
         cwd: workspaceCwd,
         configuredBackend: threadContext.value.vcsBackend,
@@ -465,12 +535,6 @@ const make = Effect.gen(function* () {
         });
       }
       const checkpointWorkspace = { cwd: workspaceCwd, backend };
-      const baselineCheckpointRef =
-        checkpointRefForThreadTurnInManagedFamily(
-          threadContext.value.baselineCheckpointRef,
-          input.threadId,
-          0,
-        ) ?? checkpointRefForThreadTurn(input.threadId, 0);
       if (
         !(yield* checkpointStore.hasCheckpointRef({
           ...checkpointWorkspace,
@@ -485,25 +549,28 @@ const make = Effect.gen(function* () {
           message: `The checkpoint for turn ${input.toTurnCount} is no longer available.`,
         });
       }
-      if (
-        !(yield* checkpointStore.hasCheckpointRef({
-          ...checkpointWorkspace,
-          checkpointRef: baselineCheckpointRef,
-        }))
-      ) {
+      const baseline = yield* resolveFullThreadBaseline({
+        threadId: input.threadId,
+        toTurnCount: input.toTurnCount,
+        cwd: workspaceCwd,
+        backend,
+        initialCheckpointRef: threadContext.value.baselineCheckpointRef,
+        initialCheckpointStatus: threadContext.value.baselineCheckpointStatus,
+      });
+      if (!baseline) {
         return buildUnavailableTurnDiffResult({
           threadId: input.threadId,
           fromTurnCount: 0,
           toTurnCount: input.toTurnCount,
           code: "BASELINE_MISSING",
-          message: "The initial checkpoint for this conversation is no longer available.",
+          message: "No usable checkpoint baseline remains for this conversation.",
         });
       }
 
       const diff = yield* checkpointStore
         .diffCheckpoints({
           ...checkpointWorkspace,
-          fromCheckpointRef: baselineCheckpointRef,
+          fromCheckpointRef: baseline.checkpointRef,
           toCheckpointRef: threadContext.value.toCheckpointRef,
           fallbackFromToHead: false,
           ignoreWhitespace,
@@ -512,6 +579,7 @@ const make = Effect.gen(function* () {
           Effect.tapError((error) =>
             Effect.logWarning("full checkpoint diff failed after refs were verified", {
               threadId: input.threadId,
+              fromTurnCount: baseline.fromTurnCount,
               toTurnCount: input.toTurnCount,
               detail: error.message,
             }),
@@ -530,7 +598,7 @@ const make = Effect.gen(function* () {
 
       const fullThreadDiff = buildTurnDiffResult({
         threadId: input.threadId,
-        fromTurnCount: 0,
+        fromTurnCount: baseline.fromTurnCount,
         toTurnCount: input.toTurnCount,
         diff: diff.value,
       });

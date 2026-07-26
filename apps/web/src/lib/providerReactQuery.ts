@@ -178,7 +178,10 @@ export function checkpointDiffQueryOptions(input: CheckpointDiffQueryInput) {
       });
     },
     enabled: (input.enabled ?? true) && !!input.threadId && decodedRequest._tag === "Some",
-    staleTime: Infinity,
+    // Ready/unavailable checkpoint results are immutable for a cache scope. A
+    // pending result is not: keep it stale so reopening the review after polling
+    // exhausted performs a fresh read even if the completion event was missed.
+    staleTime: (query) => (query.state.data?.status === "pending" ? 0 : Infinity),
     retry: (failureCount, error) => {
       if (isWsRequestCancelled(error)) {
         return false;

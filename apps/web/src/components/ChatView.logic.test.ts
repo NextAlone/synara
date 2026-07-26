@@ -1087,6 +1087,31 @@ describe("resolveActiveTurnLiveDiffState", () => {
     });
   });
 
+  it("does not expose Review for a live provider-diff placeholder", () => {
+    const activeTurnId = TurnId.makeUnsafe("turn-active");
+
+    expect(
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: activeTurnId,
+        turnDiffSummaries: [
+          {
+            turnId: activeTurnId,
+            completedAt: "2026-06-13T10:01:00.000Z",
+            checkpointRef: CheckpointRef.makeUnsafe("provider-diff:event-1"),
+            status: "missing",
+            files: [{ path: "src/a.ts", additions: 2, deletions: 1 }],
+          },
+        ],
+      }),
+    ).toEqual({
+      turnId: null,
+      fileCount: 1,
+      additions: 2,
+      deletions: 1,
+      hasChanges: true,
+    });
+  });
+
   it("returns zero totals before the active turn has a diff summary or file-edit work", () => {
     expect(
       resolveActiveTurnLiveDiffState({

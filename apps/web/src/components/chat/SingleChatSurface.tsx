@@ -220,7 +220,7 @@ export function SingleChatSurface(props: {
       : (readEditorViewState(props.threadId)?.centerMode ?? "diff"),
   );
   // This route component is reused across thread navigations; reload the
-  // persisted editor view state when the thread changes.
+  // persisted workspace-view state when the thread changes.
   const editorViewStateThreadIdRef = useRef(props.threadId);
   useEffect(() => {
     if (editorViewStateThreadIdRef.current === props.threadId) {
@@ -228,7 +228,7 @@ export function SingleChatSurface(props: {
     }
     editorViewStateThreadIdRef.current = props.threadId;
     const persisted = readEditorViewState(props.threadId);
-    // Re-seed editor view state from storage asynchronously so the reset is not a
+    // Re-seed workspace-view state from storage asynchronously so the reset is not a
     // synchronous setState in the effect body; both setters are user-mutable
     // elsewhere, so deriving here would mean stamping the thread key in every one.
     const timer = window.setTimeout(() => {
@@ -945,7 +945,7 @@ export function SingleChatSurface(props: {
               onOpenTurnDiff={handleOpenTurnDiff}
               onSplitSurface={handleSplitSurface}
               viewModeAction={{
-                label: "Editor view",
+                label: "Workspace view",
                 active: false,
                 onClick: handleOpenEditorView,
               }}

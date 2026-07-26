@@ -161,7 +161,7 @@ function updateStoredEditorRailChatTabs(
 }
 
 // Compact recent-chats picker for the editor rail; selecting a thread keeps the
-// editor view because the caller's navigation preserves the `view` search param.
+// workspace view because the caller's navigation preserves the legacy `view=editor` search param.
 function EditorChatHistoryMenu(props: {
   projectId: ProjectId;
   activeThreadId: ThreadId;

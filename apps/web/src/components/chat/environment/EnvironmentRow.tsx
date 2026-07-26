@@ -56,7 +56,7 @@ export function EnvironmentSectionDivider() {
   return <div className="my-1 border-t border-[color:var(--color-border-light)]" />;
 }
 
-/** Small muted label that introduces a group of rows (e.g. "Editor", "Recap"). */
+/** Small muted label that introduces a group of rows (e.g. "Workspace", "Recap"). */
 export function EnvironmentSectionLabel({ children }: { children: ReactNode }) {
   return <p className={ENVIRONMENT_PANEL_SECTION_LABEL_CLASS_NAME}>{children}</p>;
 }

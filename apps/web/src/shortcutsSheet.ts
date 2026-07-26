@@ -169,7 +169,7 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
   {
     command: "diff.toggle",
     label: "Toggle diff",
-    description: "Open or close the working tree diff panel.",
+    description: "Open or close the working copy diff panel.",
   },
   {
     command: "browser.toggle",

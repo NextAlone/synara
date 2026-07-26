@@ -320,6 +320,26 @@ describe("checkpointDiffQueryOptions", () => {
       } as never),
     ).toBe(650);
   });
+
+  it("keeps pending results stale so reopening review performs a fresh read", () => {
+    const options = checkpointDiffQueryOptions({
+      threadId,
+      fromTurnCount: 1,
+      toTurnCount: 2,
+      ignoreWhitespace: true,
+      cacheScope: "turn:abc",
+    });
+    const staleTime = options.staleTime;
+    expect(typeof staleTime).toBe("function");
+    if (typeof staleTime !== "function") {
+      throw new Error("Expected staleTime to be a function.");
+    }
+
+    expect(staleTime({ state: { data: { status: "pending" } } } as never)).toBe(0);
+    expect(staleTime({ state: { data: { status: "ready", diff: "patch" } } } as never)).toBe(
+      Infinity,
+    );
+  });
 });
 
 describe("resolveCheckpointDiffQueryDisplayState", () => {

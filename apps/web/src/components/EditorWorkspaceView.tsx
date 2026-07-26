@@ -1,5 +1,5 @@
 // FILE: EditorWorkspaceView.tsx
-// Purpose: Read-only editor-style thread surface with file explorer, workspace
+// Purpose: Read-only workspace thread surface with file explorer, workspace
 //          file search, file/diff preview, and chat.
 // Layer: Chat route presentation
 
@@ -331,7 +331,7 @@ function EditorActivityBar(props: {
   return (
     <nav
       className="flex w-12 shrink-0 flex-col items-center border-r border-border/65 bg-[var(--color-background-surface)]"
-      aria-label="Editor activity bar"
+      aria-label="Workspace activity bar"
     >
       <ExplorerActivityBarButton
         label={filesActive ? "Hide files sidebar" : "Files"}

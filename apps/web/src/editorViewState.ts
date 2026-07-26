@@ -1,6 +1,6 @@
 // FILE: editorViewState.ts
 // Purpose: Persists per-thread editor workspace view state (expanded explorer
-//          directories, center mode) so re-entering the editor view restores it.
+//          directories, center mode) so re-entering the workspace view restores it.
 // Layer: Web UI state persistence
 
 import type { ProjectId, ProviderKind, ThreadId } from "@synara/contracts";

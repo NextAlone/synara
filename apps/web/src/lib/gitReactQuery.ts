@@ -202,7 +202,7 @@ export function gitWorkingTreeDiffQueryOptions(input: {
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) {
-        throw new Error("Working tree diff is unavailable.");
+        throw new Error("Working copy diff is unavailable.");
       }
       return api.git.readWorkingTreeDiff({ cwd: input.cwd, scope });
     },

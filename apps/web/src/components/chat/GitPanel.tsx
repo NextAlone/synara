@@ -347,7 +347,7 @@ export function GitPanel(props: {
         ) : null}
         {!error && !isLoading && !hasChanges ? (
           <p className="px-1.5 py-2 text-center text-[12px] text-muted-foreground/70">
-            No changes in the working tree.
+            No changes in the working copy.
           </p>
         ) : null}
         {hasChanges ? (

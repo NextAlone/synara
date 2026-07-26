@@ -3,7 +3,7 @@
 // Layer: Web UI state store
 // Exports: repo diff scope labels, validation, and a persisted Zustand store.
 
-import type { GitReadWorkingTreeDiffInput } from "@synara/contracts";
+import type { GitReadWorkingTreeDiffInput, VcsBackend } from "@synara/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -12,11 +12,21 @@ export type RepoDiffScope = NonNullable<GitReadWorkingTreeDiffInput["scope"]>;
 export const DEFAULT_REPO_DIFF_SCOPE: RepoDiffScope = "workingTree";
 
 export const REPO_DIFF_SCOPE_LABELS: Record<RepoDiffScope, string> = {
-  workingTree: "Working tree",
+  workingTree: "Working copy",
   unstaged: "Unstaged",
   staged: "Staged",
   branch: "Branch",
 };
+
+export function resolveRepoDiffScopeLabel(
+  scope: RepoDiffScope,
+  backend: VcsBackend | null | undefined,
+): string {
+  if (scope === "branch" && backend === "jj") {
+    return "Current stack";
+  }
+  return REPO_DIFF_SCOPE_LABELS[scope];
+}
 
 export function isRepoDiffScope(value: string): value is RepoDiffScope {
   return (

@@ -8,12 +8,13 @@ import {
   type ModelSelection,
   type ThreadId,
   type TurnId,
+  type VcsBackend,
 } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 
 import type { DraftThreadState } from "../composerDraftStore";
 import type { RepoDiffScope } from "../repoDiffScopeStore";
-import { REPO_DIFF_SCOPE_LABELS } from "../repoDiffScopeStore";
+import { resolveRepoDiffScopeLabel } from "../repoDiffScopeStore";
 import { hasLiveTurnTailWork, isLatestTurnSettled } from "../session-logic";
 import { buildLocalDraftThread } from "./ChatView.logic";
 import { buildFileDiffRenderKey, resolveFileDiffPath } from "../lib/diffRendering";
@@ -191,6 +192,7 @@ export function resolveDiffPanelViewSource(input: {
 export function resolveDiffPanelPickerLabel(
   source: DiffPanelViewSource,
   turnScopeIntent?: DiffPanelTurnScopeIntent,
+  vcsBackend?: VcsBackend | null,
 ): string {
   if (source.kind === "turn") {
     if (source.turnId !== null) {
@@ -198,7 +200,7 @@ export function resolveDiffPanelPickerLabel(
     }
     return turnScopeIntent === "last" ? "Last turn" : "All turns";
   }
-  return REPO_DIFF_SCOPE_LABELS[source.scope];
+  return resolveRepoDiffScopeLabel(source.scope, vcsBackend);
 }
 
 export function resolveSelectedTurnSummary<T extends { turnId: TurnId }>(
@@ -241,11 +243,14 @@ export function resolveDiffPanelScopePickerValue(input: {
 
 export function resolveConversationCacheScope(
   conversationCheckpointTurnCount: number | undefined,
+  endpointScope?: string | null,
 ): string | null {
   if (typeof conversationCheckpointTurnCount !== "number") {
     return null;
   }
-  return `conversation:to-${conversationCheckpointTurnCount}`;
+  return endpointScope
+    ? `conversation:to-${conversationCheckpointTurnCount}:${endpointScope}`
+    : `conversation:to-${conversationCheckpointTurnCount}`;
 }
 
 export function isDiffPanelPickerOptionSelected(

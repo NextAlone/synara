@@ -10,6 +10,7 @@ import {
   resolveConversationCacheScope,
   resolveDiffPanelCheckpointQueryEnabled,
   resolveDiffPanelQueriesEnabled,
+  resolveDiffPanelPickerLabel,
   resolveDiffPanelRepoMetadataQueriesEnabled,
   resolveDiffPanelRepoLiveRefresh,
   resolveDiffPanelRepoLiveRefetchIntervalMs,
@@ -349,6 +350,18 @@ describe("diff panel view source helpers", () => {
     ).toBeNull();
   });
 
+  it("uses working-copy terminology and names the JJ branch range by its actual stack semantics", () => {
+    expect(
+      resolveDiffPanelPickerLabel({ kind: "repo", scope: "workingTree" }, undefined, "jj"),
+    ).toBe("Working copy");
+    expect(resolveDiffPanelPickerLabel({ kind: "repo", scope: "branch" }, undefined, "jj")).toBe(
+      "Current stack",
+    );
+    expect(resolveDiffPanelPickerLabel({ kind: "repo", scope: "branch" }, undefined, "git")).toBe(
+      "Branch",
+    );
+  });
+
   it("keeps the persisted default working-tree scope available in the picker", () => {
     expect(DIFF_PANEL_PICKER_SCOPE_OPTIONS).toContain("workingTree");
   });
@@ -404,6 +417,9 @@ describe("diff panel view source helpers", () => {
   it("builds compact conversation cache scopes from the latest checkpoint count", () => {
     expect(resolveConversationCacheScope(undefined)).toBeNull();
     expect(resolveConversationCacheScope(3)).toBe("conversation:to-3");
+    expect(resolveConversationCacheScope(3, "turn:turn-3:ready:checkpoint-3")).toBe(
+      "conversation:to-3:turn:turn-3:ready:checkpoint-3",
+    );
   });
 
   it("filters renderable files by path query", () => {

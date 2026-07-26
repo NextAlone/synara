@@ -43,6 +43,7 @@ import {
 } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
 import type { ProviderModelOption } from "../providerModelOptions";
+import { isTurnDiffSummaryReviewable } from "../turnDiffAvailability";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "synara:last-invoked-script-by-project";
 export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "synara:dismissed-provider-health-banners";
@@ -476,9 +477,11 @@ export function resolveGitRepoUiState(input: {
 // The composer live strip prefers the turn's computed diff (the
 // `thread.turn-diff-completed` event) so it can show real per-file +/- stats.
 // Before that lands, it falls back to mid-turn file-edit work-log activity so
-// the strip can appear while the turn is running, but without a reviewable
-// turn id. Once a turn diff exists, its empty file list is authoritative and
-// must not be overwritten by tool metadata.
+// the strip can appear while the turn is running. Live provider-diff summaries
+// carry totals but no durable checkpoint, so they must not expose a Review
+// action until the final checkpoint replaces them. Once a turn diff exists,
+// its empty file list is authoritative and must not be overwritten by tool
+// metadata.
 export function resolveActiveTurnLiveDiffState(input: {
   latestTurnId: TurnDiffSummary["turnId"] | null | undefined;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
@@ -498,7 +501,7 @@ export function resolveActiveTurnLiveDiffState(input: {
   const files = summary?.files ?? [];
   if (summary && files.length > 0) {
     return {
-      turnId: summary.turnId,
+      turnId: isTurnDiffSummaryReviewable(summary) ? summary.turnId : null,
       fileCount: files.length,
       additions: files.reduce((total, file) => total + (file.additions ?? 0), 0),
       deletions: files.reduce((total, file) => total + (file.deletions ?? 0), 0),

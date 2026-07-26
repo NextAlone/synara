@@ -334,6 +334,126 @@ describe("CheckpointDiffQueryLive", () => {
     });
   });
 
+  it("returns an explicit partial range when an old conversation lost its initial baseline", async () => {
+    const projectId = ProjectId.makeUnsafe("project-partial-diff");
+    const threadId = ThreadId.makeUnsafe("thread-partial-diff");
+    const checkpoint1 = checkpointRefForThreadTurn(threadId, 1);
+    const checkpoint2 = checkpointRefForThreadTurn(threadId, 2);
+    const checkpoint3 = checkpointRefForThreadTurn(threadId, 3);
+    const fullThreadDiffContext = makeFullThreadDiffContext({
+      projectId,
+      threadId,
+      workspaceRoot: "/tmp/workspace",
+      worktreePath: null,
+      latestCheckpointTurnCount: 3,
+      baselineCheckpointRef: checkpoint1,
+      toCheckpointRef: checkpoint3,
+    });
+    const checkpointContext: ProjectionThreadCheckpointContext = {
+      threadId,
+      projectId,
+      projectKind: "project",
+      workspaceRoot: "/tmp/workspace",
+      envMode: "local",
+      worktreePath: null,
+      workingDirectory: null,
+      vcsBackend: "git",
+      checkpoints: [
+        {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          checkpointTurnCount: 1,
+          checkpointRef: checkpoint1,
+          status: "missing",
+          files: [],
+          assistantMessageId: null,
+          completedAt: "2026-01-01T00:00:01.000Z",
+        },
+        {
+          turnId: TurnId.makeUnsafe("turn-2"),
+          checkpointTurnCount: 2,
+          checkpointRef: checkpoint2,
+          status: "ready",
+          files: [],
+          assistantMessageId: null,
+          completedAt: "2026-01-01T00:00:02.000Z",
+        },
+        {
+          turnId: TurnId.makeUnsafe("turn-3"),
+          checkpointTurnCount: 3,
+          checkpointRef: checkpoint3,
+          status: "ready",
+          files: [],
+          assistantMessageId: null,
+          completedAt: "2026-01-01T00:00:03.000Z",
+        },
+      ],
+    };
+    const diffCheckpoints = vi.fn<CheckpointStoreShape["diffCheckpoints"]>(() =>
+      Effect.succeed("partial diff patch"),
+    );
+    const checkpointStore: CheckpointStoreShape = {
+      isRepository: () => Effect.succeed(true),
+      captureCheckpoint: () => Effect.void,
+      copyCheckpointRef: () => Effect.succeed(true),
+      hasCheckpointRef: ({ checkpointRef }) =>
+        Effect.succeed(checkpointRef === checkpoint1 || checkpointRef === checkpoint3),
+      restoreCheckpoint: () => Effect.succeed(true),
+      reverseCheckpointDiff: () => Effect.succeed(true),
+      diffCheckpoints,
+      diffCheckpointToWorkingCopy: () => Effect.succeed(""),
+      deleteCheckpointRefs: () => Effect.void,
+    };
+    const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
+      Layer.provideMerge(
+        Layer.succeed(ProjectionSnapshotQuery, {
+          getSnapshot: () => Effect.die("unused"),
+          getCommandReadModel: () => Effect.die("unused"),
+          getCounts: () => Effect.die("unused"),
+          getSnapshotSequence: () => Effect.die("unused"),
+          listStaleInFlightThreadIds: () => Effect.die("unused"),
+          getShellSnapshot: () => Effect.die("unused"),
+          getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
+          getProjectShellById: () => Effect.die("unused"),
+          getSpaceShellById: () => Effect.die("unused"),
+          getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
+          getThreadCheckpointContext: () => Effect.succeed(Option.some(checkpointContext)),
+          listGeneratedImageActivitiesByTurn: () => Effect.die("unused"),
+          getFullThreadDiffContext: () => Effect.succeed(Option.some(fullThreadDiffContext)),
+          getThreadShellById: () => Effect.die("unused"),
+          findSyntheticSubagentParentThread: () => Effect.die("unused"),
+          getThreadDetailById: () => Effect.die("unused"),
+          getThreadDetailForExportById: () => Effect.die("unused"),
+          getThreadDetailSnapshotById: () => Effect.die("unused"),
+        }),
+      ),
+    );
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const query = yield* CheckpointDiffQuery;
+        return yield* query.getFullThreadDiff({
+          threadId,
+          toTurnCount: 3,
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(diffCheckpoints).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromCheckpointRef: checkpoint1,
+        toCheckpointRef: checkpoint3,
+      }),
+    );
+    expect(result).toEqual({
+      threadId,
+      fromTurnCount: 1,
+      toTurnCount: 3,
+      status: "ready",
+      diff: "partial diff patch",
+    });
+  });
+
   it("fails when the thread is missing from the snapshot", async () => {
     const threadId = ThreadId.makeUnsafe("thread-missing");
 

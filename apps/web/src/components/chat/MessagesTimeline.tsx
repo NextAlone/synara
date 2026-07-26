@@ -140,6 +140,7 @@ import {
   disclosureContentClassName,
 } from "~/lib/disclosureMotion";
 import { getAppTypographyScale } from "../../lib/appTypography";
+import { isTurnDiffSummaryReviewable } from "../../turnDiffAvailability";
 import type { SubagentToolTrace } from "./subagentToolTrace.logic";
 import {
   USER_MESSAGE_COLLAPSED_FADE_LINES,
@@ -1776,6 +1777,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     !turnSummary.checkpointRef.startsWith("provider-diff:") &&
                     checkpointTurnCounts.length > 0 &&
                     onUndoTurnFiles !== undefined;
+                  const canReview =
+                    isTurnDiffSummaryReviewable(turnSummary) && checkpointTurnCounts.length > 0;
                   const totalAdditions = checkpointFiles.reduce(
                     (sum, file) => sum + (file.additions ?? 0),
                     0,
@@ -1872,10 +1875,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               <Undo2Icon className="size-3" />
                             </button>
                           )}
-                          <ReviewChangesButton
-                            style={{ fontSize: chatTypographyStyle.fontSize }}
-                            onClick={() => onOpenTurnDiff(turnSummary.turnId)}
-                          />
+                          {canReview ? (
+                            <ReviewChangesButton
+                              style={{ fontSize: chatTypographyStyle.fontSize }}
+                              onClick={() => onOpenTurnDiff(turnSummary.turnId)}
+                            />
+                          ) : null}
                           <button
                             type="button"
                             className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground/80"

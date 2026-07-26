@@ -108,9 +108,9 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: "general:environment-editor",
     section: "general",
-    title: "Editor",
+    title: "Workspace",
     keywords:
-      "Show the Editor section in-app editor view and Open in editor picker in the chat Environment panel.",
+      "Show the Workspace section in-app workspace view and Open in editor picker in the chat Environment panel.",
   },
   {
     id: "general:environment-recap",

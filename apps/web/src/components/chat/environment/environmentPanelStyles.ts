@@ -11,7 +11,7 @@ import {
 } from "~/components/chat/composerPickerStyles";
 import { cn } from "~/lib/utils";
 
-/** Panel title ("Environment") and section labels ("Editor", "Recap"). */
+/** Panel title ("Environment") and section labels ("Workspace", "Recap"). */
 export const ENVIRONMENT_PANEL_LABEL_CLASS_NAME = cn(
   "font-normal",
   COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
@@ -34,7 +34,7 @@ export const ENVIRONMENT_PANEL_SECTION_LABEL_INLINE_CLASS_NAME = cn(
 
 /**
  * Section headings inside the card (standalone label row). Shares the collapsible-section
- * header's `px-2 py-1` box so static labels (e.g. "Repository", "Editor") line up on the same
+ * header's `px-2 py-1` box so static labels (e.g. "Repository", "Workspace") line up on the same
  * vertical rhythm as the expand/collapse section headers.
  */
 export const ENVIRONMENT_PANEL_SECTION_LABEL_CLASS_NAME = cn(

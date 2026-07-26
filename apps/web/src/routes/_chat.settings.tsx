@@ -621,11 +621,11 @@ function SettingsRouteView() {
 
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentEditor",
-            title: "Editor",
+            title: "Workspace",
             description:
-              "Show the Editor section (in-app editor view and Open in editor picker) in the chat Environment panel.",
-            resetLabel: "editor section",
-            ariaLabel: "Show the Editor section in the Environment panel",
+              "Show the Workspace section (in-app workspace view and Open in editor picker) in the chat Environment panel.",
+            resetLabel: "workspace section",
+            ariaLabel: "Show the Workspace section in the Environment panel",
           })}
 
           {renderBooleanSettingRow({

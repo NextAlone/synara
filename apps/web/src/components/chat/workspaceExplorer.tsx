@@ -1,6 +1,6 @@
 // FILE: workspaceExplorer.tsx
 // Purpose: Shared workspace file-tree explorer + file-search building blocks used
-//          by both the full editor view and the right-dock explorer pane.
+//          by both the full workspace view and the right-dock explorer pane.
 // Layer: Chat workspace-browsing UI primitives
 // Exports: WorkspaceFilesSidebar, WorkspaceSearchSidebar, WorkspaceExplorerSidebar,
 //          ExplorerActivityBarButton, useExplorerEntryPrefetch, setFileReferenceDragData.
