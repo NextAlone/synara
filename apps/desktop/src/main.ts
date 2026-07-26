@@ -77,6 +77,7 @@ import {
 } from "./bundleSwapDetection";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
+import { shouldShowDesktopContextMenu } from "./desktopContextMenu";
 import {
   makeUpdateInstallPreparationCoordinator,
   type UpdateInstallPreparationAttempt,
@@ -3793,6 +3794,10 @@ function createWindow(): BrowserWindow {
 
   window.webContents.on("context-menu", (event, params) => {
     event.preventDefault();
+
+    if (!shouldShowDesktopContextMenu(params)) {
+      return;
+    }
 
     const menuTemplate: MenuItemConstructorOptions[] = [];
 
