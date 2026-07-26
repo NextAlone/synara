@@ -24,7 +24,9 @@ import { createContext, useContext } from "react";
 import { openInPreferredEditor } from "../editorPreferences";
 import { readNativeApi } from "../nativeApi";
 import {
+  isLocalPreviewGrantUsable,
   isProjectUnsupportedBinaryFileResult,
+  projectLocalPreviewGrantQueryOptions,
   projectReadFileQueryOptions,
 } from "./projectReactQuery";
 
@@ -160,22 +162,40 @@ export type WorkspaceFileOpenDisposition =
 /**
  * Resolves the click behavior from the same read query used by the preview.
  * Supported image/PDF files bypass the text RPC. Other files are sampled by
- * the server; an unsupported binary result is expected control flow, while a
- * genuine read failure still opens the preview so its existing error UI can
- * explain the failure.
+ * the server; absolute local paths first receive the same short-lived preview
+ * grant used by the dock. An unsupported binary result is expected control
+ * flow, while a genuine read failure still opens the preview so its existing
+ * error UI can explain the failure.
  */
 export async function resolveWorkspaceFileOpenDisposition(
   queryClient: QueryClient,
-  workspaceRoot: string,
-  relativePath: string,
+  workspaceRoot: string | null,
+  filePath: string,
 ): Promise<WorkspaceFileOpenDisposition> {
-  if (isSupportedLocalPreviewFilePath(relativePath)) {
+  if (isSupportedLocalPreviewFilePath(filePath)) {
+    return { kind: "preview" };
+  }
+  const fileIsLocalAbsolute = isLocalAbsolutePath(filePath);
+  if (!workspaceRoot && !fileIsLocalAbsolute) {
     return { kind: "preview" };
   }
 
   try {
+    const previewGrant = fileIsLocalAbsolute
+      ? await queryClient.fetchQuery({
+          ...projectLocalPreviewGrantQueryOptions({ path: filePath }),
+          retry: false,
+        })
+      : null;
+    if (previewGrant && !isLocalPreviewGrantUsable(previewGrant)) {
+      return { kind: "preview" };
+    }
     const result = await queryClient.fetchQuery({
-      ...projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath }),
+      ...projectReadFileQueryOptions({
+        cwd: workspaceRoot,
+        relativePath: filePath,
+        previewGrant: previewGrant?.grant,
+      }),
       retry: false,
     });
     return isProjectUnsupportedBinaryFileResult(result)
@@ -188,18 +208,23 @@ export async function resolveWorkspaceFileOpenDisposition(
 
 export async function activateWorkspaceFile(input: {
   queryClient: QueryClient;
-  workspaceRoot: string;
-  relativePath: string;
+  workspaceRoot: string | null;
+  filePath: string;
   preview: () => void;
   reveal: (absolutePath: string) => Promise<void>;
 }): Promise<WorkspaceFileOpenDisposition> {
   const disposition = await resolveWorkspaceFileOpenDisposition(
     input.queryClient,
     input.workspaceRoot,
-    input.relativePath,
+    input.filePath,
   );
   if (disposition.kind === "reveal") {
-    await input.reveal(joinWorkspaceRelativePath(input.workspaceRoot, disposition.relativePath));
+    const absolutePath = isLocalAbsolutePath(disposition.relativePath)
+      ? disposition.relativePath
+      : input.workspaceRoot
+        ? joinWorkspaceRelativePath(input.workspaceRoot, disposition.relativePath)
+        : disposition.relativePath;
+    await input.reveal(absolutePath);
   } else {
     input.preview();
   }

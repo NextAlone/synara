@@ -122,7 +122,7 @@ describe("activateWorkspaceFile", () => {
     const disposition = await activateWorkspaceFile({
       queryClient,
       workspaceRoot: "/repo/app",
-      relativePath: "app.apk",
+      filePath: "app.apk",
       preview,
       reveal,
     });
@@ -142,7 +142,7 @@ describe("activateWorkspaceFile", () => {
     const disposition = await activateWorkspaceFile({
       queryClient: new QueryClient(),
       workspaceRoot: "/repo/app",
-      relativePath: "assets/screenshot.png",
+      filePath: "assets/screenshot.png",
       preview,
       reveal,
     });
@@ -150,5 +150,35 @@ describe("activateWorkspaceFile", () => {
     expect(disposition).toEqual({ kind: "preview" });
     expect(preview).toHaveBeenCalledOnce();
     expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it("reveals unsupported absolute local binaries without opening the dock preview", async () => {
+    const queryClient = new QueryClient();
+    const filePath = "/Users/dev/Downloads/credentials.age";
+    queryClient.setQueryData(projectQueryKeys.localPreviewGrant(filePath), {
+      grant: "grant-token",
+      expiresAt: "2999-01-01T00:00:00.000Z",
+    });
+    queryClient.setQueryData(projectQueryKeys.readFile(null, filePath), {
+      kind: "unsupported-binary",
+      relativePath: filePath,
+    });
+    const preview = vi.fn();
+    const reveal = vi.fn().mockResolvedValue(undefined);
+
+    const disposition = await activateWorkspaceFile({
+      queryClient,
+      workspaceRoot: null,
+      filePath,
+      preview,
+      reveal,
+    });
+
+    expect(disposition).toEqual({
+      kind: "reveal",
+      relativePath: filePath,
+    });
+    expect(reveal).toHaveBeenCalledWith(filePath);
+    expect(preview).not.toHaveBeenCalled();
   });
 });

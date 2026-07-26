@@ -23,9 +23,28 @@ import {
 } from "../realPathContainment";
 
 const DEFAULT_READ_FILE_MAX_BYTES = 1_000_000;
+const OPAQUE_BINARY_FILE_EXTENSIONS = new Set([".age"]);
 
-function isBinaryLike(bytes: Uint8Array): boolean {
-  return bytes.includes(0);
+function isBinaryLike(filePath: string, bytes: Uint8Array, sampleIsTruncated: boolean): boolean {
+  // Some opaque formats deliberately use a printable envelope. In particular,
+  // ASCII-armored age payloads are valid UTF-8 but still have no useful text
+  // preview, so their file type is authoritative.
+  if (OPAQUE_BINARY_FILE_EXTENSIONS.has(NodePath.extname(filePath).toLowerCase())) {
+    return true;
+  }
+  if (bytes.includes(0)) {
+    return true;
+  }
+  try {
+    // Streaming mode tolerates only an incomplete multi-byte sequence at the
+    // end of a truncated sample; invalid UTF-8 anywhere else still throws.
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes, {
+      stream: sampleIsTruncated,
+    });
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 function isFileNotFoundError(cause: unknown): boolean {
@@ -309,7 +328,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
           }),
       });
 
-      if (isBinaryLike(bytes)) {
+      if (isBinaryLike(target.relativePath, bytes, fileSize > bytes.length)) {
         return yield* new WorkspaceFileBinaryError({
           cwd: input.cwd,
           relativePath: target.relativePath,

@@ -428,11 +428,7 @@ export function SingleChatSurface(props: {
         requestImmediateDockHydration("file");
         openPane(props.threadId, { kind: "file", filePath: targetPath });
       };
-      if (workspaceRoot && isWorkspaceRelativePathSafe(targetPath)) {
-        activateWorkspacePreview(targetPath, openPreview);
-      } else {
-        openPreview();
-      }
+      activateWorkspacePreview(targetPath, openPreview);
       return true;
     },
     prefetchFile: prefetchOpenerFile,

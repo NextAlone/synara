@@ -85,7 +85,27 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
       }),
     );
 
-    it.effect("reports binary files without decoding them as text", () =>
+    it.effect("does not classify text as binary when a sample ends inside a UTF-8 character", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "unicode.txt", "éx");
+
+        const result = yield* workspaceFileSystem.readFile({
+          cwd,
+          relativePath: "unicode.txt",
+          maxBytes: 1,
+        });
+
+        expect(result).toEqual({
+          relativePath: "unicode.txt",
+          contents: "�",
+          truncated: true,
+        });
+      }),
+    );
+
+    it.effect("reports invalid UTF-8 binary files even when the sample has no NUL byte", () =>
       Effect.gen(function* () {
         const workspaceFileSystem = yield* WorkspaceFileSystem;
         const path = yield* Path.Path;
@@ -94,8 +114,29 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
         const absolutePath = path.join(cwd, relativePath);
         yield* Effect.promise(async () => {
           await NodeFs.mkdir(path.dirname(absolutePath), { recursive: true });
-          await NodeFs.writeFile(absolutePath, Uint8Array.from([0x50, 0x4b, 0x03, 0x04, 0x00]));
+          await NodeFs.writeFile(absolutePath, Uint8Array.from([0x50, 0x4b, 0x03, 0x04, 0xff]));
         });
+
+        const error = yield* workspaceFileSystem.readFile({ cwd, relativePath }).pipe(Effect.flip);
+
+        expect(Schema.is(WorkspaceFileBinaryError)(error)).toBe(true);
+        if (!Schema.is(WorkspaceFileBinaryError)(error)) {
+          throw new Error("Expected WorkspaceFileBinaryError.");
+        }
+        expect(error.relativePath).toBe(relativePath);
+      }),
+    );
+
+    it.effect("reports printable age-encrypted payloads as binary files", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const relativePath = "exports/credentials.age";
+        yield* writeTextFile(
+          cwd,
+          relativePath,
+          "-----BEGIN AGE ENCRYPTED FILE-----\nYWdlLWVuY3J5cHRlZC1wYXlsb2Fk\n-----END AGE ENCRYPTED FILE-----\n",
+        );
 
         const error = yield* workspaceFileSystem.readFile({ cwd, relativePath }).pipe(Effect.flip);
 

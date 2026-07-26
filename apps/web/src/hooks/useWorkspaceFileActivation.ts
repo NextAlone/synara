@@ -3,6 +3,7 @@
 //          manager after the shared read query classifies unsupported binaries.
 // Layer: Web interaction hook shared by explorer rows and chat file references.
 
+import { isLocalAbsolutePath } from "@synara/shared/path";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
@@ -21,8 +22,8 @@ export function useWorkspaceFileActivation(workspaceRoot: string | null) {
     [],
   );
 
-  return (relativePath: string, preview: () => void) => {
-    if (!workspaceRoot) {
+  return (filePath: string, preview: () => void) => {
+    if (!workspaceRoot && !isLocalAbsolutePath(filePath)) {
       preview();
       return;
     }
@@ -32,7 +33,7 @@ export function useWorkspaceFileActivation(workspaceRoot: string | null) {
     void activateWorkspaceFile({
       queryClient,
       workspaceRoot,
-      relativePath,
+      filePath,
       preview: () => {
         if (latestActivationRef.current === activation) {
           preview();
