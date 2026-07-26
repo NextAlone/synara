@@ -5,6 +5,8 @@ import {
   MessageId,
   ProjectId,
   ThreadId,
+  type OrchestrationReadModel,
+  type OrchestrationThread,
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import { Effect } from "effect";
@@ -608,7 +610,7 @@ describe("decider project scripts", () => {
     });
   });
 
-  it("rejects re-handoff when the source handoff thread has no native chat messages yet", async () => {
+  it("only re-handoffs imported history without native chat after the replacement session fails", async () => {
     const now = new Date().toISOString();
     const initial = createEmptyReadModel(now);
     const withProject = await Effect.runPromise(
@@ -728,6 +730,79 @@ describe("decider project scripts", () => {
         }),
       ),
     ).rejects.toThrow("must contain at least one native chat message after handoff");
+
+    const failedReadModel: OrchestrationReadModel = {
+      ...readModel,
+      threads: readModel.threads.map((thread): OrchestrationThread =>
+        thread.id === ThreadId.makeUnsafe("thread-handoff")
+          ? {
+              ...thread,
+              messages: [
+                ...thread.messages,
+                {
+                  id: asMessageId("message-imported-answer"),
+                  role: "assistant",
+                  text: "Imported answer",
+                  turnId: null,
+                  streaming: false,
+                  source: "handoff-import",
+                  createdAt: now,
+                  updatedAt: now,
+                },
+              ],
+              session: {
+                threadId: thread.id,
+                status: "error",
+                providerName: "codex",
+                runtimeMode: "full-access",
+                activeTurnId: null,
+                lastError: "Replacement session failed",
+                updatedAt: now,
+              },
+            }
+          : thread,
+      ),
+    };
+    const recovered = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.handoff.create",
+          commandId: CommandId.makeUnsafe("cmd-thread-rehandoff-recovery"),
+          threadId: ThreadId.makeUnsafe("thread-handoff-recovery"),
+          sourceThreadId: ThreadId.makeUnsafe("thread-handoff"),
+          projectId: asProjectId("project-handoff"),
+          title: "Recovered Handoff",
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "sonnet",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          importedMessages: [
+            {
+              messageId: asMessageId("message-recovered-user"),
+              role: "user",
+              text: "Imported history",
+              createdAt: now,
+              updatedAt: now,
+            },
+            {
+              messageId: asMessageId("message-recovered-assistant"),
+              role: "assistant",
+              text: "Imported answer",
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          createdAt: now,
+        },
+        readModel: failedReadModel,
+      }),
+    );
+
+    expect(Array.isArray(recovered) ? recovered[0]?.type : recovered.type).toBe("thread.created");
   });
 
   it("allows re-handoff after the handoff thread has native chat messages", async () => {

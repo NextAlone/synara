@@ -3,10 +3,19 @@
 // Layer: Orchestration mapping tests
 // Depends on: handoff.
 
-import { MessageId, type OrchestrationMessage } from "@synara/contracts";
+import {
+  MessageId,
+  ThreadId,
+  TurnId,
+  type OrchestrationLatestTurn,
+  type OrchestrationMessage,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { buildPriorTranscriptBootstrapText } from "./handoff.ts";
+import {
+  buildPriorTranscriptBootstrapText,
+  hasRecoverablePreviousHandoffTranscript,
+} from "./handoff.ts";
 
 const message = (
   index: number,
@@ -134,5 +143,65 @@ describe("buildPriorTranscriptBootstrapText", () => {
     expect(text).toMatch(/\(\d{3,} older messages omitted to fit the context budget\):/);
     expect(text).toContain("NEWEST-START");
     expect(text).toContain("NEWEST-END-UNIQUE-MARKER");
+  });
+});
+
+describe("hasRecoverablePreviousHandoffTranscript", () => {
+  const importedMessages = [
+    {
+      ...message(1, "user", "Imported question"),
+      source: "handoff-import" as const,
+    },
+    {
+      ...message(2, "assistant", "Imported answer"),
+      source: "handoff-import" as const,
+    },
+  ];
+  const failedTurn: OrchestrationLatestTurn = {
+    turnId: TurnId.makeUnsafe("turn-failed"),
+    state: "error",
+    requestedAt: "2026-07-08T00:01:00.000Z",
+    startedAt: "2026-07-08T00:01:01.000Z",
+    completedAt: "2026-07-08T00:01:02.000Z",
+    assistantMessageId: null,
+  };
+
+  it("requires a failed turn or session and a complete imported answer", () => {
+    expect(
+      hasRecoverablePreviousHandoffTranscript({
+        latestTurn: failedTurn,
+        messages: importedMessages,
+        session: null,
+      }),
+    ).toBe(true);
+    expect(
+      hasRecoverablePreviousHandoffTranscript({
+        latestTurn: null,
+        messages: importedMessages,
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-handoff"),
+          status: "error",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: "Session failed",
+          updatedAt: "2026-07-08T00:01:02.000Z",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      hasRecoverablePreviousHandoffTranscript({
+        latestTurn: null,
+        messages: importedMessages,
+        session: null,
+      }),
+    ).toBe(false);
+    expect(
+      hasRecoverablePreviousHandoffTranscript({
+        latestTurn: failedTurn,
+        messages: importedMessages.slice(0, 1),
+        session: null,
+      }),
+    ).toBe(false);
   });
 });

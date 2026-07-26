@@ -2813,7 +2813,10 @@ export default function ChatView({
     isServerThread &&
     canCreateThreadHandoff({
       thread: activeThread,
-      isBusy: isWorking,
+      // canCreateThreadHandoff owns provider-turn liveness so a terminally
+      // failed turn can recover past a stale `running` session projection.
+      isBusy: isSendBusy || isConnecting || isRevertingCheckpoint,
+      hasLiveTurn,
       hasPendingApprovals: pendingApprovals.length > 0,
       hasPendingUserInput: pendingUserInputs.length > 0,
     })

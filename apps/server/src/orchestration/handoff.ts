@@ -69,6 +69,23 @@ export function hasNativeHandoffMessages(thread: Pick<OrchestrationThread, "mess
   );
 }
 
+export function hasRecoverablePreviousHandoffTranscript(
+  thread: Pick<OrchestrationThread, "latestTurn" | "messages" | "session">,
+): boolean {
+  const latestTurnFailed =
+    thread.latestTurn?.state === "error" || thread.latestTurn?.state === "interrupted";
+  const sessionFailed =
+    thread.session?.status === "error" ||
+    thread.session?.status === "interrupted" ||
+    thread.session?.status === "stopped";
+  if (!latestTurnFailed && !sessionFailed) {
+    return false;
+  }
+  return listImportedHandoffMessages(thread).some(
+    (message) => message.role === "assistant" && normalizeMessageText(message.text).length > 0,
+  );
+}
+
 export function hasNativeAssistantMessagesBefore(
   thread: Pick<OrchestrationThread, "messages">,
   currentMessageId: string,

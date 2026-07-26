@@ -14,6 +14,7 @@ import {
   canCreateThreadHandoff,
   resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffModelSelection,
+  resolveThreadHandoffSource,
   resolveThreadHandoffTitle,
 } from "../lib/threadHandoff";
 import { resolveProviderSendAvailabilityWithRefresh } from "../lib/providerAvailability";
@@ -64,7 +65,8 @@ export function useThreadHandoff() {
 
     const nextThreadId = newThreadId();
     const createdAt = new Date().toISOString();
-    const importedMessages = buildThreadHandoffImportedMessages(thread);
+    const handoffSource = resolveThreadHandoffSource(thread);
+    const importedMessages = buildThreadHandoffImportedMessages(handoffSource);
     const importedActivities = buildThreadHandoffImportedActivities(thread);
     const { copyTransferableComposerState, stickyModelSelectionByProvider } =
       useComposerDraftStore.getState();

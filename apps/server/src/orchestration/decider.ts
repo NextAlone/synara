@@ -30,7 +30,10 @@ import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { resolveProjectVcsState } from "../vcs/projectVcsState.ts";
-import { hasNativeHandoffMessages } from "./handoff.ts";
+import {
+  hasNativeHandoffMessages,
+  hasRecoverablePreviousHandoffTranscript,
+} from "./handoff.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 import {
   findSpaceById,
@@ -1162,10 +1165,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Source thread '${command.sourceThreadId}' belongs to a different project.`,
         });
       }
-      if (sourceThread.handoff !== null && !hasNativeHandoffMessages(sourceThread)) {
+      if (
+        sourceThread.handoff !== null &&
+        !hasNativeHandoffMessages(sourceThread) &&
+        !hasRecoverablePreviousHandoffTranscript(sourceThread)
+      ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Source thread '${command.sourceThreadId}' must contain at least one native chat message after handoff before it can be handed off again.`,
+          detail: `Source thread '${command.sourceThreadId}' must contain at least one native chat message after handoff, or retain a complete imported transcript after a failed replacement session, before it can be handed off again.`,
         });
       }
 
