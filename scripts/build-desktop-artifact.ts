@@ -746,6 +746,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     forceCodeSigning: signed,
   };
   const publishConfig = resolveGitHubPublishConfig();
+  const requireMacUpdateManifest = publishConfig !== undefined || mockUpdates;
   if (publishConfig) {
     buildConfig.publish = [publishConfig];
   } else if (mockUpdates) {
@@ -782,6 +783,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
 
   return {
     buildConfig,
+    requireMacUpdateManifest,
     windowsPublisherSubject: windowsSigningConfig?.subjectDistinguishedName ?? null,
   };
 });
@@ -1140,6 +1142,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         finalizeMacUpdateZip({
           stageDistDir,
           signed: options.signed,
+          requireUpdateManifest: resolvedBuildConfig.requireMacUpdateManifest,
           verbose: options.verbose,
         }),
       catch: (cause) =>
@@ -1151,6 +1154,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     if (finalizedZip.removedZipBlockmapPath) {
       yield* Effect.log(
         `[desktop-artifact] Removed stale macOS zip blockmap (${path.basename(finalizedZip.removedZipBlockmapPath)}).`,
+      );
+    }
+    if (finalizedZip.updatedManifestPaths.length === 0) {
+      yield* Effect.log(
+        "[desktop-artifact] No update publisher is configured; finalized the macOS zip without updater metadata.",
       );
     }
   }

@@ -96,6 +96,13 @@ describe("mac-update-zip", () => {
       () => resolveMacUpdateManifestFileNames(["Synara-0.1.5-arm64.dmg"]),
       /Expected at least one macOS update manifest/,
     );
+
+    assert.deepStrictEqual(
+      resolveMacUpdateManifestFileNames(["Synara-0.1.5-arm64.dmg"], {
+        requireManifest: false,
+      }),
+      [],
+    );
   });
 
   it("updates the macOS zip file entry and matching top-level sha", () => {

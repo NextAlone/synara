@@ -30,6 +30,7 @@ import {
 export interface FinalizeMacUpdateZipOptions {
   readonly stageDistDir: string;
   readonly signed: boolean;
+  readonly requireUpdateManifest?: boolean;
   readonly verbose?: boolean;
 }
 
@@ -189,7 +190,9 @@ export async function finalizeMacUpdateZip(
   const sha512 = await computeSha512Base64(zipPath);
 
   const updatedManifestPaths: string[] = [];
-  for (const manifestName of resolveMacUpdateManifestFileNames(distEntries)) {
+  for (const manifestName of resolveMacUpdateManifestFileNames(distEntries, {
+    requireManifest: options.requireUpdateManifest,
+  })) {
     const manifestPath = join(options.stageDistDir, manifestName);
     const manifest = readFileSync(manifestPath, "utf8");
     const nextManifest = updateMacUpdateManifestZipEntry(manifest, zipFileName, {
