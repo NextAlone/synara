@@ -1,4 +1,4 @@
-// FILE: 087_ProjectVcsState.ts
+// FILE: 088_ProjectVcsState.ts
 // Purpose: Persist the exclusive project-level VCS binding and stale-request epoch.
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";

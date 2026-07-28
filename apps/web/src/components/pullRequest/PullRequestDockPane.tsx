@@ -21,13 +21,14 @@ export function PullRequestDockPane({
   pane,
   hostThreadId,
   onClose,
-  pollingEnabled = true,
+  pollingEnabled: pollingEnabledProp,
 }: {
   pane: RightDockPane;
   hostThreadId?: ThreadId | undefined;
   onClose?: (() => void) | undefined;
   pollingEnabled?: boolean;
 }) {
+  const pollingEnabled = pollingEnabledProp ?? true;
   const input = pullRequestDetailInputFromPane(pane);
   if (!input) {
     return <PanelStateMessage>Select a pull request to open it here.</PanelStateMessage>;

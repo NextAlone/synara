@@ -111,13 +111,9 @@ describe("JJ machine output parsing", () => {
 
   it("distinguishes present, stale, and absent workspace registrations", () => {
     const workspaces = parseJjWorkspaces(
-      [
-        '"default"',
-        '"/repo"',
-        '"gone"',
-        "<Error: Workspace has no recorded path: gone>",
-        "",
-      ].join("\0"),
+      ['"default"', '"/repo"', '"gone"', "<Error: Workspace has no recorded path: gone>", ""].join(
+        "\0",
+      ),
     );
 
     expect(findJjWorkspaceRegistration(workspaces, "default")).toEqual({
@@ -131,11 +127,7 @@ describe("JJ machine output parsing", () => {
   it("preserves JSON escaping inside NUL-framed workspace fields", () => {
     expect(
       parseJjWorkspaces(
-        [
-          JSON.stringify('quoted"workspace'),
-          JSON.stringify("/repo/line\nbreak"),
-          "",
-        ].join("\0"),
+        [JSON.stringify('quoted"workspace'), JSON.stringify("/repo/line\nbreak"), ""].join("\0"),
       ),
     ).toEqual([
       {

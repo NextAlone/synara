@@ -96,6 +96,18 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.removeListener(IPC.updateState, wrappedListener);
     };
   },
+  getUpstreamUpdateState: () => ipcRenderer.invoke(IPC.upstreamUpdateGetState),
+  onUpstreamUpdateState: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
+      if (typeof state !== "object" || state === null) return;
+      listener(state as Parameters<typeof listener>[0]);
+    };
+
+    ipcRenderer.on(IPC.upstreamUpdateState, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IPC.upstreamUpdateState, wrappedListener);
+    };
+  },
   notifications: {
     isSupported: () => ipcRenderer.invoke(IPC.notificationsIsSupported),
     show: (input) => ipcRenderer.invoke(IPC.notificationsShow, input),

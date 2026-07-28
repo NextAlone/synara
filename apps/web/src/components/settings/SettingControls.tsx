@@ -52,7 +52,7 @@ export function SettingsSelectControl({
   value,
   onValueChange,
   ariaLabel,
-  triggerClassName = "w-full sm:w-44",
+  triggerClassName: triggerClassNameProp,
   valueContent,
   disabled = false,
   children,
@@ -65,6 +65,7 @@ export function SettingsSelectControl({
   disabled?: boolean;
   children: ReactNode;
 }) {
+  const triggerClassName = triggerClassNameProp ?? "w-full sm:w-44";
   return (
     <Select
       value={value}

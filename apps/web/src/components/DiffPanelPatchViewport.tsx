@@ -60,9 +60,7 @@ export const DiffPanelPatchViewport = memo(
       return (
         <div className={viewportClassName}>
           <PanelStateMessage density="compact" fill="flex">
-            <p>
-              {props.hasNoChanges ? props.emptyLabel : props.unavailableLabel}
-            </p>
+            <p>{props.hasNoChanges ? props.emptyLabel : props.unavailableLabel}</p>
           </PanelStateMessage>
         </div>
       );

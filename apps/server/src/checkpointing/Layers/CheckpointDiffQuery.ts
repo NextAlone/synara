@@ -121,11 +121,8 @@ const make = Effect.gen(function* () {
     const checkpointWorkspace = { cwd: input.cwd, backend: input.backend };
     if (input.initialCheckpointRef && input.initialCheckpointStatus === "ready") {
       const initialBaselineRef =
-        checkpointRefForThreadTurnInManagedFamily(
-          input.initialCheckpointRef,
-          input.threadId,
-          0,
-        ) ?? checkpointRefForThreadTurn(input.threadId, 0);
+        checkpointRefForThreadTurnInManagedFamily(input.initialCheckpointRef, input.threadId, 0) ??
+        checkpointRefForThreadTurn(input.threadId, 0);
       if (
         yield* checkpointStore.hasCheckpointRef({
           ...checkpointWorkspace,
@@ -492,10 +489,7 @@ const make = Effect.gen(function* () {
           detail: `Workspace path missing for thread '${input.threadId}' when computing full thread diff.`,
         });
       }
-      if (
-        !threadContext.value.toCheckpointRef ||
-        threadContext.value.toCheckpointStatus === null
-      ) {
+      if (!threadContext.value.toCheckpointRef || threadContext.value.toCheckpointStatus === null) {
         return buildUnavailableTurnDiffResult({
           threadId: input.threadId,
           fromTurnCount: 0,

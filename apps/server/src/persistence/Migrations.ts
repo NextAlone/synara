@@ -102,8 +102,9 @@ import Migration0083 from "./Migrations/083_AutomationHeartbeatEligibility.ts";
 import Migration0084 from "./Migrations/084_AutomationNotificationPolicy.ts";
 import Migration0085 from "./Migrations/085_AutomationSettings.ts";
 import Migration0086 from "./Migrations/086_NormalizeStudioThreadWorkspaces.ts";
-import Migration0087 from "./Migrations/087_ProjectVcsState.ts";
-import Migration0088 from "./Migrations/088_CheckpointSnapshots.ts";
+import Migration0087 from "./Migrations/087_DropUnusedOrchestrationEventIndexes.ts";
+import Migration0088 from "./Migrations/088_ProjectVcsState.ts";
+import Migration0089 from "./Migrations/089_CheckpointSnapshots.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -205,8 +206,9 @@ export const migrationEntries = [
   [84, "AutomationNotificationPolicy", Migration0084],
   [85, "AutomationSettings", Migration0085],
   [86, "NormalizeStudioThreadWorkspaces", Migration0086],
-  [87, "ProjectVcsState", Migration0087],
-  [88, "CheckpointSnapshots", Migration0088],
+  [87, "DropUnusedOrchestrationEventIndexes", Migration0087],
+  [88, "ProjectVcsState", Migration0088],
+  [89, "CheckpointSnapshots", Migration0089],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -291,6 +293,20 @@ export const MIGRATION_LINEAGE_ALIASES: readonly MigrationLineageAlias[] = [
     historicalName: "ProjectPullRequestPins",
     currentId: 69,
     historicalSlotRequiresRerun: false,
+  },
+  {
+    // Local JJ builds used 87/88 before upstream released its own migration 87.
+    // Remove both tracker rows so 87-89 replay idempotently in canonical order.
+    historicalId: 87,
+    historicalName: "ProjectVcsState",
+    currentId: 88,
+    historicalSlotRequiresRerun: true,
+  },
+  {
+    historicalId: 88,
+    historicalName: "CheckpointSnapshots",
+    currentId: 89,
+    historicalSlotRequiresRerun: true,
   },
 ];
 

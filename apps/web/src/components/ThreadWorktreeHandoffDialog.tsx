@@ -25,11 +25,12 @@ export function ThreadWorktreeHandoffDialog({
   open,
   backend,
   worktreeName,
-  busy = false,
+  busy: busyProp,
   onWorktreeNameChange,
   onOpenChange,
   onConfirm,
 }: ThreadWorktreeHandoffDialogProps) {
+  const busy = busyProp ?? false;
   const worktreeInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {

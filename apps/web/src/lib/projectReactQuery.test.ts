@@ -95,13 +95,10 @@ describe("workspace file read query options", () => {
     });
     expect(isProjectUnsupportedBinaryFileResult(result)).toBe(true);
     expect(readFile).toHaveBeenCalledOnce();
-    expect(readFile).toHaveBeenCalledWith(
-      expect.anything(),
-      {
-        signal: expect.any(AbortSignal),
-        priority: "interactive",
-      },
-    );
+    expect(readFile).toHaveBeenCalledWith(expect.anything(), {
+      signal: expect.any(AbortSignal),
+      priority: "interactive",
+    });
   });
 
   it("keeps ordinary read failures as errors for the preview UI", async () => {
@@ -114,15 +111,13 @@ describe("workspace file read query options", () => {
     });
 
     await expect(
-      queryClient.fetchQuery(
-        {
-          ...projectReadFileQueryOptions({
-            cwd: "/repo/app",
-            relativePath: "src/app.ts",
-          }),
-          retry: false,
-        },
-      ),
+      queryClient.fetchQuery({
+        ...projectReadFileQueryOptions({
+          cwd: "/repo/app",
+          relativePath: "src/app.ts",
+        }),
+        retry: false,
+      }),
     ).rejects.toBe(readError);
   });
 

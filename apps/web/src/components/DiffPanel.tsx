@@ -97,7 +97,7 @@ import {
   MenuTrigger,
 } from "./ui/menu";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
-import { type SplitViewPanePanelState } from "../splitViewStore";
+import type { SplitViewPanePanelState } from "../splitViewStore";
 import { formatShortTimestamp } from "../timestampFormat";
 import type { TurnDiffSummary } from "../types";
 import {
@@ -238,11 +238,7 @@ function EditorDiffOptionsMenu(props: {
                 const statusLabel = resolveTurnDiffMenuStatus(summary);
                 const reviewable = isTurnDiffSummaryReviewable(summary);
                 return (
-                  <MenuRadioItem
-                    key={summary.turnId}
-                    value={summary.turnId}
-                    disabled={!reviewable}
-                  >
+                  <MenuRadioItem key={summary.turnId} value={summary.turnId} disabled={!reviewable}>
                     <span className="min-w-0 flex-1 truncate">Turn {turnNumber}</span>
                     <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
                       {statusLabel ??
@@ -393,17 +389,21 @@ interface DiffPanelProps {
 }
 
 export default function DiffPanel({
-  mode = "inline",
+  mode: modeProp,
   threadId: controlledThreadId,
   panelState,
   onUpdatePanelState,
   onClosePanel,
-  liveRefreshEnabled = true,
-  queriesEnabled = true,
-  hideHeader = false,
+  liveRefreshEnabled: liveRefreshEnabledProp,
+  queriesEnabled: queriesEnabledProp,
+  hideHeader: hideHeaderProp,
   onRenderableFilesChange,
   onEditorDiffOptionsChange,
 }: DiffPanelProps) {
+  const mode = modeProp ?? "inline";
+  const liveRefreshEnabled = liveRefreshEnabledProp ?? true;
+  const queriesEnabled = queriesEnabledProp ?? true;
+  const hideHeader = hideHeaderProp ?? false;
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
   const { settings } = useAppSettings();
@@ -615,9 +615,7 @@ export default function DiffPanel({
   const selectedCheckpointTurnCount =
     selectedTurn &&
     (selectedTurn.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[selectedTurn.turnId]);
-  const selectedTurnAvailability = selectedTurn
-    ? resolveTurnDiffAvailability(selectedTurn)
-    : null;
+  const selectedTurnAvailability = selectedTurn ? resolveTurnDiffAvailability(selectedTurn) : null;
   const selectedCheckpointRange = useMemo(
     () =>
       selectedTurnAvailability === "ready" && typeof selectedCheckpointTurnCount === "number"
@@ -686,7 +684,6 @@ export default function DiffPanel({
   const checkpointDiffDisplay = resolveCheckpointDiffQueryDisplayState({
     isLoading: activeCheckpointDiffQuery.isLoading,
     isFetching: activeCheckpointDiffQuery.isFetching,
-    dataUpdateCount: activeCheckpointDiffQuery.dataUpdateCount,
     data: activeCheckpointDiffQuery.data,
     error: activeCheckpointDiffQuery.error,
   });
@@ -715,21 +712,24 @@ export default function DiffPanel({
   const selectedPatch = selectedTurn ? selectedTurnCheckpointDiff : conversationCheckpointDiff;
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
-  const unstagedDiffQuery = useQuery(
+  // The scope picker shows a file count per scope. Counts come from the stats endpoint rather
+  // than four full patches: only the selected scope's patch is ever rendered, so fetching the
+  // other three in full moved megabytes per refresh on a large working tree for four integers.
+  const unstagedDiffStatsQuery = useQuery(
     vcsDiffQueryOptions({
       target: vcsTarget,
       scope: "unstaged",
       enabled: vcsTarget.backend === "git" && scopeCountQueriesEnabled && !diffEnvironmentPending,
     }),
   );
-  const stagedDiffQuery = useQuery(
+  const stagedDiffStatsQuery = useQuery(
     vcsDiffQueryOptions({
       target: vcsTarget,
       scope: "staged",
       enabled: vcsTarget.backend === "git" && scopeCountQueriesEnabled && !diffEnvironmentPending,
     }),
   );
-  const branchDiffQuery = useQuery(
+  const branchDiffStatsQuery = useQuery(
     vcsDiffQueryOptions({
       target: vcsTarget,
       scope: "branch",
@@ -875,7 +875,7 @@ export default function DiffPanel({
     () => summarizeRenderablePatchStats(renderablePatch),
     [renderablePatch],
   );
-  const workingTreeDiffQuery = useQuery(
+  const workingTreeDiffStatsQuery = useQuery(
     vcsDiffQueryOptions({
       target: vcsTarget,
       scope: "workingTree",
@@ -884,20 +884,22 @@ export default function DiffPanel({
   );
   const pickerScopeFileCounts = useMemo(() => {
     const counts: Partial<Record<RepoDiffScope, number>> = {};
-    const workingTreeCount = summarizePatchTotals(workingTreeDiffQuery.data?.patch)?.fileCount;
-    const unstagedCount = summarizePatchTotals(unstagedDiffQuery.data?.patch)?.fileCount;
-    const stagedCount = summarizePatchTotals(stagedDiffQuery.data?.patch)?.fileCount;
-    const branchCount = summarizePatchTotals(branchDiffQuery.data?.patch)?.fileCount;
-    if (typeof workingTreeCount === "number") counts.workingTree = workingTreeCount;
-    if (typeof unstagedCount === "number") counts.unstaged = unstagedCount;
-    if (typeof stagedCount === "number") counts.staged = stagedCount;
-    if (typeof branchCount === "number") counts.branch = branchCount;
+    const stats = [
+      ["workingTree", workingTreeDiffStatsQuery.data?.patch],
+      ["unstaged", unstagedDiffStatsQuery.data?.patch],
+      ["staged", stagedDiffStatsQuery.data?.patch],
+      ["branch", branchDiffStatsQuery.data?.patch],
+    ] as const;
+    for (const [scope, patch] of stats) {
+      const fileCount = summarizePatchTotals(patch)?.fileCount;
+      if (typeof fileCount === "number") counts[scope] = fileCount;
+    }
     return counts;
   }, [
-    branchDiffQuery.data?.patch,
-    stagedDiffQuery.data?.patch,
-    unstagedDiffQuery.data?.patch,
-    workingTreeDiffQuery.data?.patch,
+    branchDiffStatsQuery.data?.patch,
+    stagedDiffStatsQuery.data?.patch,
+    unstagedDiffStatsQuery.data?.patch,
+    workingTreeDiffStatsQuery.data?.patch,
   ]);
   const scopeFileCounts = useMemo(
     () =>

@@ -25,7 +25,7 @@ import {
   SYNARA_JJ_SNAPSHOT_BOOKMARK_PREFIX,
 } from "../../vcs/checkpointBookmarks.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
-import { CheckpointRef } from "@synara/contracts";
+import type { CheckpointRef } from "@synara/contracts";
 import { parseManagedCheckpointRef } from "../Utils.ts";
 
 const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
@@ -248,9 +248,10 @@ const makeCheckpointStore = Effect.gen(function* () {
     );
 
   const recordCreatingSnapshot = (cwd: string, treeId: string) =>
-    sql.withTransaction(
-      Effect.gen(function* () {
-        const existing = yield* sql<CheckpointSnapshotRow>`
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const existing = yield* sql<CheckpointSnapshotRow>`
           SELECT
             snapshot_id AS "snapshotId",
             revision_id AS "revisionId",
@@ -263,10 +264,10 @@ const makeCheckpointStore = Effect.gen(function* () {
             AND tree_id = ${treeId}
           LIMIT 1
         `;
-        const snapshotId = existing[0]?.snapshotId ?? randomUUID();
-        const anchorRef = snapshotBookmark(snapshotId);
-        const now = new Date().toISOString();
-        yield* sql`
+          const snapshotId = existing[0]?.snapshotId ?? randomUUID();
+          const anchorRef = snapshotBookmark(snapshotId);
+          const now = new Date().toISOString();
+          yield* sql`
           INSERT INTO checkpoint_snapshots (
             snapshot_id,
             backend,
@@ -294,15 +295,16 @@ const makeCheckpointStore = Effect.gen(function* () {
             status = 'creating',
             last_verified_at = NULL
         `;
-        return {
-          snapshotId,
-          revisionId: null,
-          treeId,
-          anchorRef,
-          status: "creating" as const,
-        };
-      }),
-    ).pipe(mapCatalogError("CheckpointStore.recordCreatingSnapshot"));
+          return {
+            snapshotId,
+            revisionId: null,
+            treeId,
+            anchorRef,
+            status: "creating" as const,
+          };
+        }),
+      )
+      .pipe(mapCatalogError("CheckpointStore.recordCreatingSnapshot"));
 
   const finalizeSnapshot = (input: {
     readonly cwd: string;
@@ -318,10 +320,7 @@ const makeCheckpointStore = Effect.gen(function* () {
         last_verified_at = ${new Date().toISOString()}
       WHERE snapshot_id = ${input.snapshotId}
         AND repository_key = ${snapshotRepositoryKey(input.cwd)}
-    `.pipe(
-      Effect.asVoid,
-      mapCatalogError("CheckpointStore.finalizeSnapshot"),
-    );
+    `.pipe(Effect.asVoid, mapCatalogError("CheckpointStore.finalizeSnapshot"));
 
   const recordCreatingSnapshotRevision = (input: {
     readonly cwd: string;
@@ -333,43 +332,30 @@ const makeCheckpointStore = Effect.gen(function* () {
       SET revision_id = ${input.revisionId}, status = 'creating'
       WHERE snapshot_id = ${input.snapshotId}
         AND repository_key = ${snapshotRepositoryKey(input.cwd)}
-    `.pipe(
-      Effect.asVoid,
-      mapCatalogError("CheckpointStore.recordCreatingSnapshotRevision"),
-    );
+    `.pipe(Effect.asVoid, mapCatalogError("CheckpointStore.recordCreatingSnapshotRevision"));
 
-  const markSnapshotStatus = (
-    cwd: string,
-    snapshotId: string,
-    status: "missing" | "error",
-  ) =>
+  const markSnapshotStatus = (cwd: string, snapshotId: string, status: "missing" | "error") =>
     sql`
       UPDATE checkpoint_snapshots
       SET status = ${status}, last_verified_at = ${new Date().toISOString()}
       WHERE snapshot_id = ${snapshotId}
         AND repository_key = ${snapshotRepositoryKey(cwd)}
-    `.pipe(
-      Effect.asVoid,
-      mapCatalogError("CheckpointStore.markSnapshotStatus"),
-    );
+    `.pipe(Effect.asVoid, mapCatalogError("CheckpointStore.markSnapshotStatus"));
 
-  const bindSnapshotAlias = (
-    cwd: string,
-    checkpointRef: CheckpointRef,
-    snapshotId: string,
-  ) =>
-    sql.withTransaction(
-      Effect.gen(function* () {
-        const repositoryKey = snapshotRepositoryKey(cwd);
-        const previous = yield* sql<{ readonly snapshotId: string }>`
+  const bindSnapshotAlias = (cwd: string, checkpointRef: CheckpointRef, snapshotId: string) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const repositoryKey = snapshotRepositoryKey(cwd);
+          const previous = yield* sql<{ readonly snapshotId: string }>`
           SELECT snapshot_id AS "snapshotId"
           FROM checkpoint_snapshot_aliases
           WHERE repository_key = ${repositoryKey}
             AND checkpoint_ref = ${checkpointRef}
           LIMIT 1
         `;
-        const metadata = aliasMetadata(checkpointRef);
-        yield* sql`
+          const metadata = aliasMetadata(checkpointRef);
+          yield* sql`
           INSERT INTO checkpoint_snapshot_aliases (
             repository_key,
             checkpoint_ref,
@@ -391,19 +377,19 @@ const makeCheckpointStore = Effect.gen(function* () {
             alias_key = excluded.alias_key,
             created_at = excluded.created_at
         `;
-        const previousSnapshotId = previous[0]?.snapshotId;
-        if (!previousSnapshotId || previousSnapshotId === snapshotId) {
-          return null;
-        }
-        const remaining = yield* sql<{ readonly count: number }>`
+          const previousSnapshotId = previous[0]?.snapshotId;
+          if (!previousSnapshotId || previousSnapshotId === snapshotId) {
+            return null;
+          }
+          const remaining = yield* sql<{ readonly count: number }>`
           SELECT COUNT(*) AS count
           FROM checkpoint_snapshot_aliases
           WHERE snapshot_id = ${previousSnapshotId}
         `;
-        if ((remaining[0]?.count ?? 0) > 0) {
-          return null;
-        }
-        const orphaned = yield* sql<CheckpointSnapshotRow>`
+          if ((remaining[0]?.count ?? 0) > 0) {
+            return null;
+          }
+          const orphaned = yield* sql<CheckpointSnapshotRow>`
           SELECT
             snapshot_id AS "snapshotId",
             revision_id AS "revisionId",
@@ -414,48 +400,50 @@ const makeCheckpointStore = Effect.gen(function* () {
           WHERE snapshot_id = ${previousSnapshotId}
           LIMIT 1
         `;
-        return orphaned[0] ?? null;
-      }),
-    ).pipe(mapCatalogError("CheckpointStore.bindSnapshotAlias"));
+          return orphaned[0] ?? null;
+        }),
+      )
+      .pipe(mapCatalogError("CheckpointStore.bindSnapshotAlias"));
 
   const deleteSnapshotAliases = (cwd: string, checkpointRefs: ReadonlyArray<CheckpointRef>) =>
-    sql.withTransaction(
-      Effect.gen(function* () {
-        if (checkpointRefs.length === 0) return [] as CheckpointSnapshotRow[];
-        const repositoryKey = snapshotRepositoryKey(cwd);
-        const aliasedSnapshotIds = yield* Effect.forEach(
-          checkpointRefs,
-          (checkpointRef) =>
-            sql<{ readonly snapshotId: string }>`
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          if (checkpointRefs.length === 0) return [] as CheckpointSnapshotRow[];
+          const repositoryKey = snapshotRepositoryKey(cwd);
+          const aliasedSnapshotIds = yield* Effect.forEach(
+            checkpointRefs,
+            (checkpointRef) =>
+              sql<{ readonly snapshotId: string }>`
               SELECT snapshot_id AS "snapshotId"
               FROM checkpoint_snapshot_aliases
               WHERE repository_key = ${repositoryKey}
                 AND checkpoint_ref = ${checkpointRef}
               LIMIT 1
             `.pipe(Effect.map((rows) => rows[0]?.snapshotId ?? null)),
-          { concurrency: 1 },
-        );
-        yield* Effect.forEach(
-          checkpointRefs,
-          (checkpointRef) =>
-            sql`
+            { concurrency: 1 },
+          );
+          yield* Effect.forEach(
+            checkpointRefs,
+            (checkpointRef) =>
+              sql`
               DELETE FROM checkpoint_snapshot_aliases
               WHERE repository_key = ${repositoryKey}
                 AND checkpoint_ref = ${checkpointRef}
             `,
-          { discard: true, concurrency: 1 },
-        );
-        const orphaned: CheckpointSnapshotRow[] = [];
-        for (const snapshotId of new Set(
-          aliasedSnapshotIds.filter((id): id is string => id !== null),
-        )) {
-          const remaining = yield* sql<{ readonly count: number }>`
+            { discard: true, concurrency: 1 },
+          );
+          const orphaned: CheckpointSnapshotRow[] = [];
+          for (const snapshotId of new Set(
+            aliasedSnapshotIds.filter((id): id is string => id !== null),
+          )) {
+            const remaining = yield* sql<{ readonly count: number }>`
             SELECT COUNT(*) AS count
             FROM checkpoint_snapshot_aliases
             WHERE snapshot_id = ${snapshotId}
           `;
-          if ((remaining[0]?.count ?? 0) > 0) continue;
-          const rows = yield* sql<CheckpointSnapshotRow>`
+            if ((remaining[0]?.count ?? 0) > 0) continue;
+            const rows = yield* sql<CheckpointSnapshotRow>`
             SELECT
               snapshot_id AS "snapshotId",
               revision_id AS "revisionId",
@@ -466,11 +454,12 @@ const makeCheckpointStore = Effect.gen(function* () {
             WHERE snapshot_id = ${snapshotId}
             LIMIT 1
           `;
-          if (rows[0]) orphaned.push(rows[0]);
-        }
-        return orphaned;
-      }),
-    ).pipe(mapCatalogError("CheckpointStore.deleteSnapshotAliases"));
+            if (rows[0]) orphaned.push(rows[0]);
+          }
+          return orphaned;
+        }),
+      )
+      .pipe(mapCatalogError("CheckpointStore.deleteSnapshotAliases"));
 
   const findUnaliasedSnapshots = (cwd: string) =>
     sql<CheckpointSnapshotRow>`
@@ -568,13 +557,7 @@ const makeCheckpointStore = Effect.gen(function* () {
       const debugResult = yield* jj.execute({
         operation: "CheckpointStore.readJjTreeId.compat",
         cwd,
-        args: [
-          "--ignore-working-copy",
-          "debug",
-          "object",
-          "commit",
-          identity.commitId,
-        ],
+        args: ["--ignore-working-copy", "debug", "object", "commit", identity.commitId],
       });
       const resolvedTreeId = debugResult.stdout.match(
         /root_tree:\s*Resolved\(\s*TreeId\(\s*"([0-9a-f]+)"/s,
@@ -603,9 +586,10 @@ const makeCheckpointStore = Effect.gen(function* () {
     readonly revisionId: string;
     readonly anchorRef: string;
   }) =>
-    sql.withTransaction(
-      Effect.gen(function* () {
-        const existing = yield* sql<CheckpointSnapshotRow>`
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const existing = yield* sql<CheckpointSnapshotRow>`
           SELECT
             snapshot_id AS "snapshotId",
             revision_id AS "revisionId",
@@ -618,8 +602,8 @@ const makeCheckpointStore = Effect.gen(function* () {
             AND tree_id = ${input.treeId}
           LIMIT 1
         `;
-        const snapshotId = existing[0]?.snapshotId ?? randomUUID();
-        yield* sql`
+          const snapshotId = existing[0]?.snapshotId ?? randomUUID();
+          yield* sql`
           INSERT INTO checkpoint_snapshots (
             snapshot_id,
             backend,
@@ -647,15 +631,16 @@ const makeCheckpointStore = Effect.gen(function* () {
             status = 'ready',
             last_verified_at = excluded.last_verified_at
         `;
-        return {
-          snapshotId,
-          revisionId: input.revisionId,
-          treeId: input.treeId,
-          anchorRef: input.anchorRef,
-          status: "ready" as const,
-        };
-      }),
-    ).pipe(mapCatalogError("CheckpointStore.recordReadySnapshot"));
+          return {
+            snapshotId,
+            revisionId: input.revisionId,
+            treeId: input.treeId,
+            anchorRef: input.anchorRef,
+            status: "ready" as const,
+          };
+        }),
+      )
+      .pipe(mapCatalogError("CheckpointStore.recordReadySnapshot"));
 
   const cleanupJjSnapshotRows = (
     cwd: string,
@@ -739,15 +724,7 @@ const makeCheckpointStore = Effect.gen(function* () {
       .execute({
         operation: "CheckpointStore.cleanupJjSupersededRevisionBookmarks",
         cwd,
-        args: [
-          "--ignore-working-copy",
-          "bookmark",
-          "list",
-          "-r",
-          revision,
-          "-T",
-          'name ++ "\n"',
-        ],
+        args: ["--ignore-working-copy", "bookmark", "list", "-r", revision, "-T", 'name ++ "\n"'],
       })
       .pipe(
         Effect.flatMap((remaining) =>
@@ -941,10 +918,7 @@ const makeCheckpointStore = Effect.gen(function* () {
             input.cwd,
             existingSnapshot.anchorRef,
           );
-          if (
-            anchoredRevision &&
-            (yield* readJjTreeId(input.cwd, anchoredRevision)) === treeId
-          ) {
+          if (anchoredRevision && (yield* readJjTreeId(input.cwd, anchoredRevision)) === treeId) {
             yield* finalizeSnapshot({
               cwd: input.cwd,
               snapshotId: existingSnapshot.snapshotId,
@@ -968,9 +942,7 @@ const makeCheckpointStore = Effect.gen(function* () {
         const previousAnchor = existingSnapshot?.anchorRef ?? null;
         const previousRevision =
           existingSnapshot?.revisionId ??
-          (previousAnchor
-            ? yield* resolveJjBookmarkRevision(input.cwd, previousAnchor)
-            : null);
+          (previousAnchor ? yield* resolveJjBookmarkRevision(input.cwd, previousAnchor) : null);
         const snapshotToken = randomUUID();
         const snapshotDescription = `synara checkpoint snapshot ${snapshotToken}`;
         const duplicateDescriptionTemplate = JSON.stringify(snapshotDescription);
@@ -1045,12 +1017,7 @@ const makeCheckpointStore = Effect.gen(function* () {
                 .execute({
                   operation: "CheckpointStore.captureCheckpoint.jjCleanupAnchor",
                   cwd: input.cwd,
-                  args: [
-                    "--ignore-working-copy",
-                    "bookmark",
-                    "delete",
-                    creatingSnapshot.anchorRef,
-                  ],
+                  args: ["--ignore-working-copy", "bookmark", "delete", creatingSnapshot.anchorRef],
                   allowNonZeroExit: true,
                 })
                 .pipe(Effect.ignore);
@@ -1064,11 +1031,9 @@ const makeCheckpointStore = Effect.gen(function* () {
                   })
                   .pipe(Effect.ignore);
               }
-              yield* markSnapshotStatus(
-                input.cwd,
-                creatingSnapshot.snapshotId,
-                "error",
-              ).pipe(Effect.ignore);
+              yield* markSnapshotStatus(input.cwd, creatingSnapshot.snapshotId, "error").pipe(
+                Effect.ignore,
+              );
             }),
           ),
         );
@@ -1172,10 +1137,7 @@ const makeCheckpointStore = Effect.gen(function* () {
       input.cwd,
       Effect.gen(function* () {
         yield* rememberJjRepositoryKey(input.cwd);
-        const sourceSnapshot = yield* findSnapshotByAlias(
-          input.cwd,
-          input.fromCheckpointRef,
-        );
+        const sourceSnapshot = yield* findSnapshotByAlias(input.cwd, input.fromCheckpointRef);
         if (sourceSnapshot && (yield* verifyJjSnapshot(input.cwd, sourceSnapshot))) {
           const orphaned = yield* bindSnapshotAlias(
             input.cwd,
@@ -1234,28 +1196,17 @@ const makeCheckpointStore = Effect.gen(function* () {
               allowNonZeroExit: true,
             })
             .pipe(Effect.ignore);
-        } else if (
-          existingSnapshot &&
-          existingSnapshot.anchorRef !== snapshot.anchorRef
-        ) {
+        } else if (existingSnapshot && existingSnapshot.anchorRef !== snapshot.anchorRef) {
           yield* jj
             .execute({
               operation: "CheckpointStore.copyCheckpointRef.jjDeleteSupersededAnchor",
               cwd: input.cwd,
-              args: [
-                "--ignore-working-copy",
-                "bookmark",
-                "delete",
-                existingSnapshot.anchorRef,
-              ],
+              args: ["--ignore-working-copy", "bookmark", "delete", existingSnapshot.anchorRef],
               allowNonZeroExit: true,
             })
             .pipe(Effect.ignore);
           if (existingSnapshot.revisionId !== null) {
-            yield* abandonJjRevisionIfUnbookmarked(
-              input.cwd,
-              existingSnapshot.revisionId,
-            );
+            yield* abandonJjRevisionIfUnbookmarked(input.cwd, existingSnapshot.revisionId);
           }
         }
         yield* cleanupJjSnapshotRows(input.cwd, [
@@ -1425,10 +1376,7 @@ const makeCheckpointStore = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.diffCheckpointToWorkingCopy";
-      let fromCommitOid = yield* resolveCheckpointCommit(
-        input.cwd,
-        input.fromCheckpointRef,
-      );
+      let fromCommitOid = yield* resolveCheckpointCommit(input.cwd, input.fromCheckpointRef);
       if (!fromCommitOid && input.fallbackFromToHead === true) {
         fromCommitOid = yield* resolveHeadCommit(input.cwd);
       }
@@ -1472,10 +1420,7 @@ const makeCheckpointStore = Effect.gen(function* () {
           "CheckpointStore.diffCheckpointToWorkingCopy.jjSnapshot",
           input.recoverStaleWorkingCopy === true,
         );
-        let fromRevision = yield* resolveJjCheckpointRevision(
-          input.cwd,
-          input.fromCheckpointRef,
-        );
+        let fromRevision = yield* resolveJjCheckpointRevision(input.cwd, input.fromCheckpointRef);
         if (!fromRevision && input.fallbackFromToHead === true) {
           fromRevision = "@-";
         }
@@ -1512,6 +1457,130 @@ const makeCheckpointStore = Effect.gen(function* () {
     input.backend === "git"
       ? diffGitCheckpointToWorkingCopy(input)
       : diffJjCheckpointToWorkingCopy(input);
+
+  // Rolls the working tree back to `treeOid` for the provided paths without
+  // touching the repository index: paths absent from the tree did not exist
+  // before the aborted apply, so they are deleted instead of restored.
+  const restoreWorktreePathsFromTree = (input: {
+    readonly cwd: string;
+    readonly treeOid: string;
+    readonly paths: ReadonlyArray<string>;
+  }) =>
+    Effect.gen(function* () {
+      const operation = "CheckpointStore.restoreWorktreePathsFromTree";
+      if (input.paths.length === 0) {
+        return;
+      }
+
+      const trackedResult = yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: ["ls-tree", "-r", "--name-only", "-z", input.treeOid, "--", ...input.paths],
+        allowNonZeroExit: true,
+      });
+      const trackedPaths = trackedResult.stdout.split("\0").filter((entry) => entry.length > 0);
+      if (trackedPaths.length > 0) {
+        yield* git.execute({
+          operation,
+          cwd: input.cwd,
+          args: ["restore", "--source", input.treeOid, "--worktree", "--", ...trackedPaths],
+        });
+      }
+
+      const trackedPathSet = new Set(trackedPaths);
+      yield* Effect.forEach(
+        input.paths.filter((entry) => !trackedPathSet.has(entry)),
+        (relativePath) => fs.remove(path.join(input.cwd, relativePath), { force: true }),
+        { discard: true },
+      );
+    });
+
+  // Fallback for undo when the working tree drifted after the checkpoint: a
+  // plain `git apply --reverse` is all-or-nothing, so any unrelated edit in a
+  // touched hunk aborts the whole undo.
+  //
+  // `git apply --3way` implies `--index` and therefore refuses to run while the
+  // working tree differs from the index. Point it at a throwaway index that
+  // mirrors the current working tree so the merge can run; the repository index
+  // stays untouched and the caller's `git reset` remains its only writer.
+  const applyReverseWithThreeWayMerge = (input: {
+    readonly cwd: string;
+    readonly tempDir: string;
+    readonly patchPath: string;
+    readonly affectedPaths: ReadonlyArray<string>;
+    readonly strictApplyStderr: string;
+  }) =>
+    Effect.gen(function* () {
+      const operation = "CheckpointStore.reverseCheckpointDiff";
+      const mergeIndexEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        GIT_INDEX_FILE: path.join(input.tempDir, `undo-index-${randomUUID()}`),
+      };
+
+      const headExists = yield* hasHeadCommit(input.cwd);
+      if (headExists) {
+        yield* git.execute({
+          operation,
+          cwd: input.cwd,
+          args: ["read-tree", "HEAD"],
+          env: mergeIndexEnv,
+        });
+      }
+      yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: ["add", "-A", "--", "."],
+        env: mergeIndexEnv,
+      });
+      // Snapshot of the pre-attempt working tree, used to undo a conflicted
+      // 3-way apply (which writes conflict markers before failing).
+      const preAttemptTreeResult = yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: ["write-tree"],
+        env: mergeIndexEnv,
+      });
+      const preAttemptTreeOid = preAttemptTreeResult.stdout.trim();
+
+      const applied = yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: ["apply", "--reverse", "--3way", "--whitespace=nowarn", "--", input.patchPath],
+        env: mergeIndexEnv,
+        allowNonZeroExit: true,
+      });
+      if (applied.code === 0) {
+        return;
+      }
+
+      if (preAttemptTreeOid.length > 0) {
+        yield* restoreWorktreePathsFromTree({
+          cwd: input.cwd,
+          treeOid: preAttemptTreeOid,
+          paths: input.affectedPaths,
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to roll back a conflicted checkpoint undo", {
+              cwd: input.cwd,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
+      }
+
+      return yield* new GitCommandError({
+        operation,
+        command: "git apply --reverse --3way",
+        cwd: input.cwd,
+        detail: [
+          "Undo could not be applied because the workspace changed since this checkpoint.",
+          input.strictApplyStderr.trim(),
+          applied.stderr.trim(),
+        ]
+          .filter((part) => part.length > 0)
+          .join(" "),
+      });
+    });
 
   const reverseGitCheckpointDiff: CheckpointStoreShape["reverseCheckpointDiff"] = (input) =>
     Effect.gen(function* () {
@@ -1562,11 +1631,21 @@ const makeCheckpointStore = Effect.gen(function* () {
           Effect.gen(function* () {
             const patchPath = path.join(tempDir, "turn.patch");
             yield* fs.writeFileString(patchPath, diff.stdout);
-            yield* git.execute({
+            const strictApply = yield* git.execute({
               operation,
               cwd: input.cwd,
               args: ["apply", "--reverse", "--whitespace=nowarn", "--", patchPath],
+              allowNonZeroExit: true,
             });
+            if (strictApply.code !== 0) {
+              yield* applyReverseWithThreeWayMerge({
+                cwd: input.cwd,
+                tempDir,
+                patchPath,
+                affectedPaths,
+                strictApplyStderr: strictApply.stderr,
+              });
+            }
             if (affectedPaths.length > 0) {
               const resetExit = yield* Effect.exit(
                 git.execute({
@@ -1663,19 +1742,39 @@ const makeCheckpointStore = Effect.gen(function* () {
     Effect.gen(function* () {
       const operation = "CheckpointStore.deleteCheckpointRefs";
 
-      // Ref deletion writes contend on packed-refs.lock; concurrent deletes
-      // lose the lock race and allowNonZeroExit would swallow the failure.
-      yield* Effect.forEach(
-        input.checkpointRefs,
-        (checkpointRef) =>
-          git.execute({
+      // Ref deletion writes contend on packed-refs.lock, so a concurrent delete
+      // can lose the lock race. `allowNonZeroExit` keeps one loser from
+      // abandoning the rest of the batch, but the exit codes must still be
+      // inspected: silently discarding them made every caller's cleanup error
+      // handling unreachable. Deleting an already-absent ref exits 0, so the
+      // "missing refs are tolerated" contract is unaffected.
+      const results = yield* Effect.forEach(input.checkpointRefs, (checkpointRef) =>
+        git
+          .execute({
             operation,
             cwd: input.cwd,
             args: ["update-ref", "-d", checkpointRef],
             allowNonZeroExit: true,
-          }),
-        { discard: true },
+          })
+          .pipe(Effect.map((result) => ({ checkpointRef, result }))),
       );
+
+      const failures = results.filter((entry) => entry.result.code !== 0);
+      if (failures.length === 0) {
+        return;
+      }
+
+      return yield* new GitCommandError({
+        operation,
+        command: "git update-ref -d",
+        cwd: input.cwd,
+        detail: `Failed to delete ${failures.length} of ${results.length} checkpoint ref(s): ${failures
+          .map(
+            (entry) =>
+              `${entry.checkpointRef} (${entry.result.stderr.trim() || `exit code ${entry.result.code}`})`,
+          )
+          .join("; ")}`,
+      });
     });
 
   const deleteJjCheckpointRefs: CheckpointStoreShape["deleteCheckpointRefs"] = (input) =>
@@ -1711,10 +1810,7 @@ const makeCheckpointStore = Effect.gen(function* () {
           } => entry !== null,
         );
 
-        const orphanedSnapshots = yield* deleteSnapshotAliases(
-          input.cwd,
-          input.checkpointRefs,
-        );
+        const orphanedSnapshots = yield* deleteSnapshotAliases(input.cwd, input.checkpointRefs);
         if (existingLegacy.length > 0) {
           yield* jj.execute({
             operation: "CheckpointStore.deleteCheckpointRefs.jjLegacy",

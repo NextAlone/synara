@@ -41,5 +41,4 @@ protectFromDesktopParentExit({
     }, DESKTOP_PARENT_FORCE_EXIT_DELAY_MS);
     forceExitTimer.unref();
   }),
-})
-  .pipe((program) => NodeRuntime.runMain(program as Effect.Effect<void, unknown, never>));
+}).pipe((program) => NodeRuntime.runMain(program as Effect.Effect<void, unknown, never>));

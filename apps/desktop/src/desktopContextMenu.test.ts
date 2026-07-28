@@ -3,10 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import {
-  type DesktopContextMenuContext,
-  shouldShowDesktopContextMenu,
-} from "./desktopContextMenu";
+import { type DesktopContextMenuContext, shouldShowDesktopContextMenu } from "./desktopContextMenu";
 
 const blankContext = {
   isEditable: false,

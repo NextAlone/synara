@@ -733,34 +733,35 @@ describe("decider project scripts", () => {
 
     const failedReadModel: OrchestrationReadModel = {
       ...readModel,
-      threads: readModel.threads.map((thread): OrchestrationThread =>
-        thread.id === ThreadId.makeUnsafe("thread-handoff")
-          ? {
-              ...thread,
-              messages: [
-                ...thread.messages,
-                {
-                  id: asMessageId("message-imported-answer"),
-                  role: "assistant",
-                  text: "Imported answer",
-                  turnId: null,
-                  streaming: false,
-                  source: "handoff-import",
-                  createdAt: now,
+      threads: readModel.threads.map(
+        (thread): OrchestrationThread =>
+          thread.id === ThreadId.makeUnsafe("thread-handoff")
+            ? {
+                ...thread,
+                messages: [
+                  ...thread.messages,
+                  {
+                    id: asMessageId("message-imported-answer"),
+                    role: "assistant",
+                    text: "Imported answer",
+                    turnId: null,
+                    streaming: false,
+                    source: "handoff-import",
+                    createdAt: now,
+                    updatedAt: now,
+                  },
+                ],
+                session: {
+                  threadId: thread.id,
+                  status: "error",
+                  providerName: "codex",
+                  runtimeMode: "full-access",
+                  activeTurnId: null,
+                  lastError: "Replacement session failed",
                   updatedAt: now,
                 },
-              ],
-              session: {
-                threadId: thread.id,
-                status: "error",
-                providerName: "codex",
-                runtimeMode: "full-access",
-                activeTurnId: null,
-                lastError: "Replacement session failed",
-                updatedAt: now,
-              },
-            }
-          : thread,
+              }
+            : thread,
       ),
     };
     const recovered = await Effect.runPromise(
@@ -802,7 +803,7 @@ describe("decider project scripts", () => {
       }),
     );
 
-    expect(Array.isArray(recovered) ? recovered[0]?.type : recovered.type).toBe("thread.created");
+    expect((recovered as readonly { readonly type: string }[])[0]?.type).toBe("thread.created");
   });
 
   it("allows re-handoff after the handoff thread has native chat messages", async () => {

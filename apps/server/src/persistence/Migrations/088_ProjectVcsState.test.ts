@@ -7,14 +7,14 @@ import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
-layer("087_ProjectVcsState", (it) => {
+layer("088_ProjectVcsState", (it) => {
   it.effect("adds an exclusive project VCS state with a legacy-safe default", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 86 });
+      yield* runMigrations({ toMigrationInclusive: 87 });
 
-      const executed = yield* runMigrations({ toMigrationInclusive: 87 });
-      assert.deepStrictEqual(executed, [[87, "ProjectVcsState"]]);
+      const executed = yield* runMigrations({ toMigrationInclusive: 88 });
+      assert.deepStrictEqual(executed, [[88, "ProjectVcsState"]]);
 
       const columns = yield* sql<{
         readonly name: string;

@@ -12,11 +12,11 @@ import {
   Layer,
   Option,
   Path,
-  PlatformError,
+  type PlatformError,
   Ref,
   Result,
   Schema,
-  Scope,
+  type Scope,
   Semaphore,
   Stream,
 } from "effect";
@@ -608,6 +608,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 env: {
                   ...process.env,
                   ...input.env,
+                  LANG: "C",
+                  LC_ALL: "C",
                   ...trace2Monitor.env,
                 },
               }),

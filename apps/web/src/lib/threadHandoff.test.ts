@@ -62,9 +62,7 @@ function latestTurn(input: {
         ? null
         : timestamp(input.completedAtSecond ?? input.requestedAtSecond + 1),
     assistantMessageId:
-      input.assistantMessageId === null
-        ? null
-        : MessageId.makeUnsafe(input.assistantMessageId),
+      input.assistantMessageId === null ? null : MessageId.makeUnsafe(input.assistantMessageId),
   };
 }
 

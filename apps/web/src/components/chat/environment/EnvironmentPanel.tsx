@@ -212,22 +212,22 @@ export function EnvironmentPanel({
   gitCwd,
   vcsTarget,
   openInTarget,
-  githubRepository = null,
-  githubRepositories = [],
+  githubRepository: githubRepositoryProp,
+  githubRepositories: githubRepositoriesProp,
   isGitRepo,
   keybindings,
   availableEditors,
   activeThreadId,
   activeProvider,
   isStudioChat,
-  studioFolderPath = null,
+  studioFolderPath: studioFolderPathProp,
   showGitActions,
   diffOpen,
   threadAutomations,
-  diffDisabledReason = null,
+  diffDisabledReason: diffDisabledReasonProp,
   diffTotals,
   branchToolbar,
-  recap = null,
+  recap: recapProp,
   pinnedMessages,
   threadMarkers,
   pinnedMessageTextById,
@@ -250,10 +250,16 @@ export function EnvironmentPanel({
   onRemoveThreadMarker,
   onRenameThreadMarker,
   onNotesChange,
-  onOpenEditorView = null,
+  onOpenEditorView: onOpenEditorViewProp,
   onClose,
   onRegisterCommitAndPushTrigger,
 }: EnvironmentPanelProps) {
+  const githubRepository = githubRepositoryProp ?? null;
+  const githubRepositories = githubRepositoriesProp ?? [];
+  const studioFolderPath = studioFolderPathProp ?? null;
+  const diffDisabledReason = diffDisabledReasonProp ?? null;
+  const recap = recapProp ?? null;
+  const onOpenEditorView = onOpenEditorViewProp ?? null;
   const navigate = useNavigate();
   const { settings } = useAppSettings();
   const { additions, deletions, hasChanges } = diffTotals;

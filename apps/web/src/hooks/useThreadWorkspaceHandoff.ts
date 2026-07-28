@@ -13,6 +13,19 @@ import {
 } from "../projectScripts";
 import type { Project, ProjectScript, Thread } from "../types";
 
+/** Success toast for one handoff. Module scope: its ternaries live outside the caller's `try`. */
+function reportThreadHandoffSuccess(
+  targetMode: "local" | "worktree",
+  result: { conflictsDetected: boolean; message?: string | null },
+): void {
+  toastManager.add({
+    type: result.conflictsDetected ? "warning" : "success",
+    title:
+      targetMode === "worktree" ? "Thread handed off to workspace" : "Thread handed off to local",
+    ...(result.message ? { description: result.message } : {}),
+  });
+}
+
 export function useThreadWorkspaceHandoff(input: {
   activeProject: Project | undefined;
   activeThread: Thread | undefined;
@@ -35,7 +48,6 @@ export function useThreadWorkspaceHandoff(input: {
   const [worktreeHandoffDialogOpen, setWorktreeHandoffDialogOpen] = useState(false);
   const [worktreeHandoffName, setWorktreeHandoffName] = useState("");
 
-  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const handoffThread = useCallback(
     async (targetMode: "local" | "worktree", options?: { preferredWorktreeName?: string }) => {
       if (
@@ -47,48 +59,54 @@ export function useThreadWorkspaceHandoff(input: {
         return false;
       }
 
+      // Resolve the VCS payload before the `try`: React Compiler cannot lower
+      // conditional expressions inside the callback's error boundary.
+      const vcs = input.activeProject.vcs;
+      if (!vcs?.binding || vcs.binding.backend !== input.vcsBackend) {
+        toastManager.add({
+          type: "error",
+          title:
+            targetMode === "worktree"
+              ? "Could not hand off to workspace"
+              : "Could not hand off to local",
+          description: `This project is not configured for the global ${input.vcsBackend === "jj" ? "JJ" : "Git"} backend yet.`,
+        });
+        return false;
+      }
+      const handoffPayload = {
+        commandId: newCommandId(),
+        projectId: input.activeProject.id,
+        threadId: input.activeThread.id,
+        expectedEpoch: vcs.epoch,
+        targetMode: targetMode === "worktree" ? ("workspace" as const) : ("local" as const),
+        preferredLocalReference: input.activeRootBranch ?? input.activeThread.branch ?? null,
+        preferredWorkspaceBaseReference:
+          input.activeRootBranch ??
+          input.activeThreadAssociatedWorktree.associatedWorktreeBranch ??
+          input.activeThread.branch ??
+          null,
+        preferredNewWorkspaceName: options?.preferredWorktreeName ?? null,
+      };
+
       try {
         await input.stopActiveThreadSession();
-        const vcs = input.activeProject.vcs;
-        if (!vcs?.binding || vcs.binding.backend !== input.vcsBackend) {
-          throw new Error(
-            `This project is not configured for the global ${input.vcsBackend === "jj" ? "JJ" : "Git"} backend yet.`,
-          );
-        }
-        const result = await handoffThreadMutation.mutateAsync({
-          commandId: newCommandId(),
-          projectId: input.activeProject.id,
-          threadId: input.activeThread.id,
-          expectedEpoch: vcs.epoch,
-          targetMode: targetMode === "worktree" ? "workspace" : "local",
-          preferredLocalReference: input.activeRootBranch ?? input.activeThread.branch ?? null,
-          preferredWorkspaceBaseReference:
-            input.activeRootBranch ??
-            input.activeThreadAssociatedWorktree.associatedWorktreeBranch ??
-            input.activeThread.branch ??
-            null,
-          preferredNewWorkspaceName: options?.preferredWorktreeName ?? null,
-        });
+        const result = await handoffThreadMutation.mutateAsync(handoffPayload);
 
-        if (targetMode === "worktree" && result.workspacePath) {
-          const setupScript = setupProjectScript(input.activeProject.scripts);
-          if (setupScript) {
-            await input.runProjectScript(setupScript, {
-              cwd: result.workspacePath,
-              worktreePath: result.workspacePath,
-              rememberAsLastInvoked: false,
-            });
+        if (targetMode === "worktree") {
+          const workspacePath = result.workspacePath;
+          if (workspacePath) {
+            const setupScript = setupProjectScript(input.activeProject.scripts);
+            if (setupScript) {
+              await input.runProjectScript(setupScript, {
+                cwd: workspacePath,
+                worktreePath: workspacePath,
+                rememberAsLastInvoked: false,
+              });
+            }
           }
         }
 
-        toastManager.add({
-          type: result.conflictsDetected ? "warning" : "success",
-          title:
-            targetMode === "worktree"
-              ? "Thread handed off to workspace"
-              : "Thread handed off to local",
-          ...(result.message ? { description: result.message } : {}),
-        });
+        reportThreadHandoffSuccess(targetMode, result);
         return true;
       } catch (error) {
         toastManager.add({

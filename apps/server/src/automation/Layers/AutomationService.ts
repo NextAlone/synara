@@ -25,7 +25,14 @@ import {
   type ThreadEnvironmentMode,
   type TurnId,
 } from "@synara/contracts";
+import {
+  automationContinuationThreadId,
+  automationContinuesThread,
+  automationOwnsItsThread,
+  automationRequiresTargetThread,
+} from "@synara/shared/automationMode";
 import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
+import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
@@ -180,6 +187,21 @@ function isSameCompletionPolicy(
 }
 
 const DEFAULT_COMPLETION_POLICY = { type: "none" } as const satisfies AutomationCompletionPolicy;
+
+type CallerAutomationRunFailure =
+  | "no-active-turn"
+  | "not-automation-dispatched"
+  | "turn-not-part-of-run";
+
+type CallerAutomationRunResolution =
+  | { readonly run: AutomationRun }
+  | { readonly reason: CallerAutomationRunFailure };
+
+const CALLER_AUTOMATION_RUN_FAILURES: Record<CallerAutomationRunFailure, string> = {
+  "no-active-turn": "This operation is only available inside an active automation turn.",
+  "not-automation-dispatched": "The active turn was not dispatched by an automation.",
+  "turn-not-part-of-run": "The active turn was not dispatched by this automation run.",
+};
 
 function completionPolicyForDefinition(
   definition: AutomationDefinition,
@@ -446,16 +468,27 @@ function mergeDefinitionUpdate(
   const providerOptions = input.providerOptions ?? current.providerOptions;
   const mode = input.mode ?? current.mode;
   const currentCompletionPolicy = completionPolicyForDefinition(current);
-  const completionPolicy =
-    mode === "standalone"
-      ? { type: "none" as const }
-      : (input.completionPolicy ?? currentCompletionPolicy);
+  const completionPolicy = input.completionPolicy ?? currentCompletionPolicy;
   const completionPolicyChanged = !isSameCompletionPolicy(
     currentCompletionPolicy,
     completionPolicy,
   );
-  // Run caps apply to both standalone and heartbeat definitions; chat parsing uses
-  // them for bounded requests like "every 15 seconds for 3 times".
+  // A dedicated automation owns its continuation thread, so the caller never picks it and
+  // an update must not move it. Changing mode always releases the previous thread: the new
+  // mode either needs none (standalone), needs a caller-supplied one (heartbeat), or must
+  // create its own on the next run (dedicated).
+  const targetThreadId =
+    mode !== current.mode
+      ? automationRequiresTargetThread(mode)
+        ? ((input.targetThreadId as AutomationDefinition["targetThreadId"] | undefined) ?? null)
+        : null
+      : automationOwnsItsThread(mode)
+        ? current.targetThreadId
+        : hasOwn(input, "targetThreadId")
+          ? ((input.targetThreadId as AutomationDefinition["targetThreadId"] | undefined) ?? null)
+          : current.targetThreadId;
+  // Run caps apply to every mode; chat parsing uses them for bounded requests like
+  // "every 15 seconds for 3 times".
   const maxIterations = hasOwn(input, "maxIterations")
     ? ((input.maxIterations as AutomationDefinition["maxIterations"] | undefined) ?? null)
     : current.maxIterations;
@@ -475,9 +508,7 @@ function mergeDefinitionUpdate(
     interactionMode: input.interactionMode ?? current.interactionMode,
     worktreeMode: input.worktreeMode ?? current.worktreeMode,
     mode,
-    targetThreadId: hasOwn(input, "targetThreadId")
-      ? ((input.targetThreadId as AutomationDefinition["targetThreadId"] | undefined) ?? null)
-      : current.targetThreadId,
+    targetThreadId,
     proposalState: current.proposalState,
     notificationPolicy: input.notificationPolicy ?? current.notificationPolicy,
     heartbeatCooldownSeconds: input.heartbeatCooldownSeconds ?? current.heartbeatCooldownSeconds,
@@ -665,7 +696,9 @@ export const AutomationServiceLive = Layer.effect(
       readonly projectId: AutomationDefinition["projectId"];
       readonly targetThreadId: AutomationDefinition["targetThreadId"];
     }) => {
-      if (input.mode !== "heartbeat") {
+      // Only heartbeat validates a thread here. A dedicated automation's thread is created
+      // by its own first run, so there is nothing to check until then.
+      if (!automationRequiresTargetThread(input.mode)) {
         return Effect.void;
       }
       if (!input.targetThreadId) {
@@ -753,6 +786,16 @@ export const AutomationServiceLive = Layer.effect(
             }),
           )
         : Effect.void;
+    };
+
+    const validateAutoRuntimeMode = (input: {
+      readonly modelSelection: AutomationDefinition["modelSelection"];
+      readonly runtimeMode: AutomationDefinition["runtimeMode"];
+    }) => {
+      const issue = autoRuntimeModeSelectionIssue(input);
+      return issue === null
+        ? Effect.void
+        : Effect.fail(new AutomationServiceError({ message: issue }));
     };
 
     // Run-path backstop for the fast-interval policy. validateSchedulePolicy enforces this at
@@ -891,9 +934,10 @@ export const AutomationServiceLive = Layer.effect(
         turn?.turnId !== undefined &&
         shell.latestTurn?.turnId === turn.turnId);
 
-    // Dispatch a run: standalone creates a fresh thread + turn; heartbeat continues the
-    // configured target thread with a new turn. A failure marks the run failed before
-    // re-raising so the scheduler/caller still observes the error.
+    // Dispatch a run: with no thread to continue it creates a fresh thread + turn, otherwise
+    // it appends a turn to the thread the definition continues (the heartbeat target, or the
+    // thread a dedicated automation owns). A failure marks the run failed before re-raising
+    // so the scheduler/caller still observes the error.
     const dispatchRun = (
       definition: AutomationDefinition,
       run: AutomationRun,
@@ -901,8 +945,17 @@ export const AutomationServiceLive = Layer.effect(
     ): Effect.Effect<AutomationRunNowResult, AutomationServiceError> => {
       return Effect.gen(function* () {
         const plannedIds = deriveAutomationRunIds(run.id);
-        const plannedThreadId =
-          definition.mode === "heartbeat" ? definition.targetThreadId : plannedIds.threadId;
+        // Read the thread from the definition rather than the run: a dedicated automation can
+        // claim its thread after this run was planned, and continuing it beats creating a second.
+        const continuationThreadId = automationContinuationThreadId(definition);
+        if (automationRequiresTargetThread(definition.mode) && continuationThreadId === null) {
+          return yield* Effect.fail(
+            new AutomationServiceError({
+              message: "Heartbeat automation has no target thread to continue.",
+            }),
+          );
+        }
+        const plannedThreadId = continuationThreadId ?? plannedIds.threadId;
         const messageId = run.messageId;
         const turnStartCommandId = run.turnStartCommandId;
         if (!plannedThreadId || !messageId || !turnStartCommandId) {
@@ -924,6 +977,7 @@ export const AutomationServiceLive = Layer.effect(
           worktreeMode: definition.worktreeMode,
           acknowledgedRisks: definition.acknowledgedRisks,
         });
+        yield* validateAutoRuntimeMode(definition);
         yield* validateFastIntervalPolicy({
           schedule: definition.schedule,
           enabled: definition.enabled,
@@ -1002,17 +1056,8 @@ export const AutomationServiceLive = Layer.effect(
             ),
           );
 
-        if (definition.mode === "heartbeat") {
-          const targetThreadId = definition.targetThreadId;
-          if (!targetThreadId) {
-            return yield* Effect.fail(
-              new AutomationServiceError({
-                message: "Heartbeat automation has no target thread to continue.",
-              }),
-            );
-          }
-
-          const started = yield* markRunDispatchStarted(targetThreadId, null);
+        if (continuationThreadId !== null) {
+          const started = yield* markRunDispatchStarted(continuationThreadId, null);
           yield* requireRunStillDispatching(
             "Automation run was cancelled before continuing the thread.",
           );
@@ -1021,7 +1066,7 @@ export const AutomationServiceLive = Layer.effect(
             .dispatch({
               type: "thread.turn.start",
               commandId: turnStartCommandId,
-              threadId: targetThreadId,
+              threadId: continuationThreadId,
               message: {
                 messageId,
                 role: "user",
@@ -1048,7 +1093,7 @@ export const AutomationServiceLive = Layer.effect(
         if (!threadCreateCommandId) {
           return yield* Effect.fail(
             new AutomationServiceError({
-              message: "Standalone automation run is missing its planned thread command.",
+              message: "Automation run is missing its planned thread command.",
             }),
           );
         }
@@ -1100,7 +1145,11 @@ export const AutomationServiceLive = Layer.effect(
             commandId: threadCreateCommandId,
             threadId: plannedThreadId,
             projectId: definition.projectId,
-            title: `${definition.name} - ${now}`,
+            // A dedicated thread outlives this run, so it is titled for the automation
+            // rather than for the occurrence that happened to open it.
+            title: automationOwnsItsThread(definition.mode)
+              ? definition.name
+              : `${definition.name} - ${now}`,
             modelSelection: definition.modelSelection,
             runtimeMode: definition.runtimeMode,
             interactionMode: definition.interactionMode,
@@ -1124,6 +1173,21 @@ export const AutomationServiceLive = Layer.effect(
               }).pipe(Effect.flatMap(() => Effect.fail(error))),
             ),
           );
+
+        // Claim the thread before the turn starts, so a run dispatched while this one is
+        // still working already sees the thread and continues it instead of opening another.
+        if (automationOwnsItsThread(definition.mode)) {
+          const attached = yield* automationRepository
+            .attachDefinitionThread({
+              id: definition.id,
+              threadId: plannedThreadId,
+              updatedAt: now,
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to attach the automation thread.")));
+          if (attached) {
+            yield* publishDefinition(definition.id);
+          }
+        }
 
         yield* requireRunStillDispatching(
           "Automation run was cancelled before starting the automation turn.",
@@ -1207,6 +1271,9 @@ export const AutomationServiceLive = Layer.effect(
     ) => {
       const runId = makeAutomationRunId();
       const ids = deriveAutomationRunIds(runId);
+      // A dedicated automation continues its own thread from the second run on; before that
+      // it plans a thread creation exactly like a standalone run.
+      const continuationThreadId = automationContinuationThreadId(definition);
       return {
         id: runId,
         automationId: definition.id,
@@ -1214,13 +1281,13 @@ export const AutomationServiceLive = Layer.effect(
         threadId:
           "threadIdOverride" in options
             ? options.threadIdOverride
-            : definition.mode === "heartbeat" && options.deferredUntil != null
-              ? null
-              : definition.mode === "heartbeat"
-                ? definition.targetThreadId
-                : ids.threadId,
+            : continuationThreadId === null
+              ? ids.threadId
+              : options.deferredUntil != null
+                ? null
+                : continuationThreadId,
         messageId: ids.messageId,
-        threadCreateCommandId: definition.mode === "heartbeat" ? null : ids.threadCreateCommandId,
+        threadCreateCommandId: continuationThreadId === null ? ids.threadCreateCommandId : null,
         turnStartCommandId: ids.turnStartCommandId,
         trigger,
         scheduledFor,
@@ -1433,8 +1500,9 @@ export const AutomationServiceLive = Layer.effect(
       policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
     ): boolean => {
       const currentPolicy = completionPolicyForDefinition(definition);
+      // Mode-independent: a stop clause decides when the automation retires, which is
+      // orthogonal to whether its runs continue a target thread or open a fresh one.
       return (
-        definition.mode === "heartbeat" &&
         definition.enabled &&
         definition.archivedAt === null &&
         currentPolicy.type === "ai-evaluated" &&
@@ -1749,7 +1817,6 @@ export const AutomationServiceLive = Layer.effect(
               const enqueueAiStop =
                 !reachedMax &&
                 status === "succeeded" &&
-                definition.mode === "heartbeat" &&
                 completionPolicy.type === "ai-evaluated" &&
                 runUsesCurrentCompletionPolicy(run, definition)
                   ? enqueueCompletionEvaluationJob({
@@ -1830,9 +1897,12 @@ export const AutomationServiceLive = Layer.effect(
       assistantText: string | null,
     ): AutomationRunResult => {
       const reportedDecision = run.result?.decision;
+      // A run that continues a thread is one iteration of a loop the user can already read,
+      // so it stays silent unless it actually said something. A fresh thread per run is the
+      // result itself and always deserves attention.
       const decision =
         reportedDecision ??
-        (definition.mode === "heartbeat"
+        (automationContinuesThread(definition.mode)
           ? assistantText !== null && assistantText.trim().length > 0
             ? "notify"
             : "silent"
@@ -2131,31 +2201,26 @@ export const AutomationServiceLive = Layer.effect(
         .list(input)
         .pipe(Effect.mapError(toServiceError("Failed to list automations.")));
 
-    const requireCallerAutomationRun = (input: {
+    // Resolves the automation run that dispatched the caller's active turn, if any.
+    // This is the only authority a standalone run has over its own automation: its
+    // thread is created per run, so it matches neither sourceThreadId nor targetThreadId.
+    const resolveCallerAutomationRun = (input: {
       readonly callerThreadId: ThreadId;
       readonly callerTurnId: TurnId | null;
-    }) =>
+    }): Effect.Effect<CallerAutomationRunResolution, AutomationServiceError> =>
       Effect.gen(function* () {
         if (!input.callerTurnId) {
-          return yield* Effect.fail(
-            new AutomationServiceError({
-              message: "This operation is only available inside an active automation turn.",
-            }),
-          );
+          return { reason: "no-active-turn" } as const;
         }
         const runOption = yield* automationRepository
           .getRunByThreadId({ threadId: input.callerThreadId })
           .pipe(Effect.mapError(toServiceError("Failed to resolve the automation run.")));
         if (Option.isNone(runOption)) {
-          return yield* Effect.fail(
-            new AutomationServiceError({
-              message: "The active turn was not dispatched by an automation.",
-            }),
-          );
+          return { reason: "not-automation-dispatched" } as const;
         }
         const run = runOption.value;
         if (run.turnId === input.callerTurnId) {
-          return run;
+          return { run } as const;
         }
         const turnOption = yield* projectionTurnRepository
           .getByTurnId({
@@ -2168,14 +2233,33 @@ export const AutomationServiceLive = Layer.effect(
           run.messageId === null ||
           turnOption.value.pendingMessageId !== run.messageId
         ) {
-          return yield* Effect.fail(
-            new AutomationServiceError({
-              message: "The active turn was not dispatched by this automation run.",
-            }),
-          );
+          return { reason: "turn-not-part-of-run" } as const;
         }
-        return run;
+        return { run } as const;
       });
+
+    const requireCallerAutomationRun = (input: {
+      readonly callerThreadId: ThreadId;
+      readonly callerTurnId: TurnId | null;
+    }) =>
+      resolveCallerAutomationRun(input).pipe(
+        Effect.flatMap((resolution) =>
+          "run" in resolution
+            ? Effect.succeed(resolution.run)
+            : Effect.fail(
+                new AutomationServiceError({
+                  message: CALLER_AUTOMATION_RUN_FAILURES[resolution.reason],
+                }),
+              ),
+        ),
+      );
+
+    const resolveCallerRun: AutomationServiceShape["resolveCallerRun"] = (input) =>
+      resolveCallerAutomationRun(input).pipe(
+        Effect.map((resolution) =>
+          "run" in resolution ? Option.some(resolution.run) : Option.none<AutomationRun>(),
+        ),
+      );
 
     const getMemory: AutomationServiceShape["getMemory"] = (automationId) =>
       automationRepository.getMemory({ automationId }).pipe(
@@ -2294,6 +2378,10 @@ export const AutomationServiceLive = Layer.effect(
           worktreeMode: input.worktreeMode ?? "auto",
           acknowledgedRisks: input.acknowledgedRisks ?? [],
         });
+        yield* validateAutoRuntimeMode({
+          modelSelection: input.modelSelection,
+          runtimeMode: input.runtimeMode ?? "approval-required",
+        });
         yield* validateHeartbeatTarget({
           mode: input.mode ?? "standalone",
           projectId: input.projectId,
@@ -2349,6 +2437,7 @@ export const AutomationServiceLive = Layer.effect(
           worktreeMode: updated.worktreeMode,
           acknowledgedRisks: updated.acknowledgedRisks,
         });
+        yield* validateAutoRuntimeMode(updated);
         yield* validateHeartbeatTarget(updated);
         const saved = yield* automationRepository
           .saveDefinition(updated)
@@ -2488,7 +2577,10 @@ export const AutomationServiceLive = Layer.effect(
         return { activeRuns, pendingCompletionEvaluations };
       });
 
-    const heartbeatEligibility = (
+    // Gate a run that would append to an existing thread. A dedicated automation is the only
+    // writer on its own thread, so in practice it only ever waits for its predecessor; the
+    // same checks still apply, because a user can open and drive that thread by hand.
+    const continuationEligibility = (
       definition: AutomationDefinition,
       now: string,
     ): Effect.Effect<
@@ -2496,7 +2588,7 @@ export const AutomationServiceLive = Layer.effect(
       AutomationServiceError
     > =>
       Effect.gen(function* () {
-        const targetThreadId = definition.targetThreadId;
+        const targetThreadId = automationContinuationThreadId(definition);
         if (!targetThreadId) {
           return { eligible: false as const, reason: "Heartbeat target thread was not found." };
         }
@@ -2632,18 +2724,21 @@ export const AutomationServiceLive = Layer.effect(
         let heartbeatRunState:
           | { readonly activeRuns: number; readonly pendingCompletionEvaluations: number }
           | undefined;
-        if (definition.mode === "heartbeat") {
-          if (!definition.targetThreadId) {
-            return yield* Effect.fail(
-              new AutomationServiceError({
-                message: "Heartbeat automation has no target thread to continue.",
-              }),
-            );
-          }
-          heartbeatRunState = yield* heartbeatThreadRunState(definition.targetThreadId);
+        if (automationRequiresTargetThread(definition.mode) && !definition.targetThreadId) {
+          return yield* Effect.fail(
+            new AutomationServiceError({
+              message: "Heartbeat automation has no target thread to continue.",
+            }),
+          );
+        }
+        // A dedicated automation that has not opened its thread yet has nothing to wait for:
+        // this run creates the thread, exactly like a standalone one.
+        const continuationThreadId = automationContinuationThreadId(definition);
+        if (continuationThreadId) {
+          heartbeatRunState = yield* heartbeatThreadRunState(continuationThreadId);
         }
         const runnableDefinition = yield* restartExhaustedBoundedDefinition(definition, now);
-        if (runnableDefinition.mode === "heartbeat") {
+        if (continuationThreadId) {
           const eligibility =
             (heartbeatRunState?.activeRuns ?? 0) > 0
               ? ({
@@ -2655,7 +2750,7 @@ export const AutomationServiceLive = Layer.effect(
                     eligible: false as const,
                     reason: "Target thread has a pending automation stop evaluation.",
                   } as const)
-                : yield* heartbeatEligibility(runnableDefinition, now);
+                : yield* continuationEligibility(runnableDefinition, now);
           if (!eligibility.eligible) {
             const deferState = heartbeatDeferState(now, now);
             const deferredRun = yield* claimPendingRun(
@@ -2781,16 +2876,16 @@ export const AutomationServiceLive = Layer.effect(
           return Option.none<AutomationRunNowResult>();
         }
 
-        if (definition.mode === "heartbeat") {
-          const targetThreadId = definition.targetThreadId;
-          if (!targetThreadId) {
-            return yield* Effect.fail(
-              new AutomationServiceError({
-                message: "Heartbeat automation has no target thread to continue.",
-              }),
-            );
-          }
-          const runState = yield* heartbeatThreadRunState(targetThreadId);
+        if (automationRequiresTargetThread(definition.mode) && !definition.targetThreadId) {
+          return yield* Effect.fail(
+            new AutomationServiceError({
+              message: "Heartbeat automation has no target thread to continue.",
+            }),
+          );
+        }
+        const continuationThreadId = automationContinuationThreadId(definition);
+        if (continuationThreadId) {
+          const runState = yield* heartbeatThreadRunState(continuationThreadId);
           if (runState.pendingCompletionEvaluations > 0) {
             const deferState = heartbeatDeferState(scheduledFor, now);
             const deferredRun = yield* claimPendingRun(
@@ -2852,7 +2947,7 @@ export const AutomationServiceLive = Layer.effect(
             }
             return Option.some({ run: deferredRun.value });
           }
-          const eligibility = yield* heartbeatEligibility(definition, now);
+          const eligibility = yield* continuationEligibility(definition, now);
           if (!eligibility.eligible) {
             const deferState = heartbeatDeferState(scheduledFor, now);
             const deferredRun = yield* claimPendingRun(
@@ -2921,16 +3016,17 @@ export const AutomationServiceLive = Layer.effect(
         if (!definition.enabled) {
           return Option.none<AutomationRunNowResult>();
         }
-        if (definition.mode !== "heartbeat") {
+        if (!automationContinuesThread(definition.mode)) {
           return yield* Effect.fail(
             new AutomationServiceError({
-              message: "Only heartbeat automation runs may be deferred.",
+              message: "Only automation runs that continue a thread may be deferred.",
             }),
           );
         }
         const deferState = heartbeatDeferState(run.scheduledFor, now);
-        const runState = definition.targetThreadId
-          ? yield* heartbeatThreadRunState(definition.targetThreadId)
+        const continuationThreadId = automationContinuationThreadId(definition);
+        const runState = continuationThreadId
+          ? yield* heartbeatThreadRunState(continuationThreadId)
           : { activeRuns: 0, pendingCompletionEvaluations: 0 };
         const eligibility =
           runState.activeRuns > 0
@@ -2943,7 +3039,7 @@ export const AutomationServiceLive = Layer.effect(
                   eligible: false as const,
                   reason: "Target thread has a pending automation stop evaluation.",
                 } as const)
-              : yield* heartbeatEligibility(definition, now);
+              : yield* continuationEligibility(definition, now);
         if (!eligibility.eligible) {
           if (deferState.expired) {
             yield* markScheduledRunSkipped(run, eligibility.reason, now);
@@ -2960,8 +3056,7 @@ export const AutomationServiceLive = Layer.effect(
           yield* publish({ type: "run-upserted", run: deferred });
           return Option.none<AutomationRunNowResult>();
         }
-        const targetThreadId = definition.targetThreadId;
-        if (!targetThreadId) {
+        if (!continuationThreadId) {
           yield* markScheduledRunSkipped(run, "Heartbeat target thread was not found.", now);
           yield* completeDeferredOneShotDefinition(definition, now);
           return Option.none<AutomationRunNowResult>();
@@ -2969,7 +3064,7 @@ export const AutomationServiceLive = Layer.effect(
         const reserved = yield* automationRepository
           .reserveDeferredRun({
             id: run.id,
-            threadId: targetThreadId,
+            threadId: continuationThreadId,
             reservedAt: now,
           })
           .pipe(Effect.mapError(toServiceError("Failed to reserve deferred automation run.")));
@@ -3079,6 +3174,7 @@ export const AutomationServiceLive = Layer.effect(
       listRunsForDefinition,
       updateMemory,
       reportResult,
+      resolveCallerRun,
       runNow,
       cancelRun,
       markRunRead,

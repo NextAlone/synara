@@ -6,12 +6,12 @@ import {
   ArchiveIcon,
   BookIcon,
   ChatBubbleIcon,
+  CircleQuestionIcon,
   ClockIcon,
   CopyIcon,
   ExternalLinkIcon,
   FolderOpenIcon,
   GiftIcon,
-  InfoIcon,
   KanbanIcon,
   KeyboardIcon,
   type LucideIcon,
@@ -77,6 +77,7 @@ import {
   type AutomationListResult,
   MAX_PINNED_PROJECTS,
   type DesktopUpdateState,
+  type DesktopUpstreamUpdateState,
   type OrchestrationShellSnapshot,
   PROVIDER_DISPLAY_NAMES,
   ProjectId,
@@ -159,7 +160,7 @@ import {
   automationAttentionCount,
   automationQueryKey,
   formatCadence,
-  groupHeartbeatAutomationsByTargetThread,
+  groupAutomationsByContinuedThread,
 } from "../routes/-automations.shared";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
@@ -226,6 +227,11 @@ import {
   shouldShowDesktopUpdateButton,
   shouldToastDesktopUpdateActionResult,
 } from "./desktopUpdate.logic";
+import {
+  getUpstreamUpdateNotice,
+  getUpstreamUpdateNoticeSignature,
+  getUpstreamUpdateNoticeTooltip,
+} from "./upstreamUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
@@ -382,9 +388,7 @@ import {
   SidebarContextMenuIcon,
 } from "./sidebarContextMenuStyles";
 import {
-  VOID_SPACE_ICON,
   VOID_SPACE_KEY,
-  VOID_SPACE_NAME,
   spaceDisplayIcon,
   spaceDisplayName,
   spaceKey,
@@ -893,7 +897,12 @@ function SidebarHelpMenu({
 }) {
   return (
     <Menu>
-      <SidebarIconButton render={<MenuTrigger />} icon={InfoIcon} label="Help" tooltip="Help" />
+      <SidebarIconButton
+        render={<MenuTrigger />}
+        icon={CircleQuestionIcon}
+        label="Help"
+        tooltip="Help"
+      />
       <ComposerPickerMenuPopup
         align="end"
         side="top"
@@ -989,8 +998,8 @@ function SidebarPrimaryAction({
   onClick,
   onMouseEnter,
   onFocus,
-  active = false,
-  disabled = false,
+  active: activeProp,
+  disabled: disabledProp,
   shortcutLabel,
   badge,
 }: {
@@ -1005,6 +1014,10 @@ function SidebarPrimaryAction({
   shortcutLabel?: string | null;
   badge?: SidebarActionBadge | null;
 }) {
+  // Defaults live in the body, not the destructuring pattern: an AssignmentPattern in
+  // the parameter list makes React Compiler bail out on the whole component.
+  const active = activeProp ?? false;
+  const disabled = disabledProp ?? false;
   const shortcutParts = shortcutLabel ? splitShortcutLabel(shortcutLabel) : [];
 
   return (
@@ -1054,13 +1067,15 @@ function SidebarPrimaryAction({
 
 function SortableProjectItem({
   projectId,
-  disabled = false,
+  disabled: disabledProp,
   children,
 }: {
   projectId: ProjectId;
   disabled?: boolean;
   children: (handleProps: SortableProjectHandleProps) => React.ReactNode;
 }) {
+  // Default resolved in the body — see SidebarPrimaryAction.
+  const disabled = disabledProp ?? false;
   const {
     attributes,
     listeners,
@@ -1323,7 +1338,7 @@ export default function Sidebar() {
   // Heartbeat automations grouped by their target thread, so each thread row can show a
   // clock chip indicating an automation is attached (mirrors the Environment panel section).
   const automationsByThreadId = useMemo(
-    () => groupHeartbeatAutomationsByTargetThread(automationListQuery.data?.definitions ?? []),
+    () => groupAutomationsByContinuedThread(automationListQuery.data?.definitions ?? []),
     [automationListQuery.data],
   );
   const { settings: appSettings, updateSettings } = useAppSettings();
@@ -1425,14 +1440,39 @@ export default function Sidebar() {
   }, []);
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
-  const { data: keybindings = EMPTY_KEYBINDINGS } = useQuery({
+  // Query defaults are applied after destructuring: a default inside the destructuring
+  // pattern makes React Compiler bail out on the whole Sidebar component.
+  const keybindingsQuery = useQuery({
     ...serverConfigQueryOptions(),
     select: (config) => config.keybindings,
   });
-  const { data: serverCwd = null } = useQuery({
+  const keybindings = keybindingsQuery.data ?? EMPTY_KEYBINDINGS;
+  const serverCwdQuery = useQuery({
     ...serverConfigQueryOptions(),
     select: (config) => config.cwd ?? null,
   });
+  const serverCwd = serverCwdQuery.data ?? null;
+  // Declared next to `keybindings` (rather than further down) because the project-row render
+  // helpers above read these labels. A const declared after the closure that captures it
+  // widens its inferred mutable range and makes React Compiler drop the memoization of every
+  // hook that depends on it. See Sidebar.compiler.test.ts.
+  const newThreadShortcutLabel =
+    shortcutLabelForCommand(keybindings, "chat.new") ??
+    shortcutLabelForCommand(keybindings, "chat.newLatestProject");
+  const newChatShortcutLabel =
+    shortcutLabelForCommand(keybindings, "chat.newChat") ??
+    shortcutLabelForCommand(keybindings, "chat.newLocal");
+  const newTerminalThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newTerminal");
+  const searchShortcutLabel =
+    shortcutLabelForCommand(keybindings, "sidebar.search") ??
+    (isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
+  const importThreadShortcutLabel =
+    shortcutLabelForCommand(keybindings, "sidebar.importThread") ??
+    (isMacPlatform(navigator.platform) ? "⌘I" : "Ctrl+I");
+  const addProjectShortcutLabel =
+    shortcutLabelForCommand(keybindings, "sidebar.addProject") ??
+    (isMacPlatform(navigator.platform) ? "⇧⌘O" : "Ctrl+Shift+O");
+  const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
   const { activeProjectId: focusedProjectId } = useFocusedChatContext();
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
@@ -1471,12 +1511,15 @@ export default function Sidebar() {
   const latestPinnedMutationVersionByProjectIdRef = useRef(new Map<ProjectId, number>());
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
   const [installingDesktopUpdate, setInstallingDesktopUpdate] = useState(false);
+  const [upstreamUpdateState, setUpstreamUpdateState] =
+    useState<DesktopUpstreamUpdateState | null>(null);
   const [optimisticPinnedStateByProjectId, setOptimisticPinnedStateByProjectId] = useState<
     ReadonlyMap<ProjectId, boolean>
   >(() => new Map());
   // Dedupes the manual-download fallback toast so a single failure surfaced by
   // both the click handler and the install-watchdog push only notifies once.
   const lastDesktopUpdateErrorToastSignatureRef = useRef<string | null>(null);
+  const lastUpstreamUpdateToastSignatureRef = useRef<string | null>(null);
   const selectedThreadIds = useThreadSelectionStore((s) => s.selectedThreadIds);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((s) => s.rangeSelectTo);
@@ -1730,6 +1773,7 @@ export default function Sidebar() {
       });
     });
   }, []);
+
   const projectCwdById = useMemo(
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
     [projects],
@@ -2301,7 +2345,13 @@ export default function Sidebar() {
         setIsAddingProject(false);
       };
 
-      try {
+      // The flow lives in a nested function that the `try` below merely awaits: React
+      // Compiler's BuildHIR cannot lower a `throw` or a value block (`?.`, `??`, ternary,
+      // conditional spread) that sits directly inside a try block, and a single one of them
+      // makes the entire Sidebar bail out of compilation — silently, since `panicThreshold`
+      // is unset. Nested function bodies are lowered separately and are unaffected, and the
+      // catch below still sees every rejection. See Sidebar.compiler.test.ts.
+      const runAddProject = async () => {
         const existing = findWorkspaceRootMatch(projects, cwd, (project) => project.cwd);
         const existingRecovery = await recoverExistingAddProjectTarget({
           existingProjectId: existing?.id,
@@ -2367,7 +2417,10 @@ export default function Sidebar() {
           envMode: appSettings.defaultThreadEnvMode,
         }).catch(() => undefined);
         finishAddingProject();
-        return;
+      };
+
+      try {
+        await runAddProject();
       } catch (error) {
         const description =
           error instanceof Error ? error.message : "An error occurred while adding the project.";
@@ -3048,13 +3101,15 @@ export default function Sidebar() {
   const handleCloseProjectContextMenu = useCallback(() => setProjectContextMenuState(null), []);
   const {
     activeSpace,
-    editedSpace,
+    voidSpace,
     spaceEditorOpen,
     spaceEditorMode,
+    spaceEditorInitialValue,
     spaceEditorExistingNames,
     spaceProjectPickerTarget,
     openSpaceCreator,
     openSpaceEditor,
+    openVoidEditor,
     closeSpaceEditor,
     openSpaceProjectPicker,
     closeSpaceProjectPicker,
@@ -3062,6 +3117,8 @@ export default function Sidebar() {
     handleSelectSpaceForIncomingProject,
     handleReorderSpaces,
     handleRenameSpace,
+    handleRenameVoid,
+    resetVoidSpace,
     handleDeleteSpace,
     handleMoveProjectToSpace,
     handleSpaceEditorSubmit,
@@ -3192,7 +3249,9 @@ export default function Sidebar() {
       );
       if (!confirmed) return;
 
-      try {
+      // Nested function so the `try` body stays free of value blocks — see the comment on
+      // `runAddProject` above for why React Compiler requires this shape.
+      const runRemoveProject = async () => {
         // `project.delete` refuses non-empty folders, so `Remove` clears threads first.
         const deletionResult = await deleteProjectThreads(projectId, {
           confirmMessage: null,
@@ -3226,6 +3285,10 @@ export default function Sidebar() {
               ? `Deleted ${deletionResult.deletedCount} ${pluralize(deletionResult.deletedCount, "thread")} and removed the project.`
               : "Project removed.",
         });
+      };
+
+      try {
+        await runRemoveProject();
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error removing project.";
         console.error("Failed to remove project", { projectId, error });
@@ -4916,6 +4979,67 @@ export default function Sidebar() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!isElectron) return;
+    const bridge = window.desktopBridge;
+    if (
+      !bridge ||
+      typeof bridge.getUpstreamUpdateState !== "function" ||
+      typeof bridge.onUpstreamUpdateState !== "function"
+    ) {
+      return;
+    }
+
+    let disposed = false;
+    let receivedSubscriptionUpdate = false;
+    const unsubscribe = bridge.onUpstreamUpdateState((nextState) => {
+      if (disposed) return;
+      receivedSubscriptionUpdate = true;
+      setUpstreamUpdateState(nextState);
+    });
+
+    void bridge
+      .getUpstreamUpdateState()
+      .then((nextState) => {
+        if (disposed || receivedSubscriptionUpdate) return;
+        setUpstreamUpdateState(nextState);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
+
+  const upstreamUpdateNotice = useMemo(
+    () => getUpstreamUpdateNotice(upstreamUpdateState),
+    [upstreamUpdateState],
+  );
+  const upstreamUpdateNoticeSignature = upstreamUpdateNotice
+    ? getUpstreamUpdateNoticeSignature(upstreamUpdateNotice)
+    : null;
+
+  useEffect(() => {
+    if (!upstreamUpdateNotice || !upstreamUpdateNoticeSignature) {
+      lastUpstreamUpdateToastSignatureRef.current = null;
+      return;
+    }
+    if (lastUpstreamUpdateToastSignatureRef.current === upstreamUpdateNoticeSignature) {
+      return;
+    }
+    lastUpstreamUpdateToastSignatureRef.current = upstreamUpdateNoticeSignature;
+    toastManager.add({
+      type: "info",
+      title: "Upstream update available",
+      description: `Upstream Synara ${upstreamUpdateNotice.version} is available. This app will not download or install it.`,
+      actionProps: {
+        children: "View release",
+        onClick: () => openExternalLink(upstreamUpdateNotice.releaseUrl),
+      },
+    });
+  }, [upstreamUpdateNotice, upstreamUpdateNoticeSignature]);
+
   // Single entry point for update error toasts. Attaches the manual-download
   // fallback (copy link + "Download manually") whenever a release URL is known,
   // and dedupes by error signature so the same failure is not toasted twice.
@@ -4978,6 +5102,10 @@ export default function Sidebar() {
   }, [desktopUpdateState, surfaceDesktopUpdateError]);
 
   const showDesktopUpdateButton = isElectron && shouldShowDesktopUpdateButton(desktopUpdateState);
+  const showUpstreamUpdateButton = isElectron && upstreamUpdateNotice !== null;
+  const upstreamUpdateTooltip = upstreamUpdateNotice
+    ? getUpstreamUpdateNoticeTooltip(upstreamUpdateNotice)
+    : null;
 
   const desktopUpdateTooltip = desktopUpdateState
     ? getDesktopUpdateButtonTooltip(desktopUpdateState, {
@@ -5010,23 +5138,10 @@ export default function Sidebar() {
     desktopUpdateButtonHasSecondaryLabel && "min-h-6 py-0.5",
     desktopUpdateButtonInteractivityClasses,
   );
-  const newThreadShortcutLabel =
-    shortcutLabelForCommand(keybindings, "chat.new") ??
-    shortcutLabelForCommand(keybindings, "chat.newLatestProject");
-  const newChatShortcutLabel =
-    shortcutLabelForCommand(keybindings, "chat.newChat") ??
-    shortcutLabelForCommand(keybindings, "chat.newLocal");
-  const newTerminalThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newTerminal");
-  const searchShortcutLabel =
-    shortcutLabelForCommand(keybindings, "sidebar.search") ??
-    (isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
-  const importThreadShortcutLabel =
-    shortcutLabelForCommand(keybindings, "sidebar.importThread") ??
-    (isMacPlatform(navigator.platform) ? "⌘I" : "Ctrl+I");
-  const addProjectShortcutLabel =
-    shortcutLabelForCommand(keybindings, "sidebar.addProject") ??
-    (isMacPlatform(navigator.platform) ? "⇧⌘O" : "Ctrl+Shift+O");
-  const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
+  const handleUpstreamUpdateButtonClick = useCallback(() => {
+    if (!upstreamUpdateNotice) return;
+    openExternalLink(upstreamUpdateNotice.releaseUrl);
+  }, [upstreamUpdateNotice]);
   const searchPaletteProjects = useMemo<SidebarSearchProject[]>(
     () =>
       projects.map((project) => ({
@@ -5042,12 +5157,12 @@ export default function Sidebar() {
           chatWorkspaceRoot,
           studioWorkspaceRoot,
         })
-          ? spaceDisplayName(project.spaceId, spaces)
+          ? spaceDisplayName(project.spaceId, spaces, voidSpace)
           : "Global",
         createdAt: project.createdAt,
         updatedAt: project.updatedAt,
       })),
-    [chatWorkspaceRoot, homeDir, projects, spaces, studioWorkspaceRoot],
+    [chatWorkspaceRoot, homeDir, projects, spaces, studioWorkspaceRoot, voidSpace],
   );
   const searchPaletteActions = useMemo<SidebarSearchAction[]>(
     () => [
@@ -5114,13 +5229,15 @@ export default function Sidebar() {
         ? [
             {
               id: "switch-space-void",
-              label: `Switch to ${VOID_SPACE_NAME}`,
+              label: `Switch to ${voidSpace.name}`,
               description: "Jump to unassigned projects.",
-              keywords: ["space", "switch", "void", "unassigned"],
+              // "void" stays a keyword after a rename: it is what the palette answered to
+              // before, and it is still the only word for this group in the docs.
+              keywords: ["space", "switch", "void", "unassigned", voidSpace.name],
               requiresQuery: true,
               run: () => handleSelectSpace(null),
               icon: ({ className }: { className?: string }) => (
-                <SpaceIcon icon={VOID_SPACE_ICON} className={className} />
+                <SpaceIcon icon={voidSpace.icon} className={className} />
               ),
             } satisfies SidebarSearchAction,
           ]
@@ -5158,6 +5275,7 @@ export default function Sidebar() {
       openSpaceCreator,
       spaces,
       usageSettingsShortcutLabel,
+      voidSpace,
     ],
   );
 
@@ -5599,12 +5717,16 @@ export default function Sidebar() {
                     spaces={spaces}
                     activeSpaceId={activeSpaceId}
                     activityBySpaceId={spaceActivityById}
+                    voidSpace={voidSpace}
                     onSelect={handleSelectSpace}
                     onCreate={() => openSpaceCreator()}
                     onEdit={(space) => openSpaceEditor(space.id)}
                     onDelete={(space) => void handleDeleteSpace(space.id)}
                     onReorder={handleReorderSpaces}
                     onRenameSpace={(space, name) => void handleRenameSpace(space, name)}
+                    onEditVoid={openVoidEditor}
+                    onRenameVoid={handleRenameVoid}
+                    onResetVoid={resetVoidSpace}
                     onDropProject={(projectId, spaceId) =>
                       void handleMoveProjectToSpace(projectId, spaceId)
                     }
@@ -5906,6 +6028,25 @@ export default function Sidebar() {
                     onOpenFeedback={openFeedbackDialog}
                   />
                 )}
+                {showUpstreamUpdateButton && upstreamUpdateNotice && upstreamUpdateTooltip ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          aria-label={`View upstream release ${upstreamUpdateNotice.version}`}
+                          className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--warning)] text-[var(--warning-foreground)] transition-colors hover:brightness-110"
+                          onClick={handleUpstreamUpdateButtonClick}
+                        >
+                          <ExternalLinkIcon className="size-3.5" />
+                        </button>
+                      }
+                    />
+                    <TooltipPopup side="top" className="max-w-72">
+                      {upstreamUpdateTooltip}
+                    </TooltipPopup>
+                  </Tooltip>
+                ) : null}
               </div>
             </div>
           </SidebarMenuItem>
@@ -5923,9 +6064,7 @@ export default function Sidebar() {
       <SpaceEditorDialog
         open={spaceEditorOpen}
         mode={spaceEditorMode}
-        {...(editedSpace
-          ? { initialValue: { name: editedSpace.name, icon: editedSpace.icon } }
-          : {})}
+        {...(spaceEditorInitialValue ? { initialValue: spaceEditorInitialValue } : {})}
         existingNames={spaceEditorExistingNames}
         onOpenChange={(open) => {
           if (!open) closeSpaceEditor();
@@ -6049,7 +6188,9 @@ export default function Sidebar() {
                       read-out of where it lives today. It wears the same secondary tone
                       as every other leading glyph in this menu. */}
                   <span className={PROJECT_CONTEXT_MENU_ICON_CLASS_NAME}>
-                    <SpaceIcon icon={spaceDisplayIcon(projectContextMenuProject.spaceId, spaces)} />
+                    <SpaceIcon
+                      icon={spaceDisplayIcon(projectContextMenuProject.spaceId, spaces, voidSpace)}
+                    />
                   </span>
                   <span>Move to space</span>
                 </MenuSubTrigger>
@@ -6064,8 +6205,8 @@ export default function Sidebar() {
                     }}
                   >
                     <MenuRadioItem value={VOID_SPACE_KEY}>
-                      <SpaceIcon icon={VOID_SPACE_ICON} className="size-3.5" />
-                      <span className="min-w-0 truncate">Void</span>
+                      <SpaceIcon icon={voidSpace.icon} className="size-3.5" />
+                      <span className="min-w-0 truncate">{voidSpace.name}</span>
                     </MenuRadioItem>
                     {spaces.map((space) => (
                       <MenuRadioItem key={space.id} value={space.id}>

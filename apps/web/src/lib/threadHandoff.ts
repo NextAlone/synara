@@ -54,9 +54,7 @@ function isCompleteAssistantMessage(
   message: ThreadMessage,
 ): message is ThreadMessage & { role: "assistant" } {
   return (
-    message.role === "assistant" &&
-    message.streaming === false &&
-    message.text.trim().length > 0
+    message.role === "assistant" && message.streaming === false && message.text.trim().length > 0
   );
 }
 
@@ -175,8 +173,7 @@ export function resolveThreadHandoffSource(
   }
 
   const latestAssistantIndex = findLatestTurnAssistantIndex(thread.messages, latestTurn);
-  const latestAssistant =
-    latestAssistantIndex >= 0 ? thread.messages[latestAssistantIndex]! : null;
+  const latestAssistant = latestAssistantIndex >= 0 ? thread.messages[latestAssistantIndex]! : null;
   const latestAssistantCompleted =
     latestTurn.state === "completed" &&
     latestTurn.completedAt !== null &&
@@ -194,10 +191,7 @@ export function resolveThreadHandoffSource(
 
   let incompleteTurnStart = findIncompleteTurnStart(thread.messages, latestTurn);
   const lastImportable = importableMessages.at(-1);
-  if (
-    incompleteTurnStart === thread.messages.length &&
-    lastImportable?.message.role === "user"
-  ) {
+  if (incompleteTurnStart === thread.messages.length && lastImportable?.message.role === "user") {
     incompleteTurnStart = lastImportable.index;
   }
   return {
@@ -225,9 +219,9 @@ export function resolveThreadHandoffTitle(thread: Pick<Thread, "title">): string
   return title.length > 0 ? title : "Handoff";
 }
 
-export function buildThreadHandoffImportedMessages(
-  thread: { readonly messages: ReadonlyArray<ThreadMessage> },
-): ReadonlyArray<ThreadHandoffImportedMessage> {
+export function buildThreadHandoffImportedMessages(thread: {
+  readonly messages: ReadonlyArray<ThreadMessage>;
+}): ReadonlyArray<ThreadHandoffImportedMessage> {
   return thread.messages.filter(isImportableThreadMessage).map((message) => {
     const importedText =
       message.role === "user" ? stripEmbeddedAssistantSelections(message.text) : message.text;
@@ -292,12 +286,9 @@ export function canCreateThreadHandoff(input: {
   const handoffSource = resolveThreadHandoffSource(input.thread);
   const sessionStatus = input.thread.session?.orchestrationStatus;
   const latestTurnFailed =
-    input.thread.latestTurn?.state === "error" ||
-    input.thread.latestTurn?.state === "interrupted";
+    input.thread.latestTurn?.state === "error" || input.thread.latestTurn?.state === "interrupted";
   const sessionFailed =
-    sessionStatus === "error" ||
-    sessionStatus === "interrupted" ||
-    sessionStatus === "stopped";
+    sessionStatus === "error" || sessionStatus === "interrupted" || sessionStatus === "stopped";
   const canRecoverPreviousTurn =
     handoffSource.messages.length > 0 &&
     ((latestTurnFailed && handoffSource.usesPreviousTurn) || sessionFailed);

@@ -16,6 +16,7 @@ import {
   expensiveReadCapacityRetryDelayMs,
   isRetryableExpensiveReadCapacityError,
   isWsRequestCancelled,
+  type RpcErrorLike,
 } from "./wsRpcRetry";
 
 export const projectQueryKeys = {
@@ -177,7 +178,7 @@ export function projectReadFileQueryOptions(input: {
     (input.relativePath !== null && isLocalAbsolutePath(input.relativePath)
       ? ABSOLUTE_LOCAL_READ_CWD
       : null);
-  return queryOptions<ProjectReadFileQueryResult>({
+  return queryOptions<ProjectReadFileQueryResult, RpcErrorLike>({
     queryKey: projectQueryKeys.readFile(input.cwd, input.relativePath),
     queryFn: async ({ signal }) => {
       const api = ensureNativeApi();

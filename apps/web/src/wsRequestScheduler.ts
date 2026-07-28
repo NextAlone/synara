@@ -114,9 +114,7 @@ export class WsRequestScheduler {
 
       options?.signal?.addEventListener("abort", onAbort, { once: true });
       if (priority === "interactive") {
-        const firstBackground = this.queue.findIndex(
-          (queued) => queued.priority === "background",
-        );
+        const firstBackground = this.queue.findIndex((queued) => queued.priority === "background");
         if (firstBackground >= 0) {
           this.queue.splice(firstBackground, 0, queuedEntry as QueuedRequest<unknown>);
         } else {
@@ -154,10 +152,13 @@ export class WsRequestScheduler {
       return;
     }
     this.active += 1;
-    void entry.run().then(entry.resolve, entry.reject).finally(() => {
-      this.active -= 1;
-      this.drain();
-    });
+    void entry
+      .run()
+      .then(entry.resolve, entry.reject)
+      .finally(() => {
+        this.active -= 1;
+        this.drain();
+      });
   }
 
   private drain(): void {

@@ -6,7 +6,7 @@ export const EXPENSIVE_READ_CAPACITY_MAX_FAILURE_COUNT = 12;
 export const EXPENSIVE_READ_CAPACITY_BASE_DELAY_MS = 250;
 export const EXPENSIVE_READ_CAPACITY_MAX_BACKOFF_MS = 2_000;
 
-interface RpcErrorLike {
+export interface RpcErrorLike {
   readonly code?: unknown;
   readonly retryable?: unknown;
   readonly retryAfterMs?: unknown;
@@ -35,8 +35,7 @@ function retryableExpensiveReadCapacityError(error: unknown): RpcErrorLike | nul
   return findNestedError(
     error,
     (candidate) =>
-      candidate.code === "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED" &&
-      candidate.retryable === true,
+      candidate.code === "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED" && candidate.retryable === true,
   );
 }
 
@@ -44,10 +43,7 @@ export function isRetryableExpensiveReadCapacityError(error: unknown): boolean {
   return retryableExpensiveReadCapacityError(error) !== null;
 }
 
-export function shouldRetryExpensiveReadCapacity(
-  failureCount: number,
-  error: unknown,
-): boolean {
+export function shouldRetryExpensiveReadCapacity(failureCount: number, error: unknown): boolean {
   return (
     failureCount < EXPENSIVE_READ_CAPACITY_MAX_FAILURE_COUNT &&
     isRetryableExpensiveReadCapacityError(error)
@@ -79,10 +75,5 @@ export function isWsRequestCancelled(error: unknown): boolean {
   ) {
     return true;
   }
-  return (
-    findNestedError(
-      error,
-      (candidate) => candidate.code === "WS_REQUEST_ABORTED",
-    ) !== null
-  );
+  return findNestedError(error, (candidate) => candidate.code === "WS_REQUEST_ABORTED") !== null;
 }

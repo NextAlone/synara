@@ -38,6 +38,7 @@ import {
 } from "~/lib/icons";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { cn } from "~/lib/utils";
+import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { useRightDockStore } from "~/rightDockStore";
 import {
   ENVIRONMENT_ROW_CLASS_NAME,
@@ -59,6 +60,12 @@ import {
   withStableCheckKeys,
   type PullRequestChecksTone,
 } from "./environmentPullRequest.logic";
+
+/** Inline "Fix" action that drafts a composer prompt from the PR's conflicts or comments. */
+const PR_FIX_ACTION_CLASS_NAME = cn(
+  "shrink-0 cursor-pointer rounded-md px-2 py-1 text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)]",
+  ELEVATED_HOVER_SURFACE_CLASS_NAME,
+);
 
 function checksToneIcon(tone: PullRequestChecksTone) {
   const colorClass = PULL_REQUEST_CHECKS_TONE_TEXT_CLASS[tone];
@@ -354,7 +361,7 @@ export function EnvironmentPullRequestSection({
               type="button"
               onClick={handleResolveConflicts}
               title="Drafts a prompt in the composer asking the agent to resolve the merge conflicts — review it, then send"
-              className="shrink-0 cursor-pointer rounded-md px-2 py-1 text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
+              className={PR_FIX_ACTION_CLASS_NAME}
             >
               Fix
             </button>
@@ -503,7 +510,7 @@ export function EnvironmentPullRequestSection({
                 type="button"
                 onClick={handleFixComments}
                 title="Draft one prompt containing all visible review comments"
-                className="shrink-0 cursor-pointer rounded-md px-2 py-1 text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
+                className={PR_FIX_ACTION_CLASS_NAME}
               >
                 Fix
               </button>

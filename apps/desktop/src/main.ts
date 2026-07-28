@@ -40,6 +40,7 @@ import type {
   DesktopTheme,
   DesktopUpdateActionResult,
   DesktopUpdateState,
+  DesktopUpstreamUpdateState,
 } from "@synara/contracts";
 import {
   autoUpdater,
@@ -49,6 +50,7 @@ import {
 } from "electron-updater";
 
 import type { ContextMenuItem } from "@synara/contracts";
+import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import {
   SYNARA_DESKTOP_UPDATE_CHANNEL,
@@ -56,6 +58,7 @@ import {
   synaraDesktopIdentity,
 } from "@synara/shared/desktopIdentity";
 import { NetService } from "@synara/shared/Net";
+import { applyShellEnvironmentHydrationMarker } from "@synara/shared/shell";
 import { RotatingFileSink } from "@synara/shared/logging";
 import { ensureStaticSnapshot, findAsarArchivePath } from "@synara/shared/staticSnapshot";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
@@ -119,6 +122,11 @@ import {
 import { captureBackendProcessOutput } from "./backendProcessOutput";
 import { syncShellEnvironment } from "./syncShellEnvironment";
 import {
+  RENDERER_MAX_AUTOMATIC_RELOADS,
+  RendererCrashPolicy,
+  type RendererCrashResponse,
+} from "./rendererCrashRecovery";
+import {
   type DownloadProgressSample,
   getAutoUpdateDisabledReason,
   getDownloadStallTimeoutMessage,
@@ -128,9 +136,16 @@ import {
   shouldBroadcastDownloadProgress,
   shouldCheckForUpdatesOnForeground,
 } from "./updateState";
+import {
+  fetchLatestUpstreamRelease,
+  isSynaraUpstreamReleaseRepository,
+  isUpstreamReleaseNewer,
+} from "./upstreamRelease";
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
 import {
+  applyDesktopPhysicalZoomAction,
   resolveDesktopMenuAccelerator,
+  resolveDesktopPhysicalZoomAction,
   resolveKeyboardShortcutsMenuAccelerator,
   shouldUseNativeZoomMenuRoles,
 } from "./menuShortcuts";
@@ -210,7 +225,18 @@ import {
 // baseline, so a replacement during startup cannot silently become "normal."
 const startupBundleIdentity = captureStartupBundleIdentity();
 
-syncShellEnvironment();
+// Deliberately still on the pre-`whenReady()` path. On posix it is normally a cache read
+// (see `createCachedLoginShellEnvironmentReader`); only a first launch, a changed shell
+// startup file, or an aged-out entry pays the ~1s login-shell probe again.
+// The reads a few lines below decide where this install's data lives, and two of them
+// depend on what this probe brings in: `resolveUserDataPath()` takes the Electron profile
+// directory from XDG_CONFIG_HOME on Linux, which the login-shell probe captures, and
+// `BASE_DIR` prefers SYNARA_HOME, which the Windows registry read hydrates whenever the
+// user set it persistently. Resolving either against an unhydrated environment would
+// silently relocate an existing user's profile and data directory.
+// (The probe also carries PATH, SSH_AUTH_SOCK and HOMEBREW_* for later provider spawns.
+// APPDATA on Windows is inherited from the process env, not hydrated here.)
+const shellEnvironmentSync = syncShellEnvironment();
 
 const IPC = DESKTOP_IPC_CHANNELS;
 const MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH = 16 * 1024 * 1024;
@@ -289,6 +315,10 @@ let backendInitialWindowOpenInFlight: Promise<void> | null = null;
 let backendLifecycleDialogInFlight: Promise<void> | null = null;
 let backendListeningDetector: ServerListeningDetector | null = null;
 const backendSupervision = new BackendSupervisionPolicy();
+// Survives window recreation on purpose: a renderer that keeps dying must not refill
+// its reload budget just because the crash produced a new window.
+const rendererCrashPolicy = new RendererCrashPolicy();
+let rendererCrashDialogInFlight: Promise<void> | null = null;
 let lastBackendFailureDetail: string | null = null;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isQuitting = false;
@@ -306,7 +336,35 @@ let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
-const browserManager = new DesktopBrowserManager();
+const browserManager = new DesktopBrowserManager({
+  beforeInputEvent: (event, input) => {
+    if (
+      isKeyboardShortcutsHelpChord(
+        {
+          type: input.type,
+          key: input.key,
+          code: input.code,
+          meta: input.meta,
+          ctrl: input.control,
+          shift: input.shift,
+          alt: input.alt,
+          repeat: input.isAutoRepeat,
+        },
+        {
+          isMac: process.platform === "darwin",
+          isWindows: process.platform === "win32",
+        },
+      )
+    ) {
+      event.preventDefault();
+      dispatchMenuAction("show-shortcuts");
+      return true;
+    }
+
+    const target = resolveMenuTargetWindow()?.webContents;
+    return target ? handleDesktopPhysicalZoomShortcut(event, input, target) : false;
+  },
+});
 let browserUsePipeServer: BrowserUsePipeServer | null = null;
 let appSnapManager: DesktopAppSnapManager | null = null;
 let configuredUpdaterCacheDirName: string | null = null;
@@ -368,6 +426,15 @@ const desktopRuntimeInfo = resolveDesktopRuntimeInfo({
 });
 const initialUpdateState = (): DesktopUpdateState =>
   createInitialDesktopUpdateState(app.getVersion(), desktopRuntimeInfo);
+const initialUpstreamUpdateState = (): DesktopUpstreamUpdateState => ({
+  enabled: false,
+  status: "disabled",
+  currentVersion: app.getVersion(),
+  availableVersion: null,
+  releaseUrl: null,
+  checkedAt: null,
+  message: null,
+});
 
 function logTimestamp(): string {
   return new Date().toISOString();
@@ -678,6 +745,10 @@ let settleActiveUpdateCheck: (() => void) | null = null;
 let activeUpdatePreparation: Promise<void> | null = null;
 let updaterConfigured = false;
 let updateState: DesktopUpdateState = initialUpdateState();
+let upstreamUpdatePollTimer: ReturnType<typeof setInterval> | null = null;
+let upstreamUpdateStartupTimer: ReturnType<typeof setTimeout> | null = null;
+let upstreamUpdateCheckInFlight = false;
+let upstreamUpdateState: DesktopUpstreamUpdateState = initialUpstreamUpdateState();
 let updateBackgroundedAtMs: number | null = null;
 let updateBackgroundBlurTimer: ReturnType<typeof setTimeout> | null = null;
 let updateCheckTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1299,6 +1370,35 @@ function attachDesktopZoomFactorSync(window: BrowserWindow): void {
   window.webContents.on("did-finish-load", notify);
 }
 
+function adjustWebContentsZoom(webContents: Electron.WebContents, multiplier: number): void {
+  const nextZoomFactor = Math.min(
+    DESKTOP_MENU_MAX_ZOOM_FACTOR,
+    Math.max(DESKTOP_MENU_MIN_ZOOM_FACTOR, webContents.getZoomFactor() * multiplier),
+  );
+  webContents.setZoomFactor(nextZoomFactor);
+}
+
+function handleDesktopPhysicalZoomShortcut(
+  event: Electron.Event,
+  input: Electron.Input,
+  target: Electron.WebContents,
+): boolean {
+  const action = resolveDesktopPhysicalZoomAction(process.platform, input);
+  if (!action || target.isDestroyed()) {
+    return false;
+  }
+
+  event.preventDefault();
+  applyDesktopPhysicalZoomAction(target, action);
+  return true;
+}
+
+function attachDesktopPhysicalZoomShortcuts(window: BrowserWindow): void {
+  window.webContents.on("before-input-event", (event, input) => {
+    handleDesktopPhysicalZoomShortcut(event, input, window.webContents);
+  });
+}
+
 function resetWindowZoomFromMenu(): void {
   resolveMenuTargetWindow()?.webContents.setZoomFactor(1);
 }
@@ -1306,11 +1406,7 @@ function resetWindowZoomFromMenu(): void {
 function adjustWindowZoomFromMenu(multiplier: number): void {
   const webContents = resolveMenuTargetWindow()?.webContents;
   if (!webContents) return;
-  const nextZoomFactor = Math.min(
-    DESKTOP_MENU_MAX_ZOOM_FACTOR,
-    Math.max(DESKTOP_MENU_MIN_ZOOM_FACTOR, webContents.getZoomFactor() * multiplier),
-  );
-  webContents.setZoomFactor(nextZoomFactor);
+  adjustWebContentsZoom(webContents, multiplier);
 }
 
 // A configured app-update.yml (or the mock-updates flag) is the prerequisite for any
@@ -1319,8 +1415,17 @@ function hasConfiguredUpdateFeed(): boolean {
   return readAppUpdateYml() !== null || Boolean(process.env.SYNARA_DESKTOP_MOCK_UPDATES);
 }
 
+function hasConfiguredUpstreamGitHubUpdateFeed(): boolean {
+  const source = resolveGitHubUpdateSource(readAppUpdateYml());
+  return (
+    source !== null &&
+    source.host.toLowerCase() === "github.com" &&
+    isSynaraUpstreamReleaseRepository(`${source.owner}/${source.repo}`)
+  );
+}
+
 function resolveAutoUpdateDisabledReason(): string | null {
-  return getAutoUpdateDisabledReason({
+  const disabledReason = getAutoUpdateDisabledReason({
     isDevelopment,
     isPackaged: app.isPackaged,
     platform: process.platform,
@@ -1329,6 +1434,13 @@ function resolveAutoUpdateDisabledReason(): string | null {
       desktopIdentity.usesScriptedUpdates || process.env.SYNARA_DISABLE_AUTO_UPDATE === "1",
     hasUpdateFeedConfig: hasConfiguredUpdateFeed(),
   });
+  if (disabledReason) {
+    return disabledReason;
+  }
+  if (hasConfiguredUpstreamGitHubUpdateFeed()) {
+    return "This build's update feed points at upstream Synara. It will only show release notices and will not download or install upstream builds.";
+  }
+  return null;
 }
 
 function handleCheckForUpdatesMenuClick(): void {
@@ -1969,6 +2081,17 @@ function clearUpdatePollTimer(): void {
   }
 }
 
+function clearUpstreamUpdatePollTimer(): void {
+  if (upstreamUpdateStartupTimer) {
+    clearTimeout(upstreamUpdateStartupTimer);
+    upstreamUpdateStartupTimer = null;
+  }
+  if (upstreamUpdatePollTimer) {
+    clearInterval(upstreamUpdatePollTimer);
+    upstreamUpdatePollTimer = null;
+  }
+}
+
 // Starts the periodic background update check. Used by configureAutoUpdater and
 // by the install watchdog recovery so polling resumes after a silent install
 // failure instead of staying off until the next app restart.
@@ -1980,6 +2103,16 @@ function scheduleUpdatePoll(): void {
     void checkForUpdates("poll");
   }, AUTO_UPDATE_POLL_INTERVAL_MS);
   updatePollTimer.unref();
+}
+
+function scheduleUpstreamUpdatePoll(): void {
+  if (upstreamUpdatePollTimer) {
+    return;
+  }
+  upstreamUpdatePollTimer = setInterval(() => {
+    void checkForUpstreamUpdates("poll");
+  }, AUTO_UPDATE_POLL_INTERVAL_MS);
+  upstreamUpdatePollTimer.unref();
 }
 
 function isExplicitUpdateCheckReason(reason: string): boolean {
@@ -1998,6 +2131,95 @@ function emitUpdateState(): void {
 function setUpdateState(patch: Partial<DesktopUpdateState>): void {
   updateState = { ...updateState, ...patch };
   emitUpdateState();
+}
+
+function emitUpstreamUpdateState(): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    window.webContents.send(IPC.upstreamUpdateState, upstreamUpdateState);
+  }
+}
+
+function setUpstreamUpdateState(patch: Partial<DesktopUpstreamUpdateState>): void {
+  upstreamUpdateState = { ...upstreamUpdateState, ...patch };
+  emitUpstreamUpdateState();
+}
+
+function shouldEnableUpstreamUpdateNotice(): boolean {
+  return app.isPackaged && desktopIdentity.flavor === "production";
+}
+
+async function checkForUpstreamUpdates(reason: string): Promise<void> {
+  if (isQuitting || !upstreamUpdateState.enabled || upstreamUpdateCheckInFlight) {
+    return;
+  }
+
+  upstreamUpdateCheckInFlight = true;
+  const keepsAvailableNotice =
+    upstreamUpdateState.status === "available" &&
+    upstreamUpdateState.availableVersion !== null &&
+    upstreamUpdateState.releaseUrl !== null;
+  if (!keepsAvailableNotice) {
+    setUpstreamUpdateState({ status: "checking", message: null });
+  }
+
+  try {
+    const release = await fetchLatestUpstreamRelease();
+    const checkedAt = new Date().toISOString();
+    if (isUpstreamReleaseNewer(app.getVersion(), release)) {
+      setUpstreamUpdateState({
+        status: "available",
+        availableVersion: release.version,
+        releaseUrl: release.releaseUrl,
+        checkedAt,
+        message: null,
+      });
+      console.info(`[desktop-upstream] Update available: ${release.version} (${reason}).`);
+      return;
+    }
+
+    setUpstreamUpdateState({
+      status: "up-to-date",
+      availableVersion: null,
+      releaseUrl: null,
+      checkedAt,
+      message: null,
+    });
+    console.info(`[desktop-upstream] No newer release available (${reason}).`);
+  } catch (error) {
+    const message = formatErrorMessage(error);
+    setUpstreamUpdateState({
+      status: keepsAvailableNotice ? "available" : "error",
+      availableVersion: keepsAvailableNotice ? upstreamUpdateState.availableVersion : null,
+      releaseUrl: keepsAvailableNotice ? upstreamUpdateState.releaseUrl : null,
+      checkedAt: new Date().toISOString(),
+      message,
+    });
+    console.warn(`[desktop-upstream] Failed to check for release notices (${reason}): ${message}`);
+  } finally {
+    upstreamUpdateCheckInFlight = false;
+  }
+}
+
+function configureUpstreamUpdateNotice(): void {
+  clearUpstreamUpdatePollTimer();
+  const enabled = shouldEnableUpstreamUpdateNotice();
+  upstreamUpdateState = {
+    ...initialUpstreamUpdateState(),
+    enabled,
+    status: enabled ? "idle" : "disabled",
+  };
+  emitUpstreamUpdateState();
+  if (!enabled) {
+    return;
+  }
+
+  upstreamUpdateStartupTimer = setTimeout(() => {
+    upstreamUpdateStartupTimer = null;
+    void checkForUpstreamUpdates("startup");
+  }, AUTO_UPDATE_STARTUP_DELAY_MS);
+  upstreamUpdateStartupTimer.unref();
+  scheduleUpstreamUpdatePoll();
 }
 
 function shouldEnableAutoUpdates(): boolean {
@@ -2278,17 +2500,26 @@ function handleDesktopAppForegrounded(): void {
   const foregroundedAtMs = Date.now();
   const backgroundedAtMs = updateBackgroundedAtMs;
   updateBackgroundedAtMs = null;
-  const shouldCheck = shouldCheckForUpdatesOnForeground({
+  const shouldCheckOwnUpdate = shouldCheckForUpdatesOnForeground({
     checkedAt: updateState.checkedAt,
     backgroundedAtMs,
     foregroundedAtMs,
     minBackgroundDurationMs: AUTO_UPDATE_FOREGROUND_RECHECK_MIN_BACKGROUND_MS,
     minIntervalMs: AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS,
   });
-  if (!shouldCheck) {
-    return;
+  const shouldCheckUpstreamUpdate = shouldCheckForUpdatesOnForeground({
+    checkedAt: upstreamUpdateState.checkedAt,
+    backgroundedAtMs,
+    foregroundedAtMs,
+    minBackgroundDurationMs: AUTO_UPDATE_FOREGROUND_RECHECK_MIN_BACKGROUND_MS,
+    minIntervalMs: AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS,
+  });
+  if (shouldCheckOwnUpdate) {
+    void checkForUpdates("foreground");
   }
-  void checkForUpdates("foreground");
+  if (shouldCheckUpstreamUpdate) {
+    void checkForUpstreamUpdates("foreground");
+  }
 }
 
 /**
@@ -2621,6 +2852,7 @@ async function runDownloadedUpdateInstall(
   try {
     isQuitting = true;
     clearUpdatePollTimer();
+    clearUpstreamUpdatePollTimer();
     await stopBackendAndWaitForExit();
     updateInstallPreparation.requireActive(preparationAttempt);
     await logMacUpdateDiagnostics("before install handoff");
@@ -2913,7 +3145,7 @@ function backendNodeArgs(): string[] {
 
 function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...resolveBrowserUsePipeBackendEnv(
       process.env,
       browserUsePipeServer ? SYNARA_BROWSER_USE_PIPE_PATH : null,
@@ -2928,6 +3160,11 @@ function backendEnv(): NodeJS.ProcessEnv {
     SYNARA_AUTH_TOKEN: backendAuthToken,
     SYNARA_DESKTOP_SHUTDOWN_TOKEN: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
   };
+  // The backend runs the same login-shell probe at startup and does not begin listening
+  // until it returns, so an unmarked child serializes a second ~1s hydration behind ours.
+  // Written explicitly in both directions: an inherited marker must never suppress a
+  // probe when our own hydration failed and the child's PATH is the raw launch one.
+  return applyShellEnvironmentHydrationMarker(env, shellEnvironmentSync.pathHydrated);
 }
 
 function scheduleBackendRestart(reason: string): void {
@@ -3351,6 +3588,7 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       clearUpdateBackgroundBlurTimer();
       clearUpdateCheckTimeoutTimer();
       clearUpdatePollTimer();
+      clearUpstreamUpdatePollTimer();
       cancelBackendReadinessWait();
       appSnapManager?.dispose();
       appSnapManager = null;
@@ -3640,6 +3878,9 @@ function registerIpcHandlers(): void {
   ipcMain.removeHandler(IPC.updateGetState);
   ipcMain.handle(IPC.updateGetState, async () => updateState);
 
+  ipcMain.removeHandler(IPC.upstreamUpdateGetState);
+  ipcMain.handle(IPC.upstreamUpdateGetState, async () => upstreamUpdateState);
+
   ipcMain.removeHandler(IPC.updateCheck);
   ipcMain.handle(IPC.updateCheck, async () => {
     await checkForUpdates("renderer");
@@ -3792,6 +4033,8 @@ function createWindow(): BrowserWindow {
   });
   browserManager.setWindow(window);
   attachDesktopZoomFactorSync(window);
+  attachRendererCrashRecovery(window);
+  attachDesktopPhysicalZoomShortcuts(window);
 
   window.webContents.on("context-menu", (event, params) => {
     event.preventDefault();
@@ -3848,6 +4091,7 @@ function createWindow(): BrowserWindow {
   window.webContents.on("did-finish-load", () => {
     window.setTitle(APP_DISPLAY_NAME);
     emitUpdateState();
+    emitUpstreamUpdateState();
   });
   window.once("ready-to-show", () => {
     // Preserve the original first-launch behavior, then respect the state saved
@@ -3902,6 +4146,129 @@ function createWindow(): BrowserWindow {
   });
 
   return window;
+}
+
+/**
+ * Renderer crashes used to be entirely invisible to the main process: no listener, no
+ * log line, no telemetry, and no way back — a renderer OOM kill just left the user
+ * staring at a blank window. Recovery is deliberately narrow: only reasons the renderer
+ * can actually come back from reload, and only a few times, because a deterministic
+ * crash reloading forever is worse than one blank window.
+ */
+function attachRendererCrashRecovery(window: BrowserWindow): void {
+  let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearReloadTimer = (): void => {
+    if (reloadTimer === null) return;
+    clearTimeout(reloadTimer);
+    reloadTimer = null;
+  };
+
+  window.webContents.on("render-process-gone", (_event, details) => {
+    const description = `reason=${details.reason} exitCode=${details.exitCode}`;
+    writeDesktopLogHeader(`renderer process gone ${description}`);
+    safeConsoleError(`[desktop] renderer process gone (${description})`);
+
+    const response = rendererCrashPolicy.respondToCrash({
+      reason: details.reason,
+      quitting: isQuitting,
+      nowMs: Date.now(),
+    });
+
+    switch (response.kind) {
+      case "ignore":
+        return;
+      case "reload":
+        writeDesktopLogHeader(
+          `renderer reload scheduled attempt=${response.attempt}/${RENDERER_MAX_AUTOMATIC_RELOADS} delayMs=${response.delayMs}`,
+        );
+        clearReloadTimer();
+        reloadTimer = setTimeout(() => {
+          reloadTimer = null;
+          if (isQuitting || window.isDestroyed()) return;
+          window.webContents.reload();
+        }, response.delayMs);
+        return;
+      case "prompt":
+        writeDesktopLogHeader(
+          `renderer recovery prompt cause=${response.cause} crashes=${response.crashes}`,
+        );
+        presentRendererCrashRecovery(window, details.reason, response);
+        return;
+    }
+  });
+
+  // A hung renderer is not a crash — Chromium keeps the process alive — so it never
+  // reaches the listener above. Logging both edges makes a freeze that the user
+  // reports as "the app died" distinguishable from an actual crash in the same log.
+  window.webContents.on("unresponsive", () => {
+    writeDesktopLogHeader("renderer unresponsive");
+  });
+  window.webContents.on("responsive", () => {
+    writeDesktopLogHeader("renderer responsive");
+  });
+
+  window.on("closed", clearReloadTimer);
+}
+
+/**
+ * Replaces the blank window with a blocking, actionable one once automatic recovery
+ * stops (or was never allowed for this crash reason).
+ */
+function presentRendererCrashRecovery(
+  window: BrowserWindow,
+  reason: string,
+  response: Extract<RendererCrashResponse, { kind: "prompt" }>,
+): void {
+  if (isQuitting || rendererCrashDialogInFlight) return;
+
+  const message =
+    response.cause === "reload-budget-exhausted"
+      ? `Synara's window crashed ${response.crashes} times in a row.`
+      : "Synara's window stopped unexpectedly.";
+  const detail = [
+    `The window's renderer process exited (${reason}).`,
+    response.cause === "reload-budget-exhausted"
+      ? "Synara paused automatic reloads so a repeating crash can't keep reloading in the background."
+      : "This exit reason repeats on reload, so Synara did not retry automatically.",
+    `Log file:\n${Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)}`,
+  ].join("\n\n");
+
+  const task = (async () => {
+    for (;;) {
+      const result = await dialog.showMessageBox({
+        type: "error",
+        title: "Synara's window stopped",
+        message,
+        detail,
+        buttons: ["Reload", "Open logs", "Quit"],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+      });
+
+      if (result.response === 1) {
+        await openDesktopLogDirectory();
+        continue;
+      }
+
+      if (result.response === 0) {
+        // A user-driven reload is a fresh start, not a continuation of the streak.
+        rendererCrashPolicy.reset();
+        if (!window.isDestroyed()) {
+          window.webContents.reload();
+        }
+        return;
+      }
+
+      requestGracefulAppQuit("renderer crashed");
+      return;
+    }
+  })().finally(() => {
+    if (rendererCrashDialogInFlight === task) {
+      rendererCrashDialogInFlight = null;
+    }
+  });
+  rendererCrashDialogInFlight = task;
 }
 
 function configureMediaPermissions(): void {
@@ -3979,6 +4346,7 @@ async function bootstrap(): Promise<void> {
   await reserveBackendEndpoint("bootstrap");
 
   registerIpcHandlers();
+  configureUpstreamUpdateNotice();
   writeDesktopLogHeader("bootstrap ipc handlers registered");
   try {
     await ensureBrowserUsePipeServer();
@@ -4135,6 +4503,23 @@ if (hasSingleInstanceLock) {
       handleFatalStartupError("whenReady", error);
     });
 }
+
+// GPU, utility, and pepper process failures never reach the window's renderer listener,
+// so without this they are invisible too. Chromium respawns these itself — the value is
+// the log line that explains a sudden loss of GPU acceleration or a dead audio/network
+// service. Clean exits are routine teardown, so they stay out of the log.
+app.on("child-process-gone", (_event, details) => {
+  if (details.reason === "clean-exit") return;
+  const attributes = [
+    `type=${details.type}`,
+    `reason=${details.reason}`,
+    `exitCode=${details.exitCode}`,
+    ...(details.serviceName ? [`service=${details.serviceName}`] : []),
+    ...(details.name ? [`name=${sanitizeLogValue(details.name)}`] : []),
+  ].join(" ");
+  writeDesktopLogHeader(`child process gone ${attributes}`);
+  safeConsoleError(`[desktop] child process gone (${attributes})`);
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {

@@ -1,10 +1,10 @@
-import {
-  type OrchestrationLatestTurn,
-  type OrchestrationProposedPlanId,
-  type OrchestrationThreadActivity,
-  type ProviderKind,
-  type ThreadId,
-  type TurnId,
+import type {
+  OrchestrationLatestTurn,
+  OrchestrationProposedPlanId,
+  OrchestrationThreadActivity,
+  ProviderKind,
+  ThreadId,
+  TurnId,
 } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 
@@ -31,10 +31,14 @@ export {
   isFileChangeWorkLogEntry,
   isProviderFileEditWorkLogEntry,
   isRenderableToolLifecycleActivity,
+  isRoutedSubagentWorkEntry,
+  omitRoutedSubagentWorkEntries,
   orderedActivities,
   type TimelineEntry,
   type WorkLogAutomation,
   type WorkLogEntry,
+  type WorkLogLiveActivity,
+  type WorkLogLiveActivityState,
   type WorkLogSubagent,
   type WorkLogSubagentAction,
   type WorkLogSynaraCreatedThread,

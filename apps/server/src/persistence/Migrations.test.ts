@@ -288,12 +288,13 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [84, "AutomationNotificationPolicy"],
         [85, "AutomationSettings"],
         [86, "NormalizeStudioThreadWorkspaces"],
-        [87, "ProjectVcsState"],
-        [88, "CheckpointSnapshots"],
+        [87, "DropUnusedOrchestrationEventIndexes"],
+        [88, "ProjectVcsState"],
+        [89, "CheckpointSnapshots"],
       ]);
 
       const tracker = yield* trackerRows(sql);
-      assert.deepStrictEqual(tracker.slice(-35), [
+      assert.deepStrictEqual(tracker.slice(-36), [
         { migration_id: 54, name: "DurableProviderCommandDelivery" },
         { migration_id: 55, name: "ManagedAttachments" },
         { migration_id: 56, name: "CommandReceiptFingerprints" },
@@ -327,8 +328,9 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 84, name: "AutomationNotificationPolicy" },
         { migration_id: 85, name: "AutomationSettings" },
         { migration_id: 86, name: "NormalizeStudioThreadWorkspaces" },
-        { migration_id: 87, name: "ProjectVcsState" },
-        { migration_id: 88, name: "CheckpointSnapshots" },
+        { migration_id: 87, name: "DropUnusedOrchestrationEventIndexes" },
+        { migration_id: 88, name: "ProjectVcsState" },
+        { migration_id: 89, name: "CheckpointSnapshots" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -407,8 +409,9 @@ agentGatewayRetentionLegacyLayer(
           [84, "AutomationNotificationPolicy"],
           [85, "AutomationSettings"],
           [86, "NormalizeStudioThreadWorkspaces"],
-          [87, "ProjectVcsState"],
-          [88, "CheckpointSnapshots"],
+          [87, "DropUnusedOrchestrationEventIndexes"],
+          [88, "ProjectVcsState"],
+          [89, "CheckpointSnapshots"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -490,13 +493,14 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [84, "AutomationNotificationPolicy"],
         [85, "AutomationSettings"],
         [86, "NormalizeStudioThreadWorkspaces"],
-        [87, "ProjectVcsState"],
-        [88, "CheckpointSnapshots"],
+        [87, "DropUnusedOrchestrationEventIndexes"],
+        [88, "ProjectVcsState"],
+        [89, "CheckpointSnapshots"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-19).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-20).map((row) => [row.migration_id, row.name]),
         [
           [70, "AgentGatewayOperations"],
           [71, "ProjectionThreadsGatewayProvenance"],
@@ -515,8 +519,9 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [84, "AutomationNotificationPolicy"],
           [85, "AutomationSettings"],
           [86, "NormalizeStudioThreadWorkspaces"],
-          [87, "ProjectVcsState"],
-          [88, "CheckpointSnapshots"],
+          [87, "DropUnusedOrchestrationEventIndexes"],
+          [88, "ProjectVcsState"],
+          [89, "CheckpointSnapshots"],
         ],
       );
 
@@ -593,13 +598,14 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [84, "AutomationNotificationPolicy"],
         [85, "AutomationSettings"],
         [86, "NormalizeStudioThreadWorkspaces"],
-        [87, "ProjectVcsState"],
-        [88, "CheckpointSnapshots"],
+        [87, "DropUnusedOrchestrationEventIndexes"],
+        [88, "ProjectVcsState"],
+        [89, "CheckpointSnapshots"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-15).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-16).map((row) => [row.migration_id, row.name]),
         [
           [74, "ExternalMcpIntegrations"],
           [75, "ExternalMcpActiveCapacity"],
@@ -614,8 +620,9 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [84, "AutomationNotificationPolicy"],
           [85, "AutomationSettings"],
           [86, "NormalizeStudioThreadWorkspaces"],
-          [87, "ProjectVcsState"],
-          [88, "CheckpointSnapshots"],
+          [87, "DropUnusedOrchestrationEventIndexes"],
+          [88, "ProjectVcsState"],
+          [89, "CheckpointSnapshots"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
@@ -816,6 +823,17 @@ describe("migration lineage aliases", () => {
 
     assert.deepStrictEqual(planMigrationLineageAliasRepairs(recorded), [
       { kind: "rename", migrationId: 54, name: "DurableProviderCommandDelivery" },
+    ]);
+  });
+
+  it("replays the pre-merge local 87/88 migration slots", () => {
+    const recorded = canonicalTrackerThrough(86);
+    recorded.set(87, "ProjectVcsState");
+    recorded.set(88, "CheckpointSnapshots");
+
+    assert.deepStrictEqual(planMigrationLineageAliasRepairs(recorded), [
+      { kind: "remove", migrationId: 87 },
+      { kind: "remove", migrationId: 88 },
     ]);
   });
 

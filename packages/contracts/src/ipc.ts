@@ -63,6 +63,7 @@ import type {
   GitPullResult,
   GitReadWorkingTreeDiffInput,
   GitReadWorkingTreeDiffResult,
+  GitWorkingTreeDiffStatsResult,
   GitRemoveIndexLockInput,
   GitRemoveWorktreeInput,
   GitResolvePullRequestResult,
@@ -198,6 +199,8 @@ import type {
   ClientOrchestrationCommand,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
+  OrchestrationGetThreadDetailSnapshotInput,
+  OrchestrationGetThreadDetailSnapshotResult,
   OrchestrationImportThreadInput,
   OrchestrationImportThreadResult,
   OrchestrationListProviderDeliveryBlockersInput,
@@ -259,6 +262,14 @@ export type DesktopUpdateStatus =
   | "downloaded"
   | "error";
 
+export type DesktopUpstreamUpdateStatus =
+  | "disabled"
+  | "idle"
+  | "checking"
+  | "up-to-date"
+  | "available"
+  | "error";
+
 export type DesktopRuntimeArch = "arm64" | "x64" | "other";
 export type DesktopTheme = "light" | "dark" | "system";
 
@@ -288,6 +299,20 @@ export interface DesktopUpdateState {
   // read-only install location, unsupported platform). Null when no GitHub
   // update source is configured.
   releaseUrl: string | null;
+}
+
+/**
+ * Metadata-only status for updates published by Synara's upstream project.
+ * `releaseUrl` is a release-notes page, never an installer or download URL.
+ */
+export interface DesktopUpstreamUpdateState {
+  enabled: boolean;
+  status: DesktopUpstreamUpdateStatus;
+  currentVersion: string;
+  availableVersion: string | null;
+  releaseUrl: string | null;
+  checkedAt: string | null;
+  message: string | null;
 }
 
 export interface DesktopUpdateActionResult {
@@ -534,6 +559,8 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  getUpstreamUpdateState: () => Promise<DesktopUpstreamUpdateState>;
+  onUpstreamUpdateState: (listener: (state: DesktopUpstreamUpdateState) => void) => () => void;
   notifications: {
     isSupported: () => Promise<boolean>;
     show: (input: DesktopNotificationInput) => Promise<boolean>;
@@ -628,10 +655,7 @@ export interface NativeApi {
   vcs: {
     setBackend: (input: VcsSetBackendInput) => Promise<VcsSetBackendResult>;
     configureProject: (input: VcsConfigureProjectInput) => Promise<VcsConfigureProjectResult>;
-    status: (
-      input: VcsStatusInput,
-      options?: NativeReadRequestOptions,
-    ) => Promise<VcsStatusResult>;
+    status: (input: VcsStatusInput, options?: NativeReadRequestOptions) => Promise<VcsStatusResult>;
     readDiff: (
       input: VcsReadDiffInput,
       options?: NativeReadRequestOptions,
@@ -694,6 +718,9 @@ export interface NativeApi {
     readWorkingTreeDiff: (
       input: GitReadWorkingTreeDiffInput,
     ) => Promise<GitReadWorkingTreeDiffResult>;
+    workingTreeDiffStats: (
+      input: GitReadWorkingTreeDiffInput,
+    ) => Promise<GitWorkingTreeDiffStatsResult>;
     summarizeDiff: (input: GitSummarizeDiffInput) => Promise<GitSummarizeDiffResult>;
     runStackedAction: (input: GitRunStackedActionInput) => Promise<GitRunStackedActionResult>;
     onActionProgress: (callback: (event: GitActionProgressEvent) => void) => () => void;
@@ -788,6 +815,9 @@ export interface NativeApi {
   orchestration: {
     getSnapshot: () => Promise<OrchestrationReadModel>;
     getShellSnapshot: () => Promise<OrchestrationShellSnapshot>;
+    getThreadDetailSnapshot: (
+      input: OrchestrationGetThreadDetailSnapshotInput,
+    ) => Promise<OrchestrationGetThreadDetailSnapshotResult>;
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
     importThread: (
       input: OrchestrationImportThreadInput,

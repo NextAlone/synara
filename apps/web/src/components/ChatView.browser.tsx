@@ -335,7 +335,10 @@ function createSnapshotForTargetUser(options: {
           status: options.sessionStatus ?? "ready",
           providerName: "codex",
           runtimeMode: "full-access",
-          activeTurnId: null,
+          activeTurnId:
+            options.sessionStatus === "running"
+              ? TurnId.makeUnsafe("turn-browser-fixture-active")
+              : null,
           lastError: null,
           updatedAt: NOW_ISO,
         },
@@ -1923,6 +1926,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       stickyActiveProvider: null,
     });
     useStore.setState({
+      shellSnapshotSequence: 0,
+      spaces: [],
       projects: [],
       threadIds: [],
       threadShellById: {},
@@ -1936,6 +1941,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       proposedPlanByThreadId: {},
       turnDiffIdsByThreadId: {},
       turnDiffSummaryByThreadId: {},
+      threadDetailSyncById: {},
+      deletedProjectIdsById: {},
+      deletedThreadIdsById: {},
       sidebarThreadSummaryById: {},
       threadsHydrated: false,
     });
@@ -1956,6 +1964,73 @@ describe("ChatView timeline estimator parity (full app)", () => {
     await resetStudioProjectPrewarmStateForTests();
     resetRetainedThreadDetailSubscriptionsForTests();
     document.body.innerHTML = "";
+  });
+
+  it("dispatches a rapid access-mode reversal while the server projection is stale", async () => {
+    const baseSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-runtime-reversal" as MessageId,
+      targetText: "runtime reversal",
+    });
+    const snapshot: OrchestrationReadModel = {
+      ...baseSnapshot,
+      threads: baseSnapshot.threads.map((thread) => ({
+        ...thread,
+        runtimeMode: "approval-required",
+        session: thread.session
+          ? {
+              ...thread.session,
+              runtimeMode: "approval-required",
+            }
+          : null,
+      })),
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot,
+    });
+
+    try {
+      const supervisedTrigger = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[title^="Supervised:"]'),
+        "Unable to find the Supervised access-mode trigger.",
+      );
+      supervisedTrigger.click();
+      const autoOption = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-radio-item"]')).find(
+            (item) => item.textContent?.trim().startsWith("Auto"),
+          ) ?? null,
+        "Unable to find the Auto access-mode option.",
+      );
+      autoOption.click();
+
+      const autoTrigger = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[title^="Auto:"]'),
+        "Auto did not become the acknowledged composer access mode.",
+      );
+      autoTrigger.click();
+      const supervisedOption = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-radio-item"]')).find(
+            (item) => item.textContent?.trim().startsWith("Supervised"),
+          ) ?? null,
+        "Unable to find the Supervised access-mode option.",
+      );
+      supervisedOption.click();
+
+      await vi.waitFor(
+        () => {
+          const runtimeModes = wsRequests
+            .map(readDispatchedCommand)
+            .filter((command) => command?.type === "thread.runtime-mode.set")
+            .map((command) => command?.runtimeMode);
+          expect(runtimeModes).toEqual(["auto", "approval-required"]);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
   });
 
   it.each(TEXT_VIEWPORT_MATRIX)(
@@ -2527,9 +2602,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       await waitForLayout();
       expect(scrollToCalls).toHaveLength(0);
-      expect(Math.abs(scrollContainer.scrollTop - scrollTopBeforeTaskListGrowth)).toBeLessThanOrEqual(
-        1,
-      );
+      expect(
+        Math.abs(scrollContainer.scrollTop - scrollTopBeforeTaskListGrowth),
+      ).toBeLessThanOrEqual(1);
 
       scrollContainer.scrollTop = scrollContainer.scrollHeight;
       scrollContainer.dispatchEvent(new Event("scroll"));
@@ -3732,6 +3807,51 @@ describe("ChatView timeline estimator parity (full app)", () => {
         "Unable to find stop generation button.",
       );
       expect(stopButton).not.toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("steers a running turn when Follow-up behavior is set to Steer", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ followUpBehavior: "steer" }));
+    useComposerDraftStore.getState().setPrompt(THREAD_ID, "steer this running turn");
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-running-steer-setting" as MessageId,
+        targetText: "running steer setting target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      const composerForm = await waitForElement(
+        () => document.querySelector<HTMLFormElement>('form[data-chat-composer-form="true"]'),
+        "Unable to find composer form.",
+      );
+      composerForm.requestSubmit();
+
+      await vi.waitFor(
+        () => {
+          const turnStart = wsRequests
+            .map(readDispatchedCommand)
+            .find(
+              (command) =>
+                command?.type === "thread.turn.start" &&
+                command.dispatchMode === "steer" &&
+                typeof command.message === "object" &&
+                command.message !== null &&
+                "text" in command.message &&
+                typeof command.message.text === "string" &&
+                command.message.text.includes("steer this running turn"),
+            );
+          expect(turnStart).toBeTruthy();
+          expect(document.querySelector('[data-testid="queued-follow-up-row"]')).toBeNull();
+          expect(document.body.textContent).toContain("Steering conversation");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
     } finally {
       await mounted.cleanup();
     }
@@ -6319,9 +6439,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
-      useStore
-        .getState()
-        .syncServerReadModel(createSnapshotWithInlineToolOverflow({ active: false }));
+      const settledSnapshot = createSnapshotWithInlineToolOverflow({ active: false });
+      useStore.getState().syncServerReadModel({
+        ...settledSnapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+      });
 
       // The first settled paint keeps the live layout: no "Worked for" fold yet.
       expect(document.querySelector("[data-settled-turn-collapse-transition='true']")).toBeNull();

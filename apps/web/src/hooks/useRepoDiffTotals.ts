@@ -22,12 +22,13 @@ export interface RepoDiffTotals {
 export function useRepoDiffTotals({
   target,
   isVcsRepo,
-  refetchInterval = false,
+  refetchInterval: refetchIntervalProp,
 }: {
   target: VcsQueryTarget;
   isVcsRepo: boolean;
   refetchInterval?: number | false;
 }): RepoDiffTotals {
+  const refetchInterval = refetchIntervalProp ?? false;
   // Match the Diff panel source selector so every surface shows the selected scope.
   const repoDiffScope = useRepoDiffScopeStore((store) => store.scope);
   const { data: selectedRepoDiff = null } = useQuery(
@@ -38,7 +39,6 @@ export function useRepoDiffTotals({
       refetchInterval,
     }),
   );
-  // Patch parsing can be noticeable on large diffs; only redo it when the patch text changes.
   const totals = summarizePatchTotals(selectedRepoDiff?.patch);
   const additions = totals?.additions ?? 0;
   const deletions = totals?.deletions ?? 0;

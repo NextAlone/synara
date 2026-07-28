@@ -6,7 +6,8 @@
 import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
-  ThreadId,
+  type OrchestrationGetTurnDiffResult,
+  type ThreadId,
 } from "@synara/contracts";
 import { queryOptions } from "@tanstack/react-query";
 import { Option, Schema } from "effect";
@@ -16,6 +17,7 @@ import {
   expensiveReadCapacityRetryDelayMs,
   isRetryableExpensiveReadCapacityError,
   isWsRequestCancelled,
+  type RpcErrorLike,
 } from "./wsRpcRetry";
 
 interface CheckpointDiffQueryInput {
@@ -136,18 +138,14 @@ export function resolveCheckpointDiffQueryDisplayState(input: {
     (input.dataUpdateCount ?? 0) >= CHECKPOINT_DIFF_PENDING_REFETCH_MAX_ATTEMPTS &&
     !input.isFetching;
   const unavailableFromResult =
-    result?.status === "unavailable" && typeof result.message === "string"
-      ? result.message
-      : null;
+    result?.status === "unavailable" && typeof result.message === "string" ? result.message : null;
   const unavailable = pendingExhausted
     ? "The checkpoint did not become available after waiting."
     : unavailableFromResult;
   const hasData = input.data != null;
   return {
     isLoading:
-      (isPending && !pendingExhausted) ||
-      input.isLoading ||
-      (input.isFetching && !hasData),
+      (isPending && !pendingExhausted) || input.isLoading || (input.isFetching && !hasData),
     error:
       isPending || unavailable !== null || input.isFetching || input.error == null
         ? null
@@ -159,23 +157,38 @@ export function resolveCheckpointDiffQueryDisplayState(input: {
 export function checkpointDiffQueryOptions(input: CheckpointDiffQueryInput) {
   const decodedRequest = decodeCheckpointDiffRequest(input);
 
-  return queryOptions({
+  return queryOptions<OrchestrationGetTurnDiffResult, RpcErrorLike>({
     queryKey: providerQueryKeys.checkpointDiff(input),
-    queryFn: async ({ signal }) => {
+    queryFn: async ({ signal, client, queryKey }) => {
       const api = ensureNativeApi();
       if (!input.threadId || decodedRequest._tag === "None") {
         throw new Error("Checkpoint diff is unavailable.");
       }
-      if (decodedRequest.value.kind === "fullThreadDiff") {
-        return api.orchestration.getFullThreadDiff(decodedRequest.value.input, {
-          signal,
-          priority: "interactive",
-        });
+      const result =
+        decodedRequest.value.kind === "fullThreadDiff"
+          ? await api.orchestration.getFullThreadDiff(decodedRequest.value.input, {
+              signal,
+              priority: "interactive",
+            })
+          : await api.orchestration.getTurnDiff(decodedRequest.value.input, {
+              signal,
+              priority: "interactive",
+            });
+      const nextDataUpdateCount = (client.getQueryState(queryKey)?.dataUpdateCount ?? 0) + 1;
+      if (
+        result.status === "pending" &&
+        nextDataUpdateCount >= CHECKPOINT_DIFF_PENDING_REFETCH_MAX_ATTEMPTS
+      ) {
+        return {
+          threadId: result.threadId,
+          fromTurnCount: result.fromTurnCount,
+          toTurnCount: result.toTurnCount,
+          status: "unavailable" as const,
+          code: "END_SNAPSHOT_MISSING" as const,
+          message: "The checkpoint did not become available after waiting.",
+        };
       }
-      return api.orchestration.getTurnDiff(decodedRequest.value.input, {
-        signal,
-        priority: "interactive",
-      });
+      return result;
     },
     enabled: (input.enabled ?? true) && !!input.threadId && decodedRequest._tag === "Some",
     // Ready/unavailable checkpoint results are immutable for a cache scope. A

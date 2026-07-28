@@ -813,6 +813,13 @@ const makeWsRpcHandlersLayer = () =>
             projectionReadModelQuery.getShellSnapshot(),
             "Failed to load orchestration shell snapshot",
           ),
+        [ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]: (input) =>
+          rpcEffect(
+            projectionReadModelQuery
+              .getThreadDetailSnapshotById(input.threadId)
+              .pipe(Effect.map(Option.getOrNull)),
+            "Failed to load orchestration thread detail snapshot",
+          ),
         [ORCHESTRATION_WS_METHODS.repairState]: () =>
           rpcEffect(orchestrationEngine.repairState(), "Failed to repair orchestration state"),
         [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>
@@ -1222,6 +1229,15 @@ const makeWsRpcHandlersLayer = () =>
               gitManager.readWorkingTreeDiff(input),
             ),
             "Failed to read working tree diff",
+          ),
+        [WS_METHODS.gitWorkingTreeDiffStats]: (input) =>
+          rpcEffect(
+            guardLegacyGitEffect(
+              WS_METHODS.gitWorkingTreeDiffStats,
+              input.cwd,
+              gitManager.readWorkingTreeDiffStats(input),
+            ),
+            "Failed to read working tree diff stats",
           ),
         [WS_METHODS.gitSummarizeDiff]: (input) =>
           rpcEffect(
