@@ -9,6 +9,7 @@ import {
   type RuntimeMode,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
+  type VcsBackend,
 } from "@synara/contracts";
 import { normalizeModelSlug } from "@synara/shared/model";
 import { buildSynaraBranchName } from "@synara/shared/git";
@@ -23,7 +24,7 @@ import {
   type WorktreeSetupSnapshot,
   type WorktreeSetupStepId,
 } from "../types";
-import { type DraftThreadState } from "../composerDraftStore";
+import { type DraftThreadEnvMode, type DraftThreadState } from "../composerDraftStore";
 import { Schema } from "effect";
 import {
   filterTerminalContextsWithText,
@@ -597,6 +598,31 @@ export function resolveGitRepoUiState(input: {
   queriedIsRepo: boolean | undefined;
 }): boolean {
   return input.queriedIsRepo ?? !input.isStudioContainer;
+}
+
+export function resolveDraftThreadBranchForEnvironmentMode(input: {
+  mode: DraftThreadEnvMode;
+  vcsBackend: VcsBackend;
+  activeThreadBranch: string | null;
+  draftThreadBranch: string | null;
+  activeRootBranch: string | null;
+  lastSelectedJjWorkspaceBase: string | null;
+}): string | null {
+  if (input.mode === "worktree") {
+    if (input.vcsBackend === "jj") {
+      return (
+        input.activeThreadBranch ??
+        input.draftThreadBranch ??
+        input.lastSelectedJjWorkspaceBase ??
+        "@"
+      );
+    }
+    return input.activeThreadBranch ?? input.draftThreadBranch ?? input.activeRootBranch;
+  }
+  if (input.vcsBackend === "jj") {
+    return null;
+  }
+  return input.activeThreadBranch ?? input.draftThreadBranch;
 }
 
 // The composer live strip prefers the turn's computed diff (the

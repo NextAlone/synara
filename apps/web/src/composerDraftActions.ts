@@ -111,6 +111,7 @@ export const createComposerDraftStoreState =
     projectDraftThreadIdByProjectId: {},
     stickyModelSelectionByProvider: {},
     stickyActiveProvider: null,
+    lastSelectedJjWorkspaceBaseByProjectId: {},
     getDraftThreadByProjectId: (projectId, entryPoint = "chat") => {
       if (projectId.length === 0) {
         return null;
@@ -469,6 +470,23 @@ export const createComposerDraftStoreState =
           draftsByThreadId: restDraftsByThreadId,
           draftThreadsByThreadId: restDraftThreadsByThreadId,
           projectDraftThreadIdByProjectId: nextProjectDraftThreadIdByProjectId,
+        };
+      });
+    },
+    setLastSelectedJjWorkspaceBase: (projectId, base) => {
+      const normalizedBase = base.trim();
+      if (projectId.length === 0 || normalizedBase.length === 0) {
+        return;
+      }
+      set((state) => {
+        if (state.lastSelectedJjWorkspaceBaseByProjectId[projectId] === normalizedBase) {
+          return state;
+        }
+        return {
+          lastSelectedJjWorkspaceBaseByProjectId: {
+            ...state.lastSelectedJjWorkspaceBaseByProjectId,
+            [projectId]: normalizedBase,
+          },
         };
       });
     },

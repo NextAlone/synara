@@ -138,6 +138,21 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
   });
 
+  it("keeps a selected JJ workspace base after its draft is cleared", () => {
+    const store = useComposerDraftStore.getState();
+    store.setLastSelectedJjWorkspaceBase(projectId, "feature/reuse-base");
+    store.setProjectDraftThreadId(projectId, threadId, {
+      branch: "feature/reuse-base",
+      envMode: "worktree",
+    });
+
+    store.clearProjectDraftThreadId(projectId);
+
+    expect(useComposerDraftStore.getState().lastSelectedJjWorkspaceBaseByProjectId).toEqual({
+      [projectId]: "feature/reuse-base",
+    });
+  });
+
   it("preserves untouched thread draft identity across unrelated thread updates", () => {
     const store = useComposerDraftStore.getState();
     store.setPrompt(threadId, "thread a");

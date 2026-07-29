@@ -108,6 +108,7 @@ interface BranchToolbarBranchSelectorProps {
   envLocked: boolean;
   hasServerThread: boolean;
   onSetThreadWorkspace: (patch: ThreadWorkspacePatch) => void;
+  onJjWorktreeBaseSelected?: (base: string) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
   variant?: BranchSelectorVariant;
@@ -418,6 +419,7 @@ export function BranchToolbarBranchSelector({
   envLocked,
   hasServerThread,
   onSetThreadWorkspace,
+  onJjWorktreeBaseSelected,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
   variant: variantProp,
@@ -647,6 +649,9 @@ export function BranchToolbarBranchSelector({
   }, [isDroppingStash, runBranchAction, stashDiscardDialog]);
 
   const selectWorktreeBaseRef = (ref: string) => {
+    if (isJjBackend) {
+      onJjWorktreeBaseSelected?.(ref);
+    }
     onSetThreadWorkspace({ branch: ref, worktreePath: null });
     setIsBranchMenuOpen(false);
     onComposerFocusRequest?.();

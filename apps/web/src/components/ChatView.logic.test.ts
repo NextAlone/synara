@@ -37,6 +37,7 @@ import {
   resolveCommittedProviderModel,
   resolveCycledModelSlug,
   resolveDefaultEnvironmentPanelOpen,
+  resolveDraftThreadBranchForEnvironmentMode,
   resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelPreferenceAfterFirstSend,
   resolveEnvironmentPanelPreferenceUpdate,
@@ -1673,6 +1674,47 @@ describe("shouldStartActiveTurnLayoutGrace", () => {
         latestTurnStartedAt: null,
       }),
     ).toBe(false);
+  });
+});
+
+describe("new workspace base selection", () => {
+  it("reuses the project's last explicitly selected JJ workspace base for a new draft", () => {
+    expect(
+      resolveDraftThreadBranchForEnvironmentMode({
+        mode: "worktree",
+        vcsBackend: "jj",
+        activeThreadBranch: null,
+        draftThreadBranch: null,
+        activeRootBranch: "main",
+        lastSelectedJjWorkspaceBase: "feature/keep-me",
+      }),
+    ).toBe("feature/keep-me");
+  });
+
+  it("keeps an explicit draft base ahead of the remembered JJ workspace base", () => {
+    expect(
+      resolveDraftThreadBranchForEnvironmentMode({
+        mode: "worktree",
+        vcsBackend: "jj",
+        activeThreadBranch: null,
+        draftThreadBranch: "feature/current-draft",
+        activeRootBranch: "main",
+        lastSelectedJjWorkspaceBase: "feature/keep-me",
+      }),
+    ).toBe("feature/current-draft");
+  });
+
+  it("falls back to the default JJ workspace when no base has been selected", () => {
+    expect(
+      resolveDraftThreadBranchForEnvironmentMode({
+        mode: "worktree",
+        vcsBackend: "jj",
+        activeThreadBranch: null,
+        draftThreadBranch: null,
+        activeRootBranch: "main",
+        lastSelectedJjWorkspaceBase: null,
+      }),
+    ).toBe("@");
   });
 });
 

@@ -24,6 +24,7 @@ describe("composerDraftStore persisted-state hydration", () => {
       projectDraftThreadIdByProjectId: {},
       stickyModelSelectionByProvider: {},
       stickyActiveProvider: null,
+      lastSelectedJjWorkspaceBaseByProjectId: {},
     };
 
     expect(normalizeCurrentPersistedComposerDraftStoreState(null)).toEqual(emptyState);
@@ -117,6 +118,22 @@ describe("composerDraftStore persisted-state hydration", () => {
 
     expect(hydrated.draftsByThreadId[threadId]?.runtimeMode).toBe("auto");
     expect(hydrated.draftThreadsByThreadId[threadId]?.runtimeMode).toBe("auto");
+  });
+
+  it("persists a project-scoped JJ workspace base for the next draft", () => {
+    const projectId = ProjectId.makeUnsafe("project-workspace-base");
+    resetComposerDraftStore();
+    const store = useComposerDraftStore.getState();
+    store.setLastSelectedJjWorkspaceBase(projectId, " feature/reuse-base ");
+
+    const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState());
+    expect(persisted.lastSelectedJjWorkspaceBaseByProjectId).toEqual({
+      [projectId]: "feature/reuse-base",
+    });
+    expect(
+      normalizeCurrentPersistedComposerDraftStoreState(persisted)
+        .lastSelectedJjWorkspaceBaseByProjectId,
+    ).toEqual({ [projectId]: "feature/reuse-base" });
   });
 });
 
@@ -234,6 +251,7 @@ describe("composerDraftStore terminal contexts", () => {
       projectDraftThreadIdByProjectId: {},
       stickyModelSelectionByProvider: {},
       stickyActiveProvider: null,
+      lastSelectedJjWorkspaceBaseByProjectId: {},
     });
   });
 

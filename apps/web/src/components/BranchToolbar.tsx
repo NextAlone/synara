@@ -292,6 +292,9 @@ export default function BranchToolbar({
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
+  const setLastSelectedJjWorkspaceBase = useComposerDraftStore(
+    (store) => store.setLastSelectedJjWorkspaceBase,
+  );
   const queryClient = useQueryClient();
   const [allThreadsSelector] = useState(() => createAllThreadsSelector());
   const threads = useStore(allThreadsSelector);
@@ -524,6 +527,10 @@ export default function BranchToolbar({
 
   if (!activeThreadId || !activeProject) return null;
 
+  const handleJjWorktreeBaseSelected = (base: string) => {
+    setLastSelectedJjWorkspaceBase(activeProject.id, base);
+  };
+
   const envGlyph = (className: string) =>
     environmentPresentation.mode === "local" ? (
       <CentralIcon name="macbook-air" className={className} />
@@ -681,6 +688,7 @@ export default function BranchToolbar({
             envLocked={envLocked}
             hasServerThread={hasServerThread}
             onSetThreadWorkspace={setThreadWorkspace}
+            onJjWorktreeBaseSelected={handleJjWorktreeBaseSelected}
             variant={variant}
             {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
             {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}

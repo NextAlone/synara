@@ -779,6 +779,7 @@ describe("composerDraftStore syncPersistedAttachments", () => {
       projectDraftThreadIdByProjectId: {},
       stickyModelSelectionByProvider: {},
       stickyActiveProvider: null,
+      lastSelectedJjWorkspaceBaseByProjectId: {},
     });
   });
 

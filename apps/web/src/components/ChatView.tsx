@@ -180,6 +180,7 @@ import {
   resolveCommittedProviderModel,
   resolveCycledModelSlug,
   resolveDefaultEnvironmentPanelOpen,
+  resolveDraftThreadBranchForEnvironmentMode,
   resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelPreferenceAfterFirstSend,
   resolveEnvironmentPanelPreferenceUpdate,
@@ -1345,6 +1346,9 @@ export default function ChatView({
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
+  const lastSelectedJjWorkspaceBaseByProjectId = useComposerDraftStore(
+    (store) => store.lastSelectedJjWorkspaceBaseByProjectId,
+  );
   const hasTemporaryThreadMarker = useTemporaryThreadStore((store) =>
     threadId ? store.temporaryThreadIds[threadId] === true : false,
   );
@@ -1887,6 +1891,9 @@ export default function ChatView({
   // appear on a fresh chat just because the repo already has local edits.
   const latestTurnLive = Boolean(activeLatestTurn?.startedAt) && !latestTurnSettled;
   const activeProjectId = activeThread?.projectId ?? draftThread?.projectId ?? null;
+  const lastSelectedJjWorkspaceBase = activeProjectId
+    ? (lastSelectedJjWorkspaceBaseByProjectId[activeProjectId] ?? null)
+    : null;
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
@@ -9182,19 +9189,18 @@ export default function ChatView({
   ]);
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
-      const isJjBackend = settings.vcsBackend === "jj";
       // JJ Local always follows default workspace `@` (no sticky bookmark).
-      // JJ Worktree defaults the create base to `@`; Git keeps the current branch.
-      const nextBranch =
-        mode === "worktree"
-          ? isJjBackend
-            ? (activeThread?.branch ?? draftThread?.branch ?? "@")
-            : (activeThread?.branch ?? draftThread?.branch ?? activeRootBranch ?? null)
-          : isJjBackend
-            ? null
-            : (activeThread?.branch ?? draftThread?.branch ?? null);
+      // JJ Worktree prefers the project's last explicit base, then falls back to `@`.
+      const nextBranch = resolveDraftThreadBranchForEnvironmentMode({
+        mode,
+        vcsBackend: settings.vcsBackend,
+        activeThreadBranch: activeThread?.branch ?? null,
+        draftThreadBranch: draftThread?.branch ?? null,
+        activeRootBranch,
+        lastSelectedJjWorkspaceBase,
+      });
       const branchPatch =
-        mode === "local" && isJjBackend
+        mode === "local" && settings.vcsBackend === "jj"
           ? { branch: null as string | null }
           : nextBranch
             ? { branch: nextBranch }
@@ -9228,6 +9234,7 @@ export default function ChatView({
       hasNativeUserMessages,
       isLocalDraftThread,
       isServerThread,
+      lastSelectedJjWorkspaceBase,
       scheduleComposerFocus,
       setDraftThreadContext,
       settings.vcsBackend,

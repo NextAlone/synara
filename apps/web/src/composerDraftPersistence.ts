@@ -1,5 +1,5 @@
 // FILE: composerDraftPersistence.ts
-// Purpose: Owns composer draft schema v5, migrations, partialization, merge normalization, and hydration.
+// Purpose: Owns composer draft schema v6, migrations, partialization, merge normalization, and hydration.
 // Exports: Persist middleware transitions and persisted state type.
 
 import {
@@ -283,6 +283,7 @@ const PersistedComposerDraftStoreState = Schema.Struct({
     Schema.Record(ProviderKind, Schema.optionalKey(ModelSelection)),
   ),
   stickyActiveProvider: Schema.optionalKey(Schema.NullOr(ProviderKind)),
+  lastSelectedJjWorkspaceBaseByProjectId: Schema.optionalKey(Schema.Record(ProjectId, Schema.String)),
 });
 
 export type PersistedComposerDraftStoreState = typeof PersistedComposerDraftStoreState.Type;
@@ -293,6 +294,7 @@ const EMPTY_PERSISTED_DRAFT_STORE_STATE = Object.freeze<PersistedComposerDraftSt
   projectDraftThreadIdByProjectId: {},
   stickyModelSelectionByProvider: {},
   stickyActiveProvider: null,
+  lastSelectedJjWorkspaceBaseByProjectId: {},
 });
 
 function normalizePersistedPromptHistorySavedDraft(
@@ -648,6 +650,26 @@ function normalizeDraftThreadEnvMode(
     return value;
   }
   return fallbackWorktreePath ? "worktree" : "local";
+}
+
+function normalizeLastSelectedJjWorkspaceBases(
+  value: unknown,
+): Record<ProjectId, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const normalized: Record<ProjectId, string> = {};
+  for (const [projectId, rawBase] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof projectId !== "string" || projectId.length === 0 || typeof rawBase !== "string") {
+      continue;
+    }
+    const base = rawBase.trim();
+    if (base.length > 0) {
+      normalized[projectId as ProjectId] = base;
+    }
+  }
+  return normalized;
 }
 
 function normalizePersistedDraftThreads(
@@ -1193,6 +1215,9 @@ export function partializeComposerDraftStoreState(
     projectDraftThreadIdByProjectId: state.projectDraftThreadIdByProjectId,
     stickyModelSelectionByProvider: state.stickyModelSelectionByProvider,
     stickyActiveProvider: state.stickyActiveProvider,
+    lastSelectedJjWorkspaceBaseByProjectId: normalizeLastSelectedJjWorkspaceBases(
+      state.lastSelectedJjWorkspaceBaseByProjectId,
+    ),
   };
 }
 
@@ -1254,6 +1279,9 @@ export function normalizeCurrentPersistedComposerDraftStoreState(
     projectDraftThreadIdByProjectId,
     stickyModelSelectionByProvider: sanitizeStickyModelSelectionMap(stickyModelSelectionByProvider),
     stickyActiveProvider,
+    lastSelectedJjWorkspaceBaseByProjectId: normalizeLastSelectedJjWorkspaceBases(
+      normalizedPersistedState.lastSelectedJjWorkspaceBaseByProjectId,
+    ),
   };
 }
 
