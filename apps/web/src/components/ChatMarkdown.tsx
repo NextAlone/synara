@@ -37,6 +37,7 @@ import { useTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
 import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
+import { remarkCodexFileCitations } from "../lib/remarkCodexFileCitations";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
 import { TerminalContextInlineChip } from "./chat/TerminalContextInlineChip";
@@ -155,6 +156,7 @@ type MarkdownRehypePlugins = NonNullable<
 const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
   remarkGfm,
   [remarkMath, { singleDollarTextMath: true }],
+  remarkCodexFileCitations,
 ];
 // User prompts are casual typing, not authored markdown: hard-break single
 // newlines and skip math entirely (the composer chip plugin is appended per

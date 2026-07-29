@@ -97,6 +97,34 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain("OpenAI benchmark");
   });
 
+  it("renders Codex workbook citations as openable file chips", async () => {
+    const citationPath =
+      "/Volumes/Repository/Repos/Python/performance_full_test/src/performance_full_test/test_data/动态模型2.0/Xiaomi/madrid/192.168.31.2405555/20260728234727/case_run_status.xlsx";
+    const source = `The status source is :codex-file-citation{path="${citationPath}" purpose="source" artifact_kind="workbook" sheet="Sheet1" range="A1:G245"}.`;
+    const markup = await renderMarkdown(source, "/Volumes/Repository/PrivRepos/synara");
+
+    expect(markup).toContain(`href="${encodeURI(citationPath)}"`);
+    expect(markup).toContain("case_run_status.xlsx (Sheet1!A1:G245)");
+    expect(markup).not.toContain("codex-file-citation");
+    expect(markup).not.toContain("artifact_kind");
+  });
+
+  it("keeps malformed Codex file citations visible", async () => {
+    const source = 'Broken :codex-file-citation{purpose="source" artifact_kind="workbook"}';
+    const markup = await renderMarkdown(source);
+
+    expect(markup).toContain("codex-file-citation");
+  });
+
+  it("keeps Codex file citations literal inside inline code", async () => {
+    const source =
+      '`:codex-file-citation{path="/tmp/status.xlsx" purpose="source" artifact_kind="workbook" sheet="Sheet1" range="A1"}`';
+    const markup = await renderMarkdown(source);
+
+    expect(markup).toContain("<code>:codex-file-citation");
+    expect(markup).not.toContain('href="/tmp/status.xlsx"');
+  });
+
   it("keeps dollar signs in markdown file links from becoming math", async () => {
     const source =
       "Files touched:\n\n- [_chat.$threadId.tsx](/Users/julius/project/apps/web/src/routes/_chat.$threadId.tsx:1192)";
