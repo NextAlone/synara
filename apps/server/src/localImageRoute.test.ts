@@ -183,6 +183,25 @@ describe("localImageEffectRouteLayer", () => {
     });
   });
 
+  it("serves workspace HTML reports as sandboxed documents", async () => {
+    const workspace = makeTempDir("synara-effect-html-workspace-");
+    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
+    const htmlPath = path.join(workspace, "page_result_assertion_failures_98.html");
+    writeFileSync(htmlPath, "<!doctype html><script>document.title = 'report'</script>");
+    const config = makeServerConfig({ cwd: workspace });
+
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
+      const params = new URLSearchParams({ path: htmlPath, cwd: workspace });
+      const response = await fetch(`${origin}/api/local-image?${params}`);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/html");
+      expect(response.headers.get("content-security-policy")).toContain("sandbox allow-scripts");
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+      await expect(response.text()).resolves.toContain("document.title");
+    });
+  });
+
   it("serves an absolute local image outside the workspace for file-panel previews", async () => {
     const workspace = makeTempDir("synara-effect-image-workspace-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");

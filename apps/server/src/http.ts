@@ -17,6 +17,7 @@ import {
   VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH,
 } from "@synara/shared/binaryTransfer";
 import { EDITOR_ICON_ROUTE_PATH } from "@synara/shared/editorIcons";
+import { isSupportedLocalHtmlPath } from "@synara/shared/localPreviewFiles";
 import { threadExportBlockedReason } from "@synara/shared/threadExport";
 import { Cause, DateTime, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -68,6 +69,14 @@ const EDITOR_ICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
 const SVG_DOCUMENT_SECURITY_HEADERS = {
   "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'",
   "X-Content-Type-Options": "nosniff",
+} as const;
+const HTML_DOCUMENT_SECURITY_HEADERS = {
+  // HTML reports are agent-produced content. Keep the document interactive for
+  // client-side search/filtering while giving it an opaque origin and no network
+  // or form capabilities.
+  "Content-Security-Policy":
+    "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; base-uri 'none'; form-action 'none'",
+  "Referrer-Policy": "no-referrer",
 } as const;
 export const AUTH_JSON_BODY_MAX_BYTES = 16 * 1024;
 const decodeBootstrapInput = Schema.decodeUnknownEffect(AuthBootstrapInput);
@@ -795,6 +804,7 @@ export const localImageEffectRouteLayer = HttpRouter.add(
     const isDownload = url.searchParams.get("download") === "1";
     const safeFileName = previewFile.fileName.replaceAll('"', "");
     const isSvg = nodePath.extname(previewFile.path).toLowerCase() === ".svg";
+    const isHtml = isSupportedLocalHtmlPath(previewFile.path);
     return streamedFileResponse({
       fileSystem,
       path: previewFile.path,
@@ -810,6 +820,7 @@ export const localImageEffectRouteLayer = HttpRouter.add(
         // browser second-guess the declared content type.
         "X-Content-Type-Options": "nosniff",
         ...(isSvg ? SVG_DOCUMENT_SECURITY_HEADERS : {}),
+        ...(isHtml ? HTML_DOCUMENT_SECURITY_HEADERS : {}),
         ...(isDownload ? { "Content-Disposition": `attachment; filename="${safeFileName}"` } : {}),
       },
     });

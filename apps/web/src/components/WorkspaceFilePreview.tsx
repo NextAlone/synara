@@ -1,11 +1,12 @@
 // FILE: WorkspaceFilePreview.tsx
 // Purpose: Shared single-file preview (code with syntax highlighting, parsed
-//          markdown, images, PDFs) for workspace files plus absolute local
+//          markdown, HTML reports, images, PDFs) for workspace files plus absolute local
 //          file references reused by editor and right-dock panes.
 // Layer: Web chat presentation component
 // Exports: WorkspaceFilePreview, isMarkdownPreviewablePath
 
 import {
+  isSupportedLocalHtmlPath,
   isSupportedLocalImagePath,
   isSupportedLocalPdfPath,
   lowerCaseExtensionOf,
@@ -60,6 +61,7 @@ import { useFileLineCommenting } from "./chat/useFileLineCommenting";
 import { WorkspaceFilePreviewHeader } from "./chat/WorkspaceFilePreviewHeader";
 import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
 import { useCodeSelectionAction } from "./chat/useCodeSelectionAction";
+import { HtmlFilePreview } from "./HtmlFilePreview";
 import { LocalImagePreview } from "./LocalImagePreview";
 import { PdfFilePreview } from "./PdfFilePreview";
 import { Skeleton } from "./ui/skeleton";
@@ -282,8 +284,8 @@ function FilePreviewLoadingState() {
 export interface WorkspaceFilePreviewProps {
   workspaceRoot: string | null;
   /**
-   * Workspace-relative path of the previewed file. Binary previews (images,
-   * PDFs) may instead be absolute paths outside the workspace — e.g. a
+   * Workspace-relative path of the previewed file. Local previews (HTML,
+   * images, PDFs) may instead be absolute paths outside the workspace — e.g. a
    * session's scratch directory — served by the local-image route, which never
    * touch the workspace-relative file-read RPC.
    */
@@ -310,14 +312,17 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const { filePath, onAskWhyInChat, onCommentInChat, onReferenceInChat, workspaceRoot } = props;
   const queryClient = useQueryClient();
   const markdownPreviewDefault = props.markdownPreviewDefault ?? false;
+  const fileIsHtml = filePath !== null && isSupportedLocalHtmlPath(filePath);
   const fileIsImage = filePath !== null && isSupportedLocalImagePath(filePath);
   const fileIsPdf = filePath !== null && isSupportedLocalPdfPath(filePath);
   const fileIsLocalAbsolute = filePath !== null && isLocalAbsolutePath(filePath);
   const fileIsWorkspaceRelative = filePath !== null && isWorkspaceRelativePathSafe(filePath);
-  const fileIsScratchBinaryPreview =
-    filePath !== null && (fileIsImage || fileIsPdf) && isScratchWorkspacePath(filePath);
+  const fileIsScratchPreview =
+    filePath !== null &&
+    (fileIsHtml || fileIsImage || fileIsPdf) &&
+    isScratchWorkspacePath(filePath);
   const fileNeedsLocalPreviewGrant =
-    filePath !== null && fileIsLocalAbsolute && !fileIsScratchBinaryPreview;
+    filePath !== null && fileIsLocalAbsolute && !fileIsScratchPreview;
   const fileIsMarkdown = filePath !== null && isMarkdownPreviewablePath(filePath);
   // Per-file override of the markdown-preview default. Deriving (instead of
   // syncing state in an effect) means switching files applies the default in
@@ -341,16 +346,17 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     fileNeedsLocalPreviewGrant && isLocalPreviewGrantUsable(localPreviewGrantQuery.data)
       ? (localPreviewGrantQuery.data?.grant ?? null)
       : null;
-  const binaryPreviewKey = `${props.workspaceRoot ?? ""}\0${filePath ?? ""}\0${localPreviewGrant ?? ""}`;
+  const localPreviewKey = `${props.workspaceRoot ?? ""}\0${filePath ?? ""}\0${localPreviewGrant ?? ""}`;
   const fileQuery = useQuery(
     projectReadFileQueryOptions({
       cwd: props.workspaceRoot,
       relativePath: filePath,
       previewGrant: localPreviewGrant,
-      // Images and PDFs are binary: they stream through the local-image HTTP
-      // route instead of the text file-read RPC.
+      // Local preview files stream through the local-image HTTP route instead
+      // of the text file-read RPC.
       enabled:
         filePath !== null &&
+        !fileIsHtml &&
         !fileIsImage &&
         !fileIsPdf &&
         (props.workspaceRoot !== null || localPreviewGrant !== null),
@@ -485,7 +491,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     textFile !== null &&
     !textFile.truncated;
 
-  if (!props.workspaceRoot && !fileIsLocalAbsolute && !fileIsScratchBinaryPreview) {
+  if (!props.workspaceRoot && !fileIsLocalAbsolute && !fileIsScratchPreview) {
     return (
       <PanelStateMessage density="compact" fill="flex">
         <p>No workspace is attached to this chat.</p>
@@ -517,6 +523,19 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     return <FilePreviewLoadingState />;
   }
 
+  if (fileIsHtml) {
+    return (
+      <HtmlFilePreview
+        key={localPreviewKey}
+        filePath={filePath}
+        cwd={props.workspaceRoot}
+        previewGrant={localPreviewGrant}
+        onReferenceInChat={onReferenceInChat}
+        onAskWhyInChat={onAskWhyInChat}
+      />
+    );
+  }
+
   // PDFs own their full surface — toolbar (file name, page nav, zoom, Open) plus
   // the rendered page stack — so they skip the shared breadcrumb header here.
   if (fileIsPdf) {
@@ -526,7 +545,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         : filePath;
     return (
       <PdfFilePreview
-        key={binaryPreviewKey}
+        key={localPreviewKey}
         filePath={filePath}
         cwd={props.workspaceRoot}
         previewGrant={localPreviewGrant}
@@ -556,7 +575,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           onContextMenu={handleContentsContextMenu}
         >
           <LocalImagePreview
-            key={binaryPreviewKey}
+            key={localPreviewKey}
             src={filePath}
             cwd={props.workspaceRoot}
             previewGrant={localPreviewGrant}

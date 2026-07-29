@@ -58,6 +58,9 @@ describe("resolveScratchPreviewFileOpenTarget", () => {
     expect(
       resolveScratchPreviewFileOpenTarget("/tmp/synara-codex-workspaces/thread-1/shot.png"),
     ).toBe("/tmp/synara-codex-workspaces/thread-1/shot.png");
+    expect(
+      resolveScratchPreviewFileOpenTarget("/tmp/synara-codex-workspaces/thread-1/report.html"),
+    ).toBe("/tmp/synara-codex-workspaces/thread-1/report.html");
   });
 
   it("strips :line and :line:col position suffixes", () => {

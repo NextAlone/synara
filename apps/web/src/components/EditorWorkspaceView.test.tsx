@@ -221,6 +221,39 @@ describe("EditorWorkspaceView", () => {
     expect(markup).not.toContain("editor-file-viewer__highlight");
   });
 
+  it("renders HTML reports in a sandboxed preview instead of the source viewer", () => {
+    const queryClient = new QueryClient();
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <EditorWorkspaceView
+          workspaceRoot="/Users/tester/project"
+          projectName="project"
+          selectedFilePath="reports/page_result_assertion_failures_98.html"
+          expandedDirectories={new Set()}
+          centerMode="file"
+          diffFiles={[]}
+          selectedDiffFilePath={null}
+          diffPanel={<div>Diff panel</div>}
+          chatPanel={<div>Chat panel</div>}
+          onSelectFile={vi.fn()}
+          onSelectDiffFile={vi.fn()}
+          onToggleDirectory={vi.fn()}
+          onCenterModeChange={vi.fn()}
+          onExitEditorView={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain("html-file-preview");
+    expect(markup).toContain('sandbox="allow-scripts"');
+    expect(markup).toContain('referrerPolicy="no-referrer"');
+    expect(markup).toContain(
+      "/api/local-image?path=reports%2Fpage_result_assertion_failures_98.html&amp;cwd=%2FUsers%2Ftester%2Fproject",
+    );
+    expect(markup).not.toContain("editor-file-viewer__plain");
+    expect(markup).not.toContain("editor-file-viewer__highlight");
+  });
+
   it("renders PDF files through the in-app PDF viewer instead of the text preview", () => {
     const queryClient = new QueryClient();
     const markup = renderToStaticMarkup(
