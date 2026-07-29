@@ -11,7 +11,7 @@
 // Exports: WorkspaceFilePreviewHeader
 
 import { isWorkspaceRelativePathSafe, joinWorkspaceRelativePath } from "@synara/shared/path";
-import { Fragment } from "react";
+import { Fragment, type ReactNode } from "react";
 
 import { basenameOfPath } from "~/file-icons";
 import type { ChatFileReference } from "~/lib/chatReferences";
@@ -35,6 +35,8 @@ interface WorkspaceFilePreviewHeaderProps {
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
   /** Shown when the preview only holds a partial read of a large file. */
   truncated?: boolean;
+  /** Optional controls supplied by a specialized rendered preview. */
+  previewActions?: ReactNode;
 }
 
 // Source (raw file, where selecting text yields a precise line/column chat
@@ -164,6 +166,8 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
             })}
           </div>
         ) : null}
+
+        {props.previewActions}
 
         {hasChatActions ? (
           <Menu>
