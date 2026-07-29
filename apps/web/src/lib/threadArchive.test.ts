@@ -5,7 +5,18 @@
 
 import { ThreadId } from "@synara/contracts";
 import { THREAD_NOT_ARCHIVED_INVARIANT_MARKER } from "@synara/shared/errorMessages";
-import { assert, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
+
+const harness = vi.hoisted(() => ({
+  markThreadArchived: vi.fn(),
+  markThreadUnarchived: vi.fn(),
+}));
+
+vi.mock("../store", () => ({
+  useStore: {
+    getState: () => harness,
+  },
+}));
 
 import {
   archiveThreadFromClient,
@@ -14,6 +25,11 @@ import {
 } from "./threadArchive";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-archive");
+
+beforeEach(() => {
+  harness.markThreadArchived.mockReset();
+  harness.markThreadUnarchived.mockReset();
+});
 
 describe("threadArchive client helpers", () => {
   it("dispatches archive and unarchive commands", async () => {
@@ -37,6 +53,18 @@ describe("threadArchive client helpers", () => {
         threadId: THREAD_ID,
       }),
     );
+    expect(harness.markThreadArchived).toHaveBeenCalledWith(THREAD_ID);
+    expect(harness.markThreadUnarchived).toHaveBeenCalledWith(THREAD_ID);
+  });
+
+  it("reconciles local visibility only after the archive command succeeds", async () => {
+    const dispatchCommand = vi.fn().mockRejectedValue(new Error("archive rejected"));
+
+    await expect(archiveThreadFromClient({ dispatchCommand }, THREAD_ID)).rejects.toThrow(
+      "archive rejected",
+    );
+
+    expect(harness.markThreadArchived).not.toHaveBeenCalled();
   });
 
   it("recognizes the already-unarchived invariant returned by the server", () => {

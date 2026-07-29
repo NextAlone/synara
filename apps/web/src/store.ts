@@ -96,6 +96,24 @@ export function markThreadUnread(state: AppState, threadId: ThreadId): AppState 
   });
 }
 
+export function markThreadArchived(
+  state: AppState,
+  threadId: ThreadId,
+  archivedAt: string = new Date().toISOString(),
+): AppState {
+  return applyThreadUpdate(state, threadId, (thread) => {
+    if (thread.archivedAt != null) return thread;
+    return { ...thread, archivedAt };
+  });
+}
+
+export function markThreadUnarchived(state: AppState, threadId: ThreadId): AppState {
+  return applyThreadUpdate(state, threadId, (thread) => {
+    if (thread.archivedAt == null) return thread;
+    return { ...thread, archivedAt: null };
+  });
+}
+
 export function toggleProject(state: AppState, projectId: Project["id"]): AppState {
   return {
     ...state,
@@ -277,6 +295,8 @@ interface AppStore extends AppState {
   removeDeletedThreadFromClientState: (threadId: ThreadId) => void;
   markThreadVisited: (threadId: ThreadId, visitedAt?: string) => void;
   markThreadUnread: (threadId: ThreadId) => void;
+  markThreadArchived: (threadId: ThreadId, archivedAt?: string) => void;
+  markThreadUnarchived: (threadId: ThreadId) => void;
   toggleProject: (projectId: Project["id"]) => void;
   setProjectExpanded: (projectId: Project["id"], expanded: boolean) => void;
   setAllProjectsExpanded: (expanded: boolean) => void;
@@ -327,6 +347,9 @@ export const useStore = create<AppStore>((set) => ({
   markThreadVisited: (threadId, visitedAt) =>
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId) => set((state) => markThreadUnread(state, threadId)),
+  markThreadArchived: (threadId, archivedAt) =>
+    set((state) => markThreadArchived(state, threadId, archivedAt)),
+  markThreadUnarchived: (threadId) => set((state) => markThreadUnarchived(state, threadId)),
   toggleProject: (projectId) => set((state) => toggleProject(state, projectId)),
   setProjectExpanded: (projectId, expanded) =>
     set((state) => setProjectExpanded(state, projectId, expanded)),

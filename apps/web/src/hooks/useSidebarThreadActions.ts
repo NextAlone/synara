@@ -59,6 +59,7 @@ async function unarchiveThreadIgnoringAlreadyRestored(threadId: ThreadId): Promi
     await unarchiveThreadFromClient(api.orchestration, threadId);
   } catch (error) {
     if (!isThreadAlreadyUnarchivedError(error, threadId)) throw error;
+    useStore.getState().markThreadUnarchived(threadId);
   }
 }
 
@@ -295,7 +296,7 @@ export function useSidebarThreadActions(input: {
         prepareForDelete: () => ({
           shouldNavigateToFallback: routeThreadId === threadId,
           fallbackThreadId: getFallbackThreadIdAfterDelete({
-            threads: sidebarThreads,
+            threads: sidebarTreeThreads,
             deletedThreadId: threadId,
             deletedThreadIds: opts.deletedThreadIds ?? new Set<ThreadId>(),
             sortOrder: appSettings.sidebarThreadSortOrder,
@@ -362,7 +363,7 @@ export function useSidebarThreadActions(input: {
       removeWorktreeMutation,
       routeSplitViewId,
       routeThreadId,
-      sidebarThreads,
+      sidebarTreeThreads,
       unpinThread,
     ],
   );
@@ -401,7 +402,7 @@ export function useSidebarThreadActions(input: {
         await archiveThreadFromClient(api.orchestration, threadId);
         if (routeThreadId === threadId) {
           const fallbackThreadId = getFallbackThreadIdAfterDelete({
-            threads: sidebarThreads,
+            threads: sidebarTreeThreads,
             deletedThreadId: threadId,
             deletedThreadIds: new Set<ThreadId>(),
             sortOrder: appSettings.sidebarThreadSortOrder,
@@ -422,7 +423,13 @@ export function useSidebarThreadActions(input: {
         pendingThreadIds.delete(threadId);
       });
     },
-    [appSettings.sidebarThreadSortOrder, handleNewChat, routeThreadId, sidebarThreads, navigate],
+    [
+      appSettings.sidebarThreadSortOrder,
+      handleNewChat,
+      routeThreadId,
+      sidebarTreeThreads,
+      navigate,
+    ],
   );
 
   const restoreArchivedThreadFromToast = useCallback(

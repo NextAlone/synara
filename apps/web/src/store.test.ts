@@ -13,7 +13,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applySpaceOrder,
   collapseProjectsExcept,
+  markThreadArchived,
   markThreadUnread,
+  markThreadUnarchived,
   renameProjectLocally,
   reorderProjects,
   setThreadWorkspace,
@@ -31,6 +33,7 @@ import {
   makeReadModelProject,
   threadsOf,
 } from "./storeTestFixtures";
+import { createSidebarTreeThreadsSelector } from "./storeSelectors";
 
 describe("store facade", () => {
   it("frees a batch of thread details in a single store write", () => {
@@ -128,6 +131,26 @@ describe("store facade", () => {
     const next = markThreadUnread(initialState, ThreadId.makeUnsafe("thread-1"));
 
     expect(next).toEqual(initialState);
+  });
+
+  it("updates the sidebar summary when locally reconciling archive and restore", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const archivedAt = "2026-07-29T12:00:00.000Z";
+    const initialState = makeState(makeThread({ id: threadId }));
+
+    const archived = markThreadArchived(initialState, threadId, archivedAt);
+
+    expect(threadsOf(archived)[0]?.archivedAt).toBe(archivedAt);
+    expect(archived.sidebarThreadSummaryById[threadId]?.archivedAt).toBe(archivedAt);
+    expect(createSidebarTreeThreadsSelector()(archived)).toEqual([]);
+
+    const restored = markThreadUnarchived(archived, threadId);
+
+    expect(threadsOf(restored)[0]?.archivedAt).toBeNull();
+    expect(restored.sidebarThreadSummaryById[threadId]?.archivedAt).toBeNull();
+    expect(createSidebarTreeThreadsSelector()(restored).map((thread) => thread.id)).toEqual([
+      threadId,
+    ]);
   });
 
   it("does not regress a semantic branch when local workspace patches only report a temp branch", () => {

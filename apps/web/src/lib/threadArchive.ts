@@ -9,6 +9,7 @@ import {
   THREAD_NOT_ARCHIVED_INVARIANT_MARKER,
 } from "@synara/shared/errorMessages";
 
+import { useStore } from "../store";
 import { newCommandId } from "./utils";
 
 type ThreadCommandDispatcher = Pick<NativeApi["orchestration"], "dispatchCommand">;
@@ -24,6 +25,10 @@ export async function archiveThreadFromClient(
     commandId: newCommandId(),
     threadId,
   });
+  // The command acknowledgement is durable. Reconcile the local shell now so
+  // sidebar visibility does not wait for the asynchronous shell stream; the
+  // later server event replaces this client timestamp with its authoritative one.
+  useStore.getState().markThreadArchived(threadId);
 }
 
 // Detects the server invariant returned when an Undo races another restore (the
@@ -50,4 +55,5 @@ export async function unarchiveThreadFromClient(
     commandId: newCommandId(),
     threadId,
   });
+  useStore.getState().markThreadUnarchived(threadId);
 }

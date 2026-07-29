@@ -97,6 +97,7 @@ const harness = vi.hoisted(() => ({
   clearTerminalState: vi.fn(),
   handleNewChat: vi.fn(),
   removeDeletedThreadFromClientState: vi.fn(),
+  markThreadUnarchived: vi.fn(),
   resolveSplitViewPaneIdForThread: vi.fn(),
   resolveSplitViewFocusedThreadId: vi.fn(),
   splitViewsById: {} as Record<string, unknown>,
@@ -172,6 +173,7 @@ vi.mock("../store", () => ({
   useStore: {
     getState: () => ({
       removeDeletedThreadFromClientState: harness.removeDeletedThreadFromClientState,
+      markThreadUnarchived: harness.markThreadUnarchived,
     }),
   },
 }));
@@ -220,6 +222,7 @@ function makeThread(id: ThreadId, overrides: Partial<SidebarThreadSummary> = {})
 }
 
 let sidebarThreads: SidebarThreadSummary[];
+let sidebarTreeThreads: SidebarThreadSummary[] | null;
 
 function render(
   overrides: {
@@ -243,7 +246,7 @@ function render(
     routeSplitViewId: overrides.routeSplitViewId ?? null,
     routeThreadId: overrides.routeThreadId ?? null,
     sidebarThreads,
-    sidebarTreeThreads: sidebarThreads,
+    sidebarTreeThreads: sidebarTreeThreads ?? sidebarThreads,
     sidebarThreadSummaryById: Object.fromEntries(
       sidebarThreads.map((thread) => [thread.id, thread]),
     ),
@@ -254,6 +257,7 @@ function render(
 beforeEach(() => {
   reactHarness.reset();
   sidebarThreads = [makeThread(THREAD_ID), makeThread(FALLBACK_ID)];
+  sidebarTreeThreads = null;
   harness.pinnedThreadIds = [];
   harness.alreadyUnarchived = false;
   harness.splitViewsById = {};
@@ -276,6 +280,7 @@ beforeEach(() => {
     harness.clearTemporaryThread,
     harness.clearTerminalState,
     harness.handleNewChat,
+    harness.markThreadUnarchived,
     harness.resolveSplitViewPaneIdForThread,
     harness.resolveSplitViewFocusedThreadId,
   ]) {
@@ -406,6 +411,28 @@ describe("useSidebarThreadActions", () => {
     );
   });
 
+  it("does not navigate an archived chat to another archived chat", async () => {
+    const archivedId = ThreadId.makeUnsafe("thread-archived");
+    const activeThread = makeThread(THREAD_ID, { updatedAt: "2026-07-20T00:00:00.000Z" });
+    const archivedThread = makeThread(archivedId, {
+      archivedAt: "2026-07-21T00:00:00.000Z",
+      updatedAt: "2026-07-21T00:00:00.000Z",
+    });
+    const fallbackThread = makeThread(FALLBACK_ID, {
+      updatedAt: "2026-07-19T00:00:00.000Z",
+    });
+    sidebarThreads = [activeThread, archivedThread, fallbackThread];
+    sidebarTreeThreads = [activeThread, fallbackThread];
+
+    await expect(render({ routeThreadId: THREAD_ID }).archiveThread(THREAD_ID)).resolves.toBe(
+      true,
+    );
+
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: FALLBACK_ID }, replace: true }),
+    );
+  });
+
   it("treats an already-restored invariant as successful Undo", async () => {
     harness.alreadyUnarchived = true;
     harness.unarchiveThread.mockRejectedValue(new Error("already restored"));
@@ -418,6 +445,7 @@ describe("useSidebarThreadActions", () => {
     await expect(toast.data.archiveUndo.onUndo()).resolves.toBe(true);
 
     expect(harness.unarchiveThread).toHaveBeenCalledOnce();
+    expect(harness.markThreadUnarchived).toHaveBeenCalledWith(THREAD_ID);
     expect(harness.navigate).toHaveBeenCalledWith(
       expect.objectContaining({ params: { threadId: THREAD_ID }, replace: true }),
     );
