@@ -8,6 +8,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   LOCAL_IMAGE_ROUTE_PATH,
@@ -34,6 +35,7 @@ export interface LocalPreviewGrantResult {
 
 const LOCAL_PREVIEW_GRANT_TTL_MS = 2 * 60 * 1000;
 const localPreviewGrantByToken = new Map<string, { realFilePath: string; expiresAtMs: number }>();
+const HTML_LOCAL_FILE_URL_PATTERN = /file:\/\/[^\s"'`<>()]+/giu;
 
 function pruneExpiredPreviewGrants(nowMs = Date.now()): void {
   for (const [token, grant] of localPreviewGrantByToken) {
@@ -74,6 +76,18 @@ async function realpathOrNull(candidate: string | undefined): Promise<string | n
   }
   try {
     return await fs.realpath(candidate);
+  } catch {
+    return null;
+  }
+}
+
+function localPathFromFileUrl(fileUrl: string): string | null {
+  try {
+    const parsed = new URL(fileUrl);
+    if (parsed.protocol !== "file:" || (parsed.hostname && parsed.hostname !== "localhost")) {
+      return null;
+    }
+    return fileURLToPath(parsed);
   } catch {
     return null;
   }
@@ -220,4 +234,57 @@ export async function createLocalPreviewGrant(input: {
   localPreviewGrantByToken.set(grant, { realFilePath, expiresAtMs });
   pruneExpiredPreviewGrants();
   return { grant, expiresAt: new Date(expiresAtMs).toISOString() };
+}
+
+/**
+ * Converts explicit local preview-file references inside a sandboxed HTML report
+ * into exact, short-lived local-image route grants. The report itself may be
+ * outside the active workspace, so its screenshots cannot rely on the ordinary
+ * workspace allowlist. Every replacement is individually scoped to one file.
+ */
+export async function rewriteHtmlLocalPreviewUrls(input: {
+  readonly html: string;
+  readonly legacyToken: string | null;
+}): Promise<string> {
+  const sourceUrls = Array.from(new Set(input.html.match(HTML_LOCAL_FILE_URL_PATTERN) ?? []));
+  if (sourceUrls.length === 0) {
+    return input.html;
+  }
+
+  const replacements = await Promise.all(
+    sourceUrls.map(async (sourceUrl) => {
+      const requestedPath = localPathFromFileUrl(sourceUrl);
+      if (!requestedPath || !isSupportedLocalPreviewFilePath(requestedPath)) {
+        return null;
+      }
+
+      const previewGrant = await createLocalPreviewGrant({ requestedPath }).catch(() => null);
+      if (!previewGrant) {
+        return null;
+      }
+
+      const params = new URLSearchParams({
+        path: requestedPath,
+        grant: previewGrant.grant,
+      });
+      if (input.legacyToken) {
+        params.set("token", input.legacyToken);
+      }
+      return [sourceUrl, `${LOCAL_IMAGE_ROUTE_PATH}?${params.toString()}`] as const;
+    }),
+  );
+  const replacementBySourceUrl = new Map<string, string>();
+  for (const replacement of replacements) {
+    if (replacement !== null) {
+      replacementBySourceUrl.set(replacement[0], replacement[1]);
+    }
+  }
+
+  if (replacementBySourceUrl.size === 0) {
+    return input.html;
+  }
+  return input.html.replace(
+    HTML_LOCAL_FILE_URL_PATTERN,
+    (sourceUrl) => replacementBySourceUrl.get(sourceUrl) ?? sourceUrl,
+  );
 }

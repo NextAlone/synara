@@ -34,7 +34,7 @@ import { SessionCredentialService } from "./auth/Services/SessionCredentialServi
 import { deriveAuthClientMetadata } from "./auth/utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
-import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
+import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile, rewriteHtmlLocalPreviewUrls } from "./localImageFiles.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
@@ -70,14 +70,16 @@ const SVG_DOCUMENT_SECURITY_HEADERS = {
   "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'",
   "X-Content-Type-Options": "nosniff",
 } as const;
-const HTML_DOCUMENT_SECURITY_HEADERS = {
-  // HTML reports are agent-produced content. Keep the document interactive for
-  // client-side search/filtering while giving it an opaque origin and no network
-  // or form capabilities.
-  "Content-Security-Policy":
-    "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; base-uri 'none'; form-action 'none'",
-  "Referrer-Policy": "no-referrer",
-} as const;
+function htmlDocumentSecurityHeaders(origin: string): Record<string, string> {
+  return {
+    // HTML reports are agent-produced content. Keep the document interactive for
+    // client-side search/filtering while giving it an opaque origin and no network
+    // or form capabilities. The iframe sandbox makes its effective origin opaque,
+    // so `img-src 'self'` alone cannot permit its own proxied resource URLs.
+    "Content-Security-Policy": `sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' ${origin} data: blob:; font-src data:; base-uri 'none'; form-action 'none'`,
+    "Referrer-Policy": "no-referrer",
+  };
+}
 export const AUTH_JSON_BODY_MAX_BYTES = 16 * 1024;
 const decodeBootstrapInput = Schema.decodeUnknownEffect(AuthBootstrapInput);
 const decodeCreatePairingCredentialInput = Schema.decodeUnknownEffect(
@@ -782,7 +784,8 @@ export const localImageEffectRouteLayer = HttpRouter.add(
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
 
     const config = yield* ServerConfig;
-    if (!isLegacyTokenAuthorized({ config, url })) {
+    const legacyTokenAuthorized = isLegacyTokenAuthorized({ config, url });
+    if (!legacyTokenAuthorized) {
       yield* requireAuthenticatedRequest;
     }
 
@@ -798,31 +801,54 @@ export const localImageEffectRouteLayer = HttpRouter.add(
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
 
-    // Stream (don't use HttpServerResponse.file, which depends on
-    // Etag.Generator/Path services and was failing with a 500 here).
     const fileSystem = yield* FileSystem.FileSystem;
     const isDownload = url.searchParams.get("download") === "1";
     const safeFileName = previewFile.fileName.replaceAll('"', "");
     const isSvg = nodePath.extname(previewFile.path).toLowerCase() === ".svg";
     const isHtml = isSupportedLocalHtmlPath(previewFile.path);
+    const headers = {
+      "Cache-Control": "private, max-age=60",
+      // The PDF viewer fetches bytes from either the desktop app origin or
+      // the configured Vite dev origin. Reflect only those trusted origins:
+      // auth-token-less local servers must not expose workspace files to any
+      // random web page that can guess path/cwd query params.
+      ...localPreviewCorsHeaders({ config, request, url }),
+      // PDFs render in an unsandboxed same-origin iframe; never let the
+      // browser second-guess the declared content type.
+      "X-Content-Type-Options": "nosniff",
+      ...(isSvg ? SVG_DOCUMENT_SECURITY_HEADERS : {}),
+      ...(isHtml ? htmlDocumentSecurityHeaders(url.origin) : {}),
+      ...(isDownload ? { "Content-Disposition": `attachment; filename="${safeFileName}"` } : {}),
+    };
+
+    if (isHtml && !isDownload) {
+      const html = yield* fileSystem.readFileString(previewFile.path).pipe(
+        Effect.orElseSucceed(() => null),
+      );
+      if (html === null) {
+        return HttpServerResponse.text("Not Found", { status: 404 });
+      }
+      const renderedHtml = yield* Effect.promise(() =>
+        rewriteHtmlLocalPreviewUrls({
+          html,
+          legacyToken:
+            legacyTokenAuthorized && config.authToken ? url.searchParams.get("token") : null,
+        }),
+      );
+      return HttpServerResponse.text(renderedHtml, {
+        status: 200,
+        contentType: "text/html; charset=utf-8",
+        headers,
+      });
+    }
+
+    // Stream (don't use HttpServerResponse.file, which depends on
+    // Etag.Generator/Path services and was failing with a 500 here).
     return streamedFileResponse({
       fileSystem,
       path: previewFile.path,
       sizeBytes: previewFile.sizeBytes,
-      headers: {
-        "Cache-Control": "private, max-age=60",
-        // The PDF viewer fetches bytes from either the desktop app origin or
-        // the configured Vite dev origin. Reflect only those trusted origins:
-        // auth-token-less local servers must not expose workspace files to any
-        // random web page that can guess path/cwd query params.
-        ...localPreviewCorsHeaders({ config, request, url }),
-        // PDFs render in an unsandboxed same-origin iframe; never let the
-        // browser second-guess the declared content type.
-        "X-Content-Type-Options": "nosniff",
-        ...(isSvg ? SVG_DOCUMENT_SECURITY_HEADERS : {}),
-        ...(isHtml ? HTML_DOCUMENT_SECURITY_HEADERS : {}),
-        ...(isDownload ? { "Content-Disposition": `attachment; filename="${safeFileName}"` } : {}),
-      },
+      headers,
     });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );

@@ -5,6 +5,7 @@ import http from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { DateTime, Effect, Exit, Layer, Scope } from "effect";
@@ -33,6 +34,12 @@ afterEach(() => {
 
 function makeTempDir(prefix: string): string {
   const dir = mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function makeOutsideWorkspaceDir(prefix: string): string {
+  const dir = mkdtempSync(path.join(process.cwd(), prefix));
   tempDirs.push(dir);
   return dir;
 }
@@ -187,18 +194,54 @@ describe("localImageEffectRouteLayer", () => {
     const workspace = makeTempDir("synara-effect-html-workspace-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
     const htmlPath = path.join(workspace, "page_result_assertion_failures_98.html");
-    writeFileSync(htmlPath, "<!doctype html><script>document.title = 'report'</script>");
-    const config = makeServerConfig({ cwd: workspace });
+    const resourcesDir = makeOutsideWorkspaceDir(".synara-html-resource-");
+    const screenshotPath = path.join(resourcesDir, "failed-screenshot.png");
+    const unreferencedPath = path.join(resourcesDir, "unreferenced.png");
+    const caseLogPath = path.join(resourcesDir, "case_debug.log");
+    writeFileSync(screenshotPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    writeFileSync(unreferencedPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    writeFileSync(caseLogPath, "not a preview resource");
+    const screenshotUrl = pathToFileURL(screenshotPath).toString();
+    const caseLogUrl = pathToFileURL(caseLogPath).toString();
+    writeFileSync(
+      htmlPath,
+      `<!doctype html><script>document.title = 'report'</script><img src="${screenshotUrl}"><a href="${caseLogUrl}">log</a>`,
+    );
+    const config = makeServerConfig({ cwd: workspace, authToken: "desktop-secret" });
 
     await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
-      const params = new URLSearchParams({ path: htmlPath, cwd: workspace });
+      const params = new URLSearchParams({
+        path: htmlPath,
+        cwd: workspace,
+        token: "desktop-secret",
+      });
       const response = await fetch(`${origin}/api/local-image?${params}`);
 
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("text/html");
       expect(response.headers.get("content-security-policy")).toContain("sandbox allow-scripts");
+      expect(response.headers.get("content-security-policy")).toContain(
+        `img-src 'self' ${origin} data: blob:`,
+      );
       expect(response.headers.get("referrer-policy")).toBe("no-referrer");
-      await expect(response.text()).resolves.toContain("document.title");
+      const rendered = await response.text();
+      expect(rendered).toContain("document.title");
+      expect(rendered).not.toContain(screenshotUrl);
+      expect(rendered).toContain(caseLogUrl);
+
+      const proxiedScreenshotUrl = rendered.match(/<img src="([^"]+)">/)?.[1];
+      expect(proxiedScreenshotUrl).toBeDefined();
+      expect(new URL(proxiedScreenshotUrl!, origin).searchParams.get("token")).toBe(
+        "desktop-secret",
+      );
+      const screenshotResponse = await fetch(new URL(proxiedScreenshotUrl!, origin));
+      expect(screenshotResponse.status).toBe(200);
+      expect(screenshotResponse.headers.get("content-type")).toContain("image/png");
+
+      const forgedUrl = new URL(proxiedScreenshotUrl!, origin);
+      forgedUrl.searchParams.set("path", unreferencedPath);
+      const forgedResponse = await fetch(forgedUrl);
+      expect(forgedResponse.status).toBe(404);
     });
   });
 
