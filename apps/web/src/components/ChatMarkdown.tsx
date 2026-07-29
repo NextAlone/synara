@@ -61,6 +61,7 @@ import {
   parseComposerChipSegment,
 } from "../lib/remarkComposerChips";
 import { IconButton } from "./ui/icon-button";
+import { MermaidDiagram } from "./MermaidDiagram";
 
 const EXTERNAL_HTTP_HREF_PATTERN = /^https?:\/\//i;
 // Trailing `:line` / `:line:col` position suffix on a resolved file link. Kept on
@@ -846,13 +847,16 @@ function MarkdownCodeBlock({
   code,
   fence,
   children,
+  showWrap,
 }: {
   code: string;
   fence: CodeFenceInfo;
   children: ReactNode;
+  showWrap?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const [wrap, setWrap] = useState(false);
+  const canWrap = showWrap ?? true;
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleCopy = () => {
     void copyTextToClipboard(code)
@@ -881,22 +885,24 @@ function MarkdownCodeBlock({
   );
 
   return (
-    <div className="chat-markdown-codeblock" data-wrap={wrap ? "true" : "false"}>
+    <div className="chat-markdown-codeblock" data-wrap={canWrap && wrap ? "true" : "false"}>
       <div className="chat-markdown-codeblock__header">
         <CodeBlockHeaderTitle fence={fence} />
         <div className="chat-markdown-codeblock__actions">
-          <IconButton
-            className="chat-markdown-codeblock__action"
-            onClick={toggleWrap}
-            title={wrap ? "Disable soft wrap" : "Enable soft wrap"}
-            label={wrap ? "Disable soft wrap" : "Enable soft wrap"}
-            aria-pressed={wrap}
-            data-active={wrap ? "true" : "false"}
-            size="icon-xs"
-            variant="ghost"
-          >
-            <TextWrapIcon className="size-3" />
-          </IconButton>
+          {canWrap ? (
+            <IconButton
+              className="chat-markdown-codeblock__action"
+              onClick={toggleWrap}
+              title={wrap ? "Disable soft wrap" : "Enable soft wrap"}
+              label={wrap ? "Disable soft wrap" : "Enable soft wrap"}
+              aria-pressed={wrap}
+              data-active={wrap ? "true" : "false"}
+              size="icon-xs"
+              variant="ghost"
+            >
+              <TextWrapIcon className="size-3" />
+            </IconButton>
+          ) : null}
           <IconButton
             className="chat-markdown-codeblock__action"
             onClick={handleCopy}
@@ -1138,19 +1144,24 @@ function ChatMarkdown({
 
         const fence = parseCodeFenceInfo(extractRawFenceInfo(codeBlock.className));
         const code = dedentCode(codeBlock.code);
+        const isMermaidFence = !fence.isFileReference && fence.language.toLowerCase() === "mermaid";
 
         return (
-          <MarkdownCodeBlock code={code} fence={fence}>
-            <CodeHighlightErrorBoundary fallback={<pre {...props}>{children}</pre>}>
-              <Suspense fallback={<pre {...props}>{children}</pre>}>
-                <SuspenseShikiCodeBlock
-                  language={fence.language}
-                  code={code}
-                  themeName={diffThemeName}
-                  isStreaming={isStreaming}
-                />
-              </Suspense>
-            </CodeHighlightErrorBoundary>
+          <MarkdownCodeBlock code={code} fence={fence} showWrap={!isMermaidFence}>
+            {isMermaidFence ? (
+              <MermaidDiagram definition={code} theme={resolvedTheme} isStreaming={isStreaming} />
+            ) : (
+              <CodeHighlightErrorBoundary fallback={<pre {...props}>{children}</pre>}>
+                <Suspense fallback={<pre {...props}>{children}</pre>}>
+                  <SuspenseShikiCodeBlock
+                    language={fence.language}
+                    code={code}
+                    themeName={diffThemeName}
+                    isStreaming={isStreaming}
+                  />
+                </Suspense>
+              </CodeHighlightErrorBoundary>
+            )}
           </MarkdownCodeBlock>
         );
       },

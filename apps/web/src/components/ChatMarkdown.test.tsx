@@ -352,4 +352,17 @@ describe("ChatMarkdown user variant", () => {
     expect(markup).toContain("chat-markdown-codeblock");
     expect(markup).toContain("const value = 1;");
   });
+
+  it("routes Mermaid fences through the diagram renderer without loading Shiki", async () => {
+    const markup = await renderMarkdown(
+      ["```mermaid", "flowchart LR", "  Start --> Finish", "```"].join("\n"),
+    );
+
+    expect(markup).toContain("chat-markdown-codeblock");
+    expect(markup).toContain("chat-markdown-mermaid__source");
+    expect(markup).toContain("flowchart LR");
+    expect(markup).toContain('title="Copy code"');
+    expect(markup).not.toContain('title="Enable soft wrap"');
+    expect(markup).not.toContain("chat-markdown-shiki");
+  });
 });

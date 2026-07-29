@@ -1166,6 +1166,33 @@ label:has(> select#reasoning-effort) select {
   word-break: break-word;
 }
 
+.chat-markdown .chat-markdown-mermaid {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 0.7rem 0.8rem 0.8rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chat-markdown .chat-markdown-mermaid > svg {
+  display: block;
+  max-width: none;
+  height: auto;
+}
+
+.chat-markdown .chat-markdown-mermaid__source {
+  margin: 0;
+}
+
+.chat-markdown .chat-markdown-mermaid__error {
+  color: var(--muted-foreground);
+}
+
+.chat-markdown .chat-markdown-mermaid__error > p {
+  margin: 0;
+  padding: 0.7rem 0.8rem 0.4rem;
+  font-size: 0.8rem;
+}
+
 .chat-markdown .chat-markdown-shiki .shiki {
   background: transparent !important;
   font-family: var(--font-chat-code-family) !important;
