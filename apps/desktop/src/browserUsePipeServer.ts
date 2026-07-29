@@ -425,7 +425,11 @@ export class BrowserUsePipeServer {
       return existing;
     }
 
-    await this.requestOpenPanel?.();
+    if (!this.requestOpenPanel) {
+      return null;
+    }
+
+    await this.requestOpenPanel();
     const deadline = Date.now() + BROWSER_USE_PANEL_READY_TIMEOUT_MS;
     while (Date.now() < deadline) {
       const snapshot = this.getActiveBrowserHostState();
@@ -466,13 +470,15 @@ export class BrowserUsePipeServer {
     return tracked;
   }
 
-  private getTabsForClient(client: BrowserUseClient): Array<{
-    id: number;
-    title: string;
-    active: boolean;
-    url: string;
-  }> {
-    const snapshot = this.getActiveBrowserHostState();
+  private async getTabsForClient(client: BrowserUseClient): Promise<
+    Array<{
+      id: number;
+      title: string;
+      active: boolean;
+      url: string;
+    }>
+  > {
+    const snapshot = await this.waitForActiveBrowserHostState();
     if (!snapshot) {
       return [];
     }

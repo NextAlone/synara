@@ -7,7 +7,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
 import { basename, dirname, join } from "node:path";
 import { endianness, tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   BrowserUsePipeServer,
@@ -67,6 +67,7 @@ async function withPipeServer(
     maxInFlightRequests?: number;
     maxQueuedOutputBytes?: number;
     browserManager?: unknown;
+    requestOpenPanel?: () => void | Promise<void>;
   },
   run: (socket: Socket) => Promise<void>,
 ): Promise<void> {
@@ -81,6 +82,7 @@ async function withPipeServer(
     ...(options.maxQueuedOutputBytes !== undefined
       ? { maxQueuedOutputBytes: options.maxQueuedOutputBytes }
       : {}),
+    ...(options.requestOpenPanel ? { requestOpenPanel: options.requestOpenPanel } : {}),
   });
   await server.start();
   const socket = await connect(pipePath);
@@ -187,6 +189,61 @@ describe("browser-use pipe RPC compatibility", () => {
           params: { session_id: "other-session" },
         }),
       ).resolves.toMatchObject({ id: 3, error: { message: expect.stringContaining("lease") } });
+    });
+  });
+
+  it("opens the browser pane before resolving an initial getTabs request", async () => {
+    let browserPaneOpened = false;
+    const requestOpenPanel = vi.fn(() => {
+      browserPaneOpened = true;
+    });
+    const browserManager = {
+      getBrowserUseSnapshot: () =>
+        browserPaneOpened
+          ? {
+              threadId: "thread-1",
+              state: {
+                open: true,
+                activeTabId: "tab-1",
+                tabs: [
+                  {
+                    id: "tab-1",
+                    title: "New Tab",
+                    url: "about:blank",
+                    lastCommittedUrl: null,
+                  },
+                ],
+              },
+            }
+          : null,
+    };
+
+    await withPipeServer({ browserManager, requestOpenPanel }, async (socket) => {
+      await request(socket, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getInfo",
+        params: { session_id: "codex-session-1" },
+      });
+
+      await expect(
+        request(socket, {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "getTabs",
+          params: { session_id: "codex-session-1" },
+        }),
+      ).resolves.toMatchObject({
+        id: 2,
+        result: [
+          {
+            active: true,
+            title: "New Tab",
+            url: "about:blank",
+          },
+        ],
+      });
+      expect(requestOpenPanel).toHaveBeenCalledOnce();
     });
   });
 
