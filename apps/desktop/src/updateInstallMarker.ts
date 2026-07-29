@@ -4,8 +4,8 @@
 
 import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
-import * as Path from "node:path";
 
+import { writePrivateTextFileAtomicallySync } from "./atomicFile";
 import { isUpdateVersionNewer } from "./updateState";
 import {
   isUpdateArtifactIdentity,
@@ -153,26 +153,7 @@ export function writeInstallMarker(filePath: string, marker: UpdateInstallMarker
     throw new Error("Cannot write an invalid update install marker.");
   }
 
-  const directory = Path.dirname(filePath);
-  FS.mkdirSync(directory, { recursive: true });
-  const temporaryPath = Path.join(
-    directory,
-    `.${Path.basename(filePath)}.${process.pid}.${Crypto.randomUUID()}.tmp`,
-  );
-  let fileDescriptor: number | null = null;
-  try {
-    fileDescriptor = FS.openSync(temporaryPath, "wx", 0o600);
-    FS.writeFileSync(fileDescriptor, `${JSON.stringify(marker, null, 2)}\n`, "utf8");
-    FS.fsyncSync(fileDescriptor);
-    FS.closeSync(fileDescriptor);
-    fileDescriptor = null;
-    FS.renameSync(temporaryPath, filePath);
-  } finally {
-    if (fileDescriptor !== null) {
-      FS.closeSync(fileDescriptor);
-    }
-    FS.rmSync(temporaryPath, { force: true });
-  }
+  writePrivateTextFileAtomicallySync(filePath, `${JSON.stringify(marker, null, 2)}\n`);
 }
 
 export function markInstallHandoffSync(

@@ -199,6 +199,13 @@ import {
   resolveDesktopAppDataBase,
   resolveDesktopUserDataPath,
 } from "./desktopUserDataProfile";
+import {
+  DesktopExitDiagnostics,
+  resolveDesktopRunMarkerPath,
+  type DesktopMainMemorySnapshot,
+  type DesktopRunMarker,
+  type PreviousDesktopRun,
+} from "./desktopExitDiagnostics";
 import { isBrokenPipeError } from "./desktopProcessErrors";
 import { createDesktopStaticProtocolResolver } from "./desktopStaticProtocol";
 import {
@@ -263,6 +270,7 @@ const BACKEND_LOG_FILE_NAME = "server-child.log";
 const LOG_FILE_MAX_BYTES = 10 * 1024 * 1024;
 const LOG_FILE_MAX_FILES = 10;
 const APP_RUN_ID = Crypto.randomBytes(6).toString("hex");
+const DESKTOP_EXIT_DIAGNOSTICS_HEARTBEAT_INTERVAL_MS = 30_000;
 const DESKTOP_BACKEND_SHUTDOWN_TOKEN = Crypto.randomBytes(32).toString("hex");
 // Electron's single-instance lock is scoped through userData on Windows/Linux.
 // Set the flavor-specific profile first so Stable, Dev, and Canary never contend
@@ -334,6 +342,8 @@ let appUpdateYmlCache: Record<string, string> | null | undefined;
 let desktopLogSink: RotatingFileSink | null = null;
 let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
+let desktopExitDiagnostics: DesktopExitDiagnostics | null = null;
+let desktopExitDiagnosticsHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const browserManager = new DesktopBrowserManager({
@@ -476,6 +486,144 @@ function formatErrorMessage(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+function writeDesktopExitDiagnosticsLog(message: string): void {
+  writeDesktopLogHeader(message);
+  if (desktopLogSink === null) {
+    console.warn(`[desktop] ${message}`);
+  }
+}
+
+function describeDesktopRunMarker(marker: DesktopRunMarker): string {
+  const heartbeat = marker.lastHeartbeat;
+  const fields = [
+    `run=${marker.runId}`,
+    `pid=${marker.pid}`,
+    `version=${marker.appVersion}`,
+    `startedAt=${marker.startedAt}`,
+    `phase=${marker.phase}`,
+    `lastEvent=${marker.lastEvent.name}@${marker.lastEvent.at}`,
+    ...(marker.lastEvent.detail ? [`lastEventDetail=${marker.lastEvent.detail}`] : []),
+    ...(marker.lastFault
+      ? [
+          `lastFault=${marker.lastFault.name}@${marker.lastFault.at}`,
+          ...(marker.lastFault.detail ? [`lastFaultDetail=${marker.lastFault.detail}`] : []),
+        ]
+      : []),
+    ...(marker.exitIntent
+      ? [`exitIntent=${marker.exitIntent.reason}@${marker.exitIntent.at}`]
+      : []),
+    ...(heartbeat
+      ? [
+          `heartbeatAt=${heartbeat.at}`,
+          `rss=${heartbeat.memory.rss}`,
+          `heapUsed=${heartbeat.memory.heapUsed}`,
+          `peakRss=${marker.peakMemory?.rss ?? heartbeat.memory.rss}`,
+          `peakHeapUsed=${marker.peakMemory?.heapUsed ?? heartbeat.memory.heapUsed}`,
+        ]
+      : []),
+    ...(marker.processExit ? [`processExit=${marker.processExit.code}@${marker.processExit.at}`] : []),
+  ];
+  return fields.map(sanitizeLogValue).filter(Boolean).join(" ");
+}
+
+function reportPreviousDesktopRun(previousRun: PreviousDesktopRun): void {
+  switch (previousRun.kind) {
+    case "none":
+    case "completed":
+      return;
+    case "invalid":
+      writeDesktopExitDiagnosticsLog(
+        `previous desktop run marker invalid message=${sanitizeLogValue(previousRun.error)}`,
+      );
+      return;
+    case "interrupted-exit":
+      writeDesktopExitDiagnosticsLog(
+        `previous desktop run interrupted during requested exit ${describeDesktopRunMarker(previousRun.marker)}`,
+      );
+      return;
+    case "unclean":
+      writeDesktopExitDiagnosticsLog(
+        `previous desktop run ended without Electron quit ${describeDesktopRunMarker(previousRun.marker)}`,
+      );
+      return;
+  }
+}
+
+function captureDesktopMainMemorySnapshot(): DesktopMainMemorySnapshot {
+  const memory = process.memoryUsage();
+  return {
+    rss: memory.rss,
+    heapTotal: memory.heapTotal,
+    heapUsed: memory.heapUsed,
+    external: memory.external,
+    arrayBuffers: memory.arrayBuffers,
+  };
+}
+
+function stopDesktopExitDiagnosticsHeartbeat(): void {
+  if (desktopExitDiagnosticsHeartbeatTimer) {
+    clearInterval(desktopExitDiagnosticsHeartbeatTimer);
+    desktopExitDiagnosticsHeartbeatTimer = null;
+  }
+}
+
+function disableDesktopExitDiagnostics(operation: string, error: unknown): void {
+  stopDesktopExitDiagnosticsHeartbeat();
+  desktopExitDiagnostics = null;
+  writeDesktopExitDiagnosticsLog(
+    `desktop exit diagnostics disabled operation=${operation} message=${sanitizeLogValue(formatErrorMessage(error))}`,
+  );
+}
+
+function recordDesktopExitDiagnostics(
+  operation: string,
+  record: (diagnostics: DesktopExitDiagnostics) => void,
+): void {
+  const diagnostics = desktopExitDiagnostics;
+  if (!diagnostics) return;
+  try {
+    record(diagnostics);
+  } catch (error) {
+    disableDesktopExitDiagnostics(operation, error);
+  }
+}
+
+function recordDesktopExitDiagnosticsHeartbeat(): void {
+  recordDesktopExitDiagnostics("heartbeat", (diagnostics) => {
+    diagnostics.recordHeartbeat({
+      uptimeSeconds: process.uptime(),
+      memory: captureDesktopMainMemorySnapshot(),
+    });
+  });
+}
+
+function startDesktopExitDiagnostics(): void {
+  if (desktopExitDiagnostics !== null) return;
+  try {
+    const diagnostics = new DesktopExitDiagnostics({
+      markerPath: resolveDesktopRunMarkerPath(LOG_DIR),
+      runId: APP_RUN_ID,
+      appVersion: app.getVersion(),
+      pid: process.pid,
+      ppid: process.ppid,
+      platform: process.platform,
+      arch: process.arch,
+    });
+    desktopExitDiagnostics = diagnostics;
+    reportPreviousDesktopRun(diagnostics.previousRun);
+    writeDesktopExitDiagnosticsLog("desktop exit diagnostics started");
+    recordDesktopExitDiagnosticsHeartbeat();
+    if (desktopExitDiagnostics === null) return;
+    desktopExitDiagnosticsHeartbeatTimer = setInterval(
+      recordDesktopExitDiagnosticsHeartbeat,
+      DESKTOP_EXIT_DIAGNOSTICS_HEARTBEAT_INTERVAL_MS,
+    );
+    desktopExitDiagnosticsHeartbeatTimer.unref();
+  } catch (error) {
+    disableDesktopExitDiagnostics("start", error);
+  }
 }
 
 function getSafeExternalUrl(rawUrl: unknown): string | null {
@@ -1286,6 +1434,9 @@ function handleFatalStartupError(stage: string, error: unknown): void {
   const message = formatErrorMessage(error);
   const detail =
     error instanceof Error && typeof error.stack === "string" ? `\n${error.stack}` : "";
+  recordDesktopExitDiagnostics("fatal-startup", (diagnostics) => {
+    diagnostics.recordFault("fatal-startup", `stage=${stage} message=${message}`);
+  });
   writeDesktopLogHeader(`fatal startup error stage=${stage} message=${message}`);
   console.error(`[desktop] fatal startup error (${stage})`, error);
   if (!isQuitting) {
@@ -3581,6 +3732,10 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
   }
 
   isQuitting = true;
+  stopDesktopExitDiagnosticsHeartbeat();
+  recordDesktopExitDiagnostics("shutdown-start", (diagnostics) => {
+    diagnostics.recordEvent("shutdown-start", reason);
+  });
   writeDesktopLogHeader(`${reason} shutdown start`);
   const shutdown = runAfterDesktopShutdown(
     stopBackendAndWaitForExit(),
@@ -3596,6 +3751,9 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       browserManager.dispose();
       restoreStdIoCapture?.();
       desktopShutdownComplete = true;
+      recordDesktopExitDiagnostics("shutdown-complete", (diagnostics) => {
+        diagnostics.recordEvent("shutdown-complete", reason);
+      });
       writeDesktopLogHeader(`${reason} shutdown complete`);
     },
     { runAfterShutdownFailure: true },
@@ -3618,9 +3776,15 @@ function requestGracefulAppQuit(reason: string): void {
     return;
   }
 
+  recordDesktopExitDiagnostics("exit-intent", (diagnostics) => {
+    diagnostics.recordExitIntent(reason);
+  });
   void runAfterDesktopShutdown(shutdownDesktopRuntime(reason), () => app.quit()).catch(
     (error: unknown) => {
       const message = formatErrorMessage(error);
+      recordDesktopExitDiagnostics("shutdown-failed", (diagnostics) => {
+        diagnostics.recordFault("shutdown-failed", `reason=${reason} message=${message}`);
+      });
       writeDesktopLogHeader(`${reason} shutdown failed message=${message}`);
       console.warn(`[desktop] Shutdown failed during ${reason}: ${message}`);
       app.exit(1);
@@ -4165,6 +4329,9 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
 
   window.webContents.on("render-process-gone", (_event, details) => {
     const description = `reason=${details.reason} exitCode=${details.exitCode}`;
+    recordDesktopExitDiagnostics("renderer-process-gone", (diagnostics) => {
+      diagnostics.recordFault("renderer-process-gone", description);
+    });
     writeDesktopLogHeader(`renderer process gone ${description}`);
     safeConsoleError(`[desktop] renderer process gone (${description})`);
 
@@ -4201,9 +4368,15 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
   // reaches the listener above. Logging both edges makes a freeze that the user
   // reports as "the app died" distinguishable from an actual crash in the same log.
   window.webContents.on("unresponsive", () => {
+    recordDesktopExitDiagnostics("renderer-unresponsive", (diagnostics) => {
+      diagnostics.recordEvent("renderer-unresponsive");
+    });
     writeDesktopLogHeader("renderer unresponsive");
   });
   window.webContents.on("responsive", () => {
+    recordDesktopExitDiagnostics("renderer-responsive", (diagnostics) => {
+      diagnostics.recordEvent("renderer-responsive");
+    });
     writeDesktopLogHeader("renderer responsive");
   });
 
@@ -4421,6 +4594,9 @@ app.on("before-quit", (event) => {
       );
       return;
     }
+    recordDesktopExitDiagnostics("updater-exit-intent", (diagnostics) => {
+      diagnostics.recordExitIntent("updater quit-and-install");
+    });
     writeDesktopLogHeader("before-quit allowing updater quit-and-install");
     return;
   }
@@ -4437,10 +4613,14 @@ app.on("before-quit", (event) => {
 });
 
 if (hasSingleInstanceLock) {
+  startDesktopExitDiagnostics();
   app
     .whenReady()
     .then(() => {
       writeDesktopLogHeader("app ready");
+      recordDesktopExitDiagnostics("app-ready", (diagnostics) => {
+        diagnostics.recordEvent("app-ready");
+      });
       configureAppIdentity();
       applyLegacyMacDockIcon();
       refreshMacIconCacheOnVersionChange();
@@ -4517,14 +4697,49 @@ app.on("child-process-gone", (_event, details) => {
     ...(details.serviceName ? [`service=${details.serviceName}`] : []),
     ...(details.name ? [`name=${sanitizeLogValue(details.name)}`] : []),
   ].join(" ");
+  recordDesktopExitDiagnostics("child-process-gone", (diagnostics) => {
+    diagnostics.recordFault("child-process-gone", attributes);
+  });
   writeDesktopLogHeader(`child process gone ${attributes}`);
   safeConsoleError(`[desktop] child process gone (${attributes})`);
+});
+
+app.on("will-quit", () => {
+  stopDesktopExitDiagnosticsHeartbeat();
+  recordDesktopExitDiagnostics("will-quit", (diagnostics) => {
+    diagnostics.recordEvent("will-quit");
+  });
+});
+
+app.on("quit", (_event, exitCode) => {
+  stopDesktopExitDiagnosticsHeartbeat();
+  recordDesktopExitDiagnostics("app-quit", (diagnostics) => {
+    diagnostics.recordCompleted(exitCode);
+  });
 });
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+process.on("uncaughtExceptionMonitor", (error: unknown, origin) => {
+  const detail = `origin=${origin} message=${formatErrorMessage(error)}`;
+  recordDesktopExitDiagnostics("uncaught-exception", (diagnostics) => {
+    if (isBrokenPipeError(error)) {
+      diagnostics.recordEvent("uncaught-EPIPE", detail);
+      return;
+    }
+    diagnostics.recordFault("uncaught-exception", detail);
+  });
+});
+
+process.on("exit", (code) => {
+  stopDesktopExitDiagnosticsHeartbeat();
+  recordDesktopExitDiagnostics("process-exit", (diagnostics) => {
+    diagnostics.recordProcessExit(code);
+  });
 });
 
 if (process.platform !== "win32") {
