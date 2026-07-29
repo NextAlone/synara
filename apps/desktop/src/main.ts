@@ -207,6 +207,7 @@ import {
   type PreviousDesktopRun,
 } from "./desktopExitDiagnostics";
 import { isBrokenPipeError } from "./desktopProcessErrors";
+import { isDestroyedElectronObjectError, sendDesktopRendererIpc } from "./desktopRendererIpc";
 import { createDesktopStaticProtocolResolver } from "./desktopStaticProtocol";
 import {
   readDesktopWindowState,
@@ -421,7 +422,7 @@ async function ensureBrowserUsePipeServer(): Promise<void> {
   }
   const server = new BrowserUsePipeServer(browserManager, {
     requestOpenPanel: () => {
-      mainWindow?.webContents.send(IPC.browser.requestOpenPanel);
+      sendDesktopRendererIpc(mainWindow?.webContents, IPC.browser.requestOpenPanel);
     },
   });
   await server.start();
@@ -665,7 +666,7 @@ function getDesktopWindowState(window: BrowserWindow): {
 
 function emitDesktopWindowState(window: BrowserWindow | null = mainWindow): void {
   if (!window || window.isDestroyed()) return;
-  window.webContents.send(IPC.windowState, getDesktopWindowState(window));
+  sendDesktopRendererIpc(window.webContents, IPC.windowState, getDesktopWindowState(window));
 }
 
 function isSaveFileInput(input: unknown): input is {
@@ -1491,7 +1492,7 @@ function dispatchMenuAction(action: string): void {
 
   const send = () => {
     if (targetWindow.isDestroyed()) return;
-    targetWindow.webContents.send(IPC.menuAction, action);
+    sendDesktopRendererIpc(targetWindow.webContents, IPC.menuAction, action);
     if (!targetWindow.isVisible()) {
       targetWindow.show();
     }
@@ -1511,8 +1512,7 @@ function resolveMenuTargetWindow(): BrowserWindow | null {
 }
 
 function sendDesktopZoomFactor(webContents: Electron.WebContents): void {
-  if (webContents.isDestroyed()) return;
-  webContents.send(IPC.zoomFactorChanged, webContents.getZoomFactor());
+  sendDesktopRendererIpc(webContents, IPC.zoomFactorChanged, webContents.getZoomFactor());
 }
 
 function attachDesktopZoomFactorSync(window: BrowserWindow): void {
@@ -1958,7 +1958,7 @@ function showDesktopNotification(input: {
       return;
     }
     if (threadId.length > 0) {
-      mainWindow.webContents.send(IPC.menuAction, `notification-open-thread:${threadId}`);
+      sendDesktopRendererIpc(mainWindow.webContents, IPC.menuAction, `notification-open-thread:${threadId}`);
     }
   });
 
@@ -2275,7 +2275,7 @@ function isExplicitUpdateCheckReason(reason: string): boolean {
 function emitUpdateState(): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.isDestroyed()) continue;
-    window.webContents.send(IPC.updateState, updateState);
+    sendDesktopRendererIpc(window.webContents, IPC.updateState, updateState);
   }
 }
 
@@ -2287,7 +2287,7 @@ function setUpdateState(patch: Partial<DesktopUpdateState>): void {
 function emitUpstreamUpdateState(): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.isDestroyed()) continue;
-    window.webContents.send(IPC.upstreamUpdateState, upstreamUpdateState);
+    sendDesktopRendererIpc(window.webContents, IPC.upstreamUpdateState, upstreamUpdateState);
   }
 }
 
@@ -4023,7 +4023,7 @@ function registerIpcHandlers(): void {
       window.maximize();
     }
     const state = getDesktopWindowState(window);
-    window.webContents.send(IPC.windowState, state);
+    sendDesktopRendererIpc(window.webContents, IPC.windowState, state);
     return state;
   });
 
@@ -4727,6 +4727,10 @@ app.on("window-all-closed", () => {
 process.on("uncaughtExceptionMonitor", (error: unknown, origin) => {
   const detail = `origin=${origin} message=${formatErrorMessage(error)}`;
   recordDesktopExitDiagnostics("uncaught-exception", (diagnostics) => {
+    if (isDestroyedElectronObjectError(error)) {
+      diagnostics.recordEvent("stale-electron-object", detail);
+      return;
+    }
     if (isBrokenPipeError(error)) {
       diagnostics.recordEvent("uncaught-EPIPE", detail);
       return;
@@ -4744,6 +4748,11 @@ process.on("exit", (code) => {
 
 if (process.platform !== "win32") {
   process.on("uncaughtException", (error: unknown) => {
+    if (isDestroyedElectronObjectError(error)) {
+      writeDesktopLogHeader("ignored stale Electron object after renderer teardown");
+      safeConsoleError("[desktop] Ignored stale Electron object after renderer teardown", error);
+      return;
+    }
     if (!isBrokenPipeError(error)) {
       throw error;
     }

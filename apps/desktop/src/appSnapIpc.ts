@@ -11,27 +11,28 @@ import type {
 } from "@synara/contracts";
 
 import type { DesktopAppSnapManager } from "./appSnapManager";
+import { sendDesktopRendererIpc } from "./desktopRendererIpc";
 import { APPSNAP_IPC_CHANNELS } from "./ipcChannels";
 
 export function sendAppSnapState(
   webContents: WebContents | null | undefined,
   state: DesktopAppSnapState,
-): void {
-  webContents?.send(APPSNAP_IPC_CHANNELS.state, state);
+): boolean {
+  return sendDesktopRendererIpc(webContents, APPSNAP_IPC_CHANNELS.state, state);
 }
 
 export function sendAppSnapCaptured(
   webContents: WebContents | null | undefined,
   capture: DesktopAppSnapCapture,
-): void {
-  webContents?.send(APPSNAP_IPC_CHANNELS.captured, capture);
+): boolean {
+  return sendDesktopRendererIpc(webContents, APPSNAP_IPC_CHANNELS.captured, capture);
 }
 
 export function sendAppSnapError(
   webContents: WebContents | null | undefined,
   error: DesktopAppSnapErrorEvent,
-): void {
-  webContents?.send(APPSNAP_IPC_CHANNELS.error, error);
+): boolean {
+  return sendDesktopRendererIpc(webContents, APPSNAP_IPC_CHANNELS.error, error);
 }
 
 export function registerAppSnapIpcHandlers(ipcMain: IpcMain, manager: DesktopAppSnapManager): void {

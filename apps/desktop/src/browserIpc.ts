@@ -21,14 +21,15 @@ import type {
 } from "@synara/contracts";
 
 import type { DesktopBrowserManager } from "./browserManager";
+import { sendDesktopRendererIpc } from "./desktopRendererIpc";
 import { BROWSER_IPC_CHANNELS } from "./ipcChannels";
 
 // Pushes the latest browser state snapshot to the renderer shell.
 export function sendBrowserState(
   webContents: WebContents | null | undefined,
   state: ThreadBrowserState,
-): void {
-  webContents?.send(BROWSER_IPC_CHANNELS.state, state);
+): boolean {
+  return sendDesktopRendererIpc(webContents, BROWSER_IPC_CHANNELS.state, state);
 }
 
 // Notifies the renderer that the native browser page handled the copy-link chord so the
@@ -36,8 +37,8 @@ export function sendBrowserState(
 export function sendBrowserCopyLink(
   webContents: WebContents | null | undefined,
   event: BrowserCopyLinkEvent,
-): void {
-  webContents?.send(BROWSER_IPC_CHANNELS.copyLink, event);
+): boolean {
+  return sendDesktopRendererIpc(webContents, BROWSER_IPC_CHANNELS.copyLink, event);
 }
 
 // Registers the desktop browser bridge in one place so main.ts stays focused on app boot.
