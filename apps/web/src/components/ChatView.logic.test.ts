@@ -1,6 +1,7 @@
 import {
   CheckpointRef,
   EventId,
+  MessageId,
   ThreadId,
   TurnId,
   type ModelSlug,
@@ -12,6 +13,7 @@ import {
   appendVoiceTranscriptToPrompt,
   buildComposerMenuSelectionKey,
   buildTranscriptAutoFollowSignal,
+  buildTranscriptTailKey,
   commitAfterRuntimeModePersistence,
   createRuntimeModePersistenceQueue,
   persistModelSelectionBeforeRuntimeMode,
@@ -94,6 +96,28 @@ describe("transcript auto-follow signal", () => {
         tailKey: "assistant-3:assistant:settled:content",
       }),
     ).not.toBe(streaming);
+  });
+
+  it("changes when streaming text grows inside the existing tail message", () => {
+    const tail = {
+      id: MessageId.makeUnsafe("assistant-3"),
+      role: "assistant" as const,
+      streaming: true,
+      text: "First streamed sentence.",
+    };
+    const before = buildTranscriptAutoFollowSignal({
+      messageCount: 3,
+      tailKey: buildTranscriptTailKey(tail),
+    });
+    const after = buildTranscriptAutoFollowSignal({
+      messageCount: 3,
+      tailKey: buildTranscriptTailKey({
+        ...tail,
+        text: "First streamed sentence. The live reply kept growing.",
+      }),
+    });
+
+    expect(after).not.toBe(before);
   });
 });
 

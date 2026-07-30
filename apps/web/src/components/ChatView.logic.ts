@@ -267,6 +267,24 @@ export function buildComposerMenuSelectionKey(input: {
   return `${sourceKey}\u001f${input.items.map((item) => item.id).join("\u001e")}`;
 }
 
+export function buildTranscriptTailKey(
+  message: Pick<ChatMessage, "id" | "role" | "streaming" | "text" | "completedAt"> | null,
+): string {
+  if (!message) {
+    return "empty";
+  }
+
+  return [
+    message.id,
+    message.role,
+    message.streaming ? "streaming" : "settled",
+    // A streaming delta changes the tail message without adding a row. Length is
+    // a cheap content revision, so the caller can re-stick once per rendered delta.
+    message.text.length,
+    message.completedAt ?? "",
+  ].join(":");
+}
+
 export function buildTranscriptAutoFollowSignal(input: {
   readonly messageCount: number;
   readonly tailKey: string;

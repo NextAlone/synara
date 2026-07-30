@@ -157,9 +157,10 @@ const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 // Changed-files list in the per-turn card is capped so large turns stay compact;
 // the rest are revealed via an inline "Show more" row.
 const MAX_VISIBLE_CHANGED_FILES = 5;
-// The composer overlaps the transcript by design, so the list needs extra tail
-// space beyond the overlap to keep final cards from sitting flush against it.
-const BOTTOM_CONTENT_INSET_PX = 64;
+// The composer overlaps the transcript by design. The list's own bottom padding
+// supplies most of the clearance, so a small tail shelf keeps the final row visible
+// without leaving an empty card-sized gap when no composer panel is present.
+const BOTTOM_CONTENT_INSET_PX = 16;
 const MESSAGE_HOVER_REVEAL_CLASS_NAME =
   "opacity-0 transition-opacity pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto";
 // How long a jumped-to message keeps its highlight tint before fading back out.
@@ -207,6 +208,17 @@ function readLegendListState(
   listRef: RefObject<LegendListRef | null>,
 ): ReturnType<NonNullable<LegendListRef["getState"]>> | undefined {
   return listRef.current?.getState?.();
+}
+
+function readLegendListTailElement(
+  listRef: RefObject<LegendListRef | null>,
+  tailIndex: number,
+): HTMLElement | null {
+  const listItem = listRef.current?.getState?.().elementAtIndex(tailIndex) ?? null;
+  if (!(listItem instanceof HTMLElement)) {
+    return null;
+  }
+  return listItem.querySelector<HTMLElement>("[data-timeline-row-kind]") ?? listItem;
 }
 
 /**
@@ -404,6 +416,11 @@ interface MessagesTimelineProps {
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onIsAtEndChange?: (isAtEnd: boolean) => void;
+  /**
+   * Runs after a changed tail item has had a chance to receive its virtualized
+   * layout. ChatView owns the resulting physical end/follow decision.
+   */
+  onTailLayoutSettled?: (tail: MessagesTimelineTailLayout) => void;
   /** Emits current + visible sent-message anchors as the viewport scrolls (drives the trail). */
   onTrailHighlightsChange?: (snapshot: ActiveTrailSnapshot) => void;
   onMessagesClickCapture?: ComponentProps<typeof LegendList>["onClickCapture"];
@@ -427,6 +444,13 @@ interface MessagesTimelineProps {
    * far right; only the content is inset.
    */
   contentInsetRightPx?: number | undefined;
+}
+
+export type MessagesTimelineTailKind = MessagesTimelineRow["kind"];
+
+export interface MessagesTimelineTailLayout {
+  kind: MessagesTimelineTailKind;
+  element: HTMLElement | null;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
@@ -461,6 +485,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isRevertingCheckpoint,
   onImageExpand,
   onIsAtEndChange,
+  onTailLayoutSettled,
   onTrailHighlightsChange,
   onMessagesClickCapture,
   onMessagesMouseUp,
@@ -616,6 +641,37 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const tailLayoutRow = rows.at(-1) ?? null;
+  const tailLayoutIndex = rows.length - 1;
+  const tailLayoutIndexRef = useRef(tailLayoutIndex);
+  useLayoutEffect(() => {
+    tailLayoutIndexRef.current = tailLayoutIndex;
+  }, [tailLayoutIndex]);
+  useLayoutEffect(() => {
+    if (!tailLayoutRow || !onTailLayoutSettled) {
+      return;
+    }
+
+    let tailLayoutFrame: number | null = window.requestAnimationFrame(() => {
+      tailLayoutFrame = null;
+      // LegendList applies the measured size of a new tail row in its own frame.
+      // Waiting one frame more lets ChatView reason about final DOM geometry without
+      // calling virtualizer measurement APIs or creating a measure/scroll cycle.
+      tailLayoutFrame = window.requestAnimationFrame(() => {
+        tailLayoutFrame = null;
+        onTailLayoutSettled({
+          kind: tailLayoutRow.kind,
+          element: readLegendListTailElement(resolvedListRef, tailLayoutIndexRef.current),
+        });
+      });
+    });
+
+    return () => {
+      if (tailLayoutFrame !== null) {
+        window.cancelAnimationFrame(tailLayoutFrame);
+      }
+    };
+  }, [onTailLayoutSettled, resolvedListRef, tailLayoutRow]);
   // The newest work group renders its rows inline while the turn is live; every
   // older run of tool calls folds into a "Ran N commands..." summary row.
   const lastLiveWorkGroupId = useMemo(() => findLastLiveWorkGroupId(rows), [rows]);

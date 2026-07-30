@@ -34,6 +34,7 @@ import { type ComposerImageAttachment, useComposerDraftStore } from "../composer
 import {
   AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
   getScrollContainerDistanceFromBottom,
+  isScrollContainerAtEnd,
 } from "../chat-scroll";
 import { useLatestProjectStore } from "../latestProjectStore";
 import {
@@ -2297,17 +2298,34 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("smoothly re-sticks to the bottom after sending an optimistic user message", async () => {
+  it("uses stable immediate follow after send and keeps the initial Working row clear", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
+    let currentSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-send-bottom-stick" as MessageId,
+      targetText: "bottom stick target",
+    });
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      snapshot: createSnapshotForTargetUser({
-        targetMessageId: "msg-user-send-bottom-stick" as MessageId,
-        targetText: "bottom stick target",
-      }),
+      snapshot: currentSnapshot,
     });
     let patchedScrollContainer: HTMLElement | null = null;
     let originalScrollTo: HTMLElement["scrollTo"] | null = null;
+    const syncActiveThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      currentSnapshot = {
+        ...currentSnapshot,
+        snapshotSequence: currentSnapshot.snapshotSequence + 1,
+        threads: currentSnapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+        updatedAt: isoAt(currentSnapshot.snapshotSequence + 1_300),
+      };
+      fixture = { ...fixture, snapshot: currentSnapshot };
+      useStore.getState().syncServerReadModel(currentSnapshot);
+    };
 
     try {
       const scrollContainer = await waitForElement(
@@ -2353,12 +2371,61 @@ describe("ChatView timeline estimator parity (full app)", () => {
         async () => {
           expect(document.body.textContent).toContain(prompt);
           expect(document.activeElement).toBe(await waitForComposerEditor());
-          expect(scrollToCalls.some((call) => call.behavior === "smooth")).toBe(true);
+          expect(
+            scrollToCalls.some((call) => call.behavior === "auto"),
+            `Expected an immediate post-send scroll, received ${JSON.stringify(scrollToCalls)}.`,
+          ).toBe(true);
+          expect(scrollToCalls.some((call) => call.behavior === "smooth")).toBe(false);
           const layout = await mounted.measureLayout();
           expect(layout.scrollHeightPx).toBeGreaterThan(layout.scrollClientHeightPx);
           expect(layout.distanceFromBottomPx).toBeLessThanOrEqual(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);
         },
         { timeout: 8_000, interval: 16 },
+      );
+
+      scrollToCalls.length = 0;
+      const activeTurnId = TurnId.makeUnsafe("turn-send-bottom-stick");
+      syncActiveThread((thread) => ({
+        ...thread,
+        latestTurn: {
+          turnId: activeTurnId,
+          state: "running",
+          requestedAt: isoAt(1_301),
+          startedAt: isoAt(1_302),
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "running",
+              activeTurnId,
+              updatedAt: isoAt(1_303),
+            }
+          : null,
+        updatedAt: isoAt(1_303),
+      }));
+
+      await vi.waitFor(
+        () => {
+          const workingRow = document.querySelector<HTMLElement>(
+            '[data-timeline-row-kind="working"]',
+          );
+          const composerForm = document.querySelector<HTMLElement>(
+            "[data-chat-composer-form='true']",
+          );
+          const scrollButton = document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Scroll to bottom"]',
+          );
+          expect(workingRow, "Unable to find the post-send Working row.").toBeTruthy();
+          expect(composerForm, "Unable to find the post-send composer.").toBeTruthy();
+          expect(workingRow!.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+            composerForm!.getBoundingClientRect().top + 1,
+          );
+          expect(scrollButton?.getAttribute("aria-hidden")).toBe("true");
+          expect(scrollToCalls.length).toBeGreaterThan(0);
+        },
+        { timeout: 4_000, interval: 16 },
       );
       scrollContainer.scrollTo = originalScrollTo;
     } finally {
@@ -2370,7 +2437,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("auto-follows real transcript changes without re-sticking for non-message activity", async () => {
+  it("auto-follows real transcript changes and preserves the tail for composer panels", async () => {
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-auto-follow-wiring" as MessageId,
       targetText: "auto-follow wiring target",
@@ -2529,6 +2596,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
         timeout: 4_000,
         interval: 16,
       });
+      await vi.waitFor(() => expect(isScrollContainerAtEnd(scrollContainer)).toBe(true), {
+        timeout: 4_000,
+        interval: 16,
+      });
 
       scrollContainer.scrollTop = scrollContainer.scrollHeight;
       scrollContainer.dispatchEvent(new Event("scroll"));
@@ -2562,9 +2633,32 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         { timeout: 4_000, interval: 16 },
       );
-      await waitForLayout();
-      expect(scrollToCalls).toHaveLength(0);
-      expect(Math.abs(scrollContainer.scrollTop - scrollTopBeforeTaskList)).toBeLessThanOrEqual(1);
+      await vi.waitFor(
+        () => {
+          const taskListCard = document.querySelector<HTMLElement>(
+            '[data-testid="active-task-list-card"]',
+          );
+          const renderedRows = Array.from(
+            document.querySelectorAll<HTMLElement>("[data-timeline-row-kind]"),
+          );
+          const finalTranscriptRow = renderedRows.reduce<HTMLElement | null>((latest, row) => {
+            if (!latest) return row;
+            return row.getBoundingClientRect().bottom > latest.getBoundingClientRect().bottom
+              ? row
+              : latest;
+          }, null);
+
+          expect(scrollToCalls.length).toBeGreaterThan(0);
+          expect(isScrollContainerAtEnd(scrollContainer)).toBe(true);
+          expect(taskListCard, "Unable to find active task-list card.").toBeTruthy();
+          expect(finalTranscriptRow, "Unable to find final transcript row.").toBeTruthy();
+          expect(finalTranscriptRow!.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+            taskListCard!.getBoundingClientRect().top + 1,
+          );
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+      expect(scrollContainer.scrollTop).toBeGreaterThan(scrollTopBeforeTaskList);
 
       scrollContainer.scrollTop = scrollContainer.scrollHeight;
       scrollContainer.dispatchEvent(new Event("scroll"));
@@ -2600,10 +2694,56 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         { timeout: 4_000, interval: 16 },
       );
+      await vi.waitFor(
+        () => {
+          expect(scrollToCalls.length).toBeGreaterThan(0);
+          expect(isScrollContainerAtEnd(scrollContainer)).toBe(true);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+      expect(scrollContainer.scrollTop).toBeGreaterThan(scrollTopBeforeTaskListGrowth);
+
+      // Composer chrome must preserve an existing tail stick, not manufacture one.
+      // A user reviewing older content stays put when the task list changes again.
+      scrollContainer.scrollTop = 0;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+      const scrollTopBeforeAwayTaskListUpdate = scrollContainer.scrollTop;
+      scrollToCalls.length = 0;
+      syncActiveThread((thread) => ({
+        ...thread,
+        activities: [
+          ...thread.activities,
+          {
+            id: EventId.makeUnsafe("activity-auto-follow-tasks-away"),
+            createdAt: isoAt(1_208 + 0.5),
+            kind: "turn.tasks.updated",
+            summary: "Tasks updated while reviewing history",
+            tone: "info",
+            turnId: activeTurnId,
+            payload: {
+              tasks: [
+                { task: "Inspect the transcript", status: "completed" },
+                { task: "Keep the viewport stable", status: "completed" },
+                { task: "Cover task-list growth", status: "inProgress" },
+                { task: "Cover task status changes", status: "pending" },
+                { task: "Do not pull history readers to the tail", status: "pending" },
+              ],
+            },
+          },
+        ],
+        updatedAt: isoAt(1_208 + 0.5),
+      }));
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Do not pull history readers to the tail");
+        },
+        { timeout: 4_000, interval: 16 },
+      );
       await waitForLayout();
       expect(scrollToCalls).toHaveLength(0);
       expect(
-        Math.abs(scrollContainer.scrollTop - scrollTopBeforeTaskListGrowth),
+        Math.abs(scrollContainer.scrollTop - scrollTopBeforeAwayTaskListUpdate),
       ).toBeLessThanOrEqual(1);
 
       scrollContainer.scrollTop = scrollContainer.scrollHeight;
@@ -2658,7 +2798,183 @@ describe("ChatView timeline estimator parity (full app)", () => {
         timeout: 4_000,
         interval: 16,
       });
+
+      // A server reconciliation can grow an already-settled tail without adding
+      // a message row. The virtualizer's live-output mode is off here, so this
+      // verifies ChatView itself still re-sticks a viewer who is at the bottom.
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+      scrollToCalls.length = 0;
+      const reconciledTailText = `${streamedTailText}\n\nA late transcript reconciliation must stay in view.`;
+      syncActiveThread((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) =>
+          message.id === liveAssistantMessage.id
+            ? {
+                ...message,
+                text: reconciledTailText,
+                updatedAt: isoAt(1_211),
+              }
+            : message,
+        ),
+        updatedAt: isoAt(1_211),
+      }));
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain(
+            "A late transcript reconciliation must stay in view.",
+          );
+          expect(scrollToCalls.length).toBeGreaterThan(0);
+          expect(isScrollContainerAtEnd(scrollContainer)).toBe(true);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
     } finally {
+      if (patchedScrollContainer && originalScrollTo) {
+        patchedScrollContainer.scrollTo = originalScrollTo;
+      }
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows jump-to-bottom when a Thinking tail settles behind the composer", async () => {
+    let currentSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-thinking-tail" as MessageId,
+      targetText: "thinking tail target",
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: currentSnapshot,
+    });
+    let patchedScrollContainer: HTMLElement | null = null;
+    let originalScrollTo: HTMLElement["scrollTo"] | null = null;
+    let oversizedThinkingStyle: HTMLStyleElement | null = null;
+
+    const syncActiveThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      currentSnapshot = {
+        ...currentSnapshot,
+        snapshotSequence: currentSnapshot.snapshotSequence + 1,
+        threads: currentSnapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+        updatedAt: isoAt(currentSnapshot.snapshotSequence + 1_400),
+      };
+      fixture = { ...fixture, snapshot: currentSnapshot };
+      useStore.getState().syncServerReadModel(currentSnapshot);
+    };
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+
+      const scrollToCalls: ScrollToOptions[] = [];
+      patchedScrollContainer = scrollContainer;
+      originalScrollTo = scrollContainer.scrollTo;
+      scrollContainer.scrollTo = ((options?: ScrollToOptions | number, y?: number) => {
+        const normalized: ScrollToOptions =
+          typeof options === "object" && options !== null
+            ? options
+            : {
+                ...(typeof options === "number" ? { left: options } : {}),
+                ...(typeof y === "number" ? { top: y } : {}),
+              };
+        scrollToCalls.push(normalized);
+        if (typeof normalized.left === "number") scrollContainer.scrollLeft = normalized.left;
+        if (typeof normalized.top === "number") scrollContainer.scrollTop = normalized.top;
+        scrollContainer.dispatchEvent(new Event("scroll"));
+      }) as typeof scrollContainer.scrollTo;
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+      await waitForLayout();
+      scrollToCalls.length = 0;
+
+      // Model a tail whose visual paint arrives below its current virtualized box.
+      // The transform leaves scroll metrics unchanged, so the assertion exercises
+      // the composer-relative tail check rather than generic content-height follow.
+      oversizedThinkingStyle = document.createElement("style");
+      oversizedThinkingStyle.textContent =
+        '[data-timeline-row-kind="working"] { min-height: 180px; transform: translateY(100px); }';
+      document.head.append(oversizedThinkingStyle);
+
+      const activeTurnId = TurnId.makeUnsafe("turn-thinking-tail");
+      syncActiveThread((thread) => ({
+        ...thread,
+        latestTurn: {
+          turnId: activeTurnId,
+          state: "running",
+          requestedAt: isoAt(1_401),
+          startedAt: isoAt(1_402),
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "running",
+              activeTurnId,
+              updatedAt: isoAt(1_403),
+            }
+          : null,
+        updatedAt: isoAt(1_403),
+      }));
+
+      await vi.waitFor(
+        () => {
+          const thinkingRow = document.querySelector<HTMLElement>(
+            '[data-timeline-row-kind="working"]',
+          );
+          const composerForm = document.querySelector<HTMLElement>(
+            "[data-chat-composer-form='true']",
+          );
+          const scrollButton = document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Scroll to bottom"]',
+          );
+          expect(thinkingRow, "Unable to find the Thinking row.").toBeTruthy();
+          expect(composerForm, "Unable to find the chat composer.").toBeTruthy();
+          expect(thinkingRow!.getBoundingClientRect().bottom).toBeGreaterThan(
+            composerForm!.getBoundingClientRect().top + 1,
+          );
+          expect(scrollButton?.getAttribute("aria-hidden")).toBe("false");
+          expect(scrollToCalls).toHaveLength(0);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
+      const scrollButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Scroll to bottom"]'),
+        "Unable to find the Thinking scroll-to-bottom button.",
+      );
+      oversizedThinkingStyle.remove();
+      oversizedThinkingStyle = null;
+      scrollButton.click();
+      await vi.waitFor(
+        () => {
+          const thinkingRow = document.querySelector<HTMLElement>(
+            '[data-timeline-row-kind="working"]',
+          );
+          const composerForm = document.querySelector<HTMLElement>(
+            "[data-chat-composer-form='true']",
+          );
+          expect(isScrollContainerAtEnd(scrollContainer)).toBe(true);
+          expect(thinkingRow, "Unable to find the Thinking row after scrolling.").toBeTruthy();
+          expect(composerForm, "Unable to find the chat composer after scrolling.").toBeTruthy();
+          expect(thinkingRow!.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+            composerForm!.getBoundingClientRect().top + 1,
+          );
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+    } finally {
+      oversizedThinkingStyle?.remove();
       if (patchedScrollContainer && originalScrollTo) {
         patchedScrollContainer.scrollTo = originalScrollTo;
       }
@@ -6124,6 +6440,63 @@ describe("ChatView timeline estimator parity (full app)", () => {
     try {
       await expect.element(page.getByText("Expand plan")).toBeInTheDocument();
       expect(document.querySelector('[aria-label="Close plan sidebar"]')).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the idle composer close to the transcript tail", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-idle-composer-clearance" as MessageId,
+        targetText: "idle composer clearance target",
+      }),
+    });
+    const maxIdleComposerClearancePx = 24;
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      const composerShell = await waitForElement(
+        () =>
+          document.querySelector<HTMLElement>(
+            'form[data-chat-composer-form="true"] .chat-composer-shell',
+          ),
+        "Unable to find composer shell.",
+      );
+
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+
+      await vi.waitFor(
+        () => {
+          const renderedRows = Array.from(
+            document.querySelectorAll<HTMLElement>("[data-timeline-row-kind]"),
+          );
+          const finalTranscriptRow = renderedRows.reduce<HTMLElement | null>((latest, row) => {
+            if (!latest) return row;
+            return row.getBoundingClientRect().bottom > latest.getBoundingClientRect().bottom
+              ? row
+              : latest;
+          }, null);
+
+          expect(finalTranscriptRow, "Unable to find the final rendered transcript row.").toBeTruthy();
+          const clearancePx =
+            composerShell.getBoundingClientRect().top - finalTranscriptRow!.getBoundingClientRect().bottom;
+
+          expect(isScrollContainerAtEnd(scrollContainer)).toBe(true);
+          expect(clearancePx, "Final transcript row must stay clear of the composer.").toBeGreaterThanOrEqual(-1);
+          expect(
+            clearancePx,
+            "Idle composer must not leave a large empty tail after the last transcript row.",
+          ).toBeLessThanOrEqual(maxIdleComposerClearancePx);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
     } finally {
       await mounted.cleanup();
     }

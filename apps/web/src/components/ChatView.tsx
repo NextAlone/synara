@@ -117,7 +117,7 @@ import {
   saveConfirmedCustomBinaryPaths,
 } from "../confirmedCustomBinaryPathStore";
 import { isElectron } from "../env";
-import { isScrollContainerNearBottom } from "../chat-scroll";
+import { isScrollContainerAtEnd, isScrollContainerNearBottom } from "../chat-scroll";
 import { stripDiffSearchParams } from "../diffRouteSearch";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { ensureHomeChatProject, isHomeChatContainerProject } from "../lib/chatProjects";
@@ -166,6 +166,7 @@ import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   buildThreadBreadcrumbs,
   buildTranscriptAutoFollowSignal,
+  buildTranscriptTailKey,
   commitAfterRuntimeModePersistence,
   createRuntimeModePersistenceQueue,
   derivePromptHistoryFromMessages,
@@ -450,7 +451,10 @@ import {
 } from "../routes/-automations.shared";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
-import type { MessagesTimelineController } from "./chat/MessagesTimeline";
+import type {
+  MessagesTimelineController,
+  MessagesTimelineTailLayout,
+} from "./chat/MessagesTimeline";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -1418,9 +1422,7 @@ export default function ChatView({
     useState<Record<string, number>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [activeTaskListCompact, setActiveTaskListCompact] = useState(false);
-  const preserveTailForNextTaskBannerResizeRef = useRef(false);
   const handleActiveTaskListCompactChange = useCallback((compact: boolean) => {
-    preserveTailForNextTaskBannerResizeRef.current = true;
     setActiveTaskListCompact(compact);
   }, []);
   const [subagentStripCompact, setSubagentStripCompact] = useState(false);
@@ -1523,6 +1525,7 @@ export default function ChatView({
   const timelineControllerRef = useRef<MessagesTimelineController | null>(null);
   const isAtEndRef = useRef(true);
   const autoFollowThreadIdRef = useRef<ThreadId | null>(null);
+  const postSendWorkingTailMessageIdRef = useRef<MessageId | null>(null);
   const pendingInteractionAnchorRef = useRef<{
     element: HTMLElement;
     top: number;
@@ -4920,22 +4923,28 @@ export default function ChatView({
   // Guards isAtEndRef from flipping during reflow-induced scroll events that
   // fire immediately after an explicit scrollToEnd.
   const programmaticScrollUntilRef = useRef(0);
-  // Smooth only the first auto-follow after a send; live stream re-sticks stay cheap.
-  const animateNextAutoFollowScrollRef = useRef(false);
   const scrollToEnd = useCallback((animated = false) => {
-    programmaticScrollUntilRef.current = performance.now() + 200;
+    // Native smooth scrolling can outlive several virtual-list measurement frames.
+    // Keep its transient non-end events from cancelling the explicit follow intent.
+    programmaticScrollUntilRef.current = performance.now() + (animated ? 1_000 : 200);
     legendListRef.current?.scrollToEnd?.({ animated });
   }, []);
-  const armTranscriptAutoFollow = useCallback((targetThreadId: ThreadId, animated = false) => {
-    autoFollowThreadIdRef.current = targetThreadId;
-    animateNextAutoFollowScrollRef.current = animated;
-    isAtEndRef.current = true;
-    showScrollDebouncer.current.cancel();
-    setShowScrollToBottom(false);
-  }, []);
+  const armTranscriptAutoFollow = useCallback(
+    (targetThreadId: ThreadId, postSendMessageId: MessageId | null = null) => {
+      autoFollowThreadIdRef.current = targetThreadId;
+      postSendWorkingTailMessageIdRef.current = postSendMessageId;
+      isAtEndRef.current = true;
+      showScrollDebouncer.current.cancel();
+      setShowScrollToBottom(false);
+    },
+    [],
+  );
   const clearTranscriptAutoFollow = useCallback(() => {
     autoFollowThreadIdRef.current = null;
-    animateNextAutoFollowScrollRef.current = false;
+    postSendWorkingTailMessageIdRef.current = null;
+    // User input must win over the short post-programmatic-scroll guard, otherwise
+    // the next reflow can mistake an intentional upward scroll for an auto-scroll.
+    programmaticScrollUntilRef.current = 0;
   }, []);
   const transcriptMessageCount = useMemo(
     () => timelineEntries.filter((entry) => entry.kind === "message").length,
@@ -4950,15 +4959,7 @@ export default function ChatView({
     }
     return null;
   }, [timelineEntries]);
-  const transcriptTailKey = latestTranscriptMessage
-    ? [
-        latestTranscriptMessage.id,
-        latestTranscriptMessage.role,
-        latestTranscriptMessage.streaming ? "streaming" : "settled",
-        latestTranscriptMessage.text.length > 0 ? "content" : "empty",
-        latestTranscriptMessage.completedAt ?? "",
-      ].join(":")
-    : "empty";
+  const transcriptTailKey = buildTranscriptTailKey(latestTranscriptMessage);
   const transcriptAutoFollowSignal = buildTranscriptAutoFollowSignal({
     messageCount: transcriptMessageCount,
     tailKey: transcriptTailKey,
@@ -4974,6 +4975,65 @@ export default function ChatView({
       showScrollDebouncer.current.maybeExecute();
     }
   }, []);
+  const onTranscriptTailLayoutSettled = useCallback(
+    (tail: MessagesTimelineTailLayout) => {
+      const scrollContainer = legendListRef.current?.getScrollableNode?.();
+      if (!(scrollContainer instanceof HTMLElement)) {
+        return;
+      }
+
+      const scrollRect = scrollContainer.getBoundingClientRect();
+      const composerTop = composerFormRef.current?.getBoundingClientRect().top;
+      const visibleBottom = Math.min(scrollRect.bottom, composerTop ?? scrollRect.bottom);
+      const tailRect = tail.element?.isConnected
+        ? tail.element.getBoundingClientRect()
+        : null;
+      const tailIsVisible = tailRect !== null && tailRect.bottom <= visibleBottom + 1;
+
+      if (tailIsVisible) {
+        if (isScrollContainerAtEnd(scrollContainer)) {
+          onIsAtEndChange(true);
+        }
+        return;
+      }
+
+      const shouldFollowPendingTurn =
+        activeThread?.id !== undefined && autoFollowThreadIdRef.current === activeThread.id;
+      const postSendMessageId = postSendWorkingTailMessageIdRef.current;
+      // Work rows remain excluded from generic transcript auto-follow. The initial
+      // Working row is different: it completes the explicit send transition before
+      // any assistant text exists, so keep that exact optimistic user message pinned.
+      const shouldFollowPostSendWorkingTail =
+        tail.kind === "working" &&
+        shouldFollowPendingTurn &&
+        postSendMessageId !== null &&
+        Array.from(scrollContainer.querySelectorAll<HTMLElement>("[data-message-id]")).some(
+          (element) => element.dataset.messageId === postSendMessageId,
+        );
+      if (
+        (tail.kind === "message" && (isAtEndRef.current || shouldFollowPendingTurn)) ||
+        shouldFollowPostSendWorkingTail
+      ) {
+        if (shouldFollowPostSendWorkingTail) {
+          postSendWorkingTailMessageIdRef.current = null;
+        }
+        isAtEndRef.current = true;
+        showScrollDebouncer.current.cancel();
+        setShowScrollToBottom(false);
+        scrollToEnd(false);
+        return;
+      }
+
+      // Tool/status rows are intentionally not auto-follow content. Once one exceeds
+      // the visible transcript boundary, expose the escape hatch immediately instead
+      // of waiting for the virtualizer's broader near-end threshold or debounce.
+      // This is a layout overflow, not evidence that the user scrolled away. Keep
+      // the follow intent so the next real transcript message can still re-stick.
+      showScrollDebouncer.current.cancel();
+      setShowScrollToBottom(true);
+    },
+    [activeThread?.id, onIsAtEndChange, scrollToEnd],
+  );
   const cancelPendingInteractionAnchorAdjustment = useCallback(() => {
     const pendingFrame = pendingInteractionAnchorFrameRef.current;
     if (pendingFrame === null) return;
@@ -5040,10 +5100,13 @@ export default function ChatView({
     }
     // Re-apply the bottom stick only for real transcript messages; tool/work
     // rows can arrive quickly and should not churn scroll/layout work.
+    showScrollDebouncer.current.cancel();
+    setShowScrollToBottom(false);
     const frameId = window.requestAnimationFrame(() => {
-      const shouldAnimate = animateNextAutoFollowScrollRef.current;
-      animateNextAutoFollowScrollRef.current = false;
-      scrollToEnd(shouldAnimate);
+      // Transcript and composer geometry can both change during a send. A native
+      // smooth animation keeps an obsolete target while those heights settle and can
+      // strand the viewport on an older turn, so automatic follow is always immediate.
+      scrollToEnd(false);
     });
     return () => {
       window.cancelAnimationFrame(frameId);
@@ -5252,8 +5315,6 @@ export default function ChatView({
     if (!composerForm) return;
 
     let previousHeight = composerForm.getBoundingClientRect().height;
-    let previousStackedPanelsHeight =
-      composerStackedPanelsRef.current?.getBoundingClientRect().height ?? 0;
     let pendingScrollTimeout: number | null = null;
     const observer = new ResizeObserver((entries) => {
       const [entry] = entries;
@@ -5261,30 +5322,15 @@ export default function ChatView({
 
       const nextHeight = entry.contentRect.height;
       const heightDelta = nextHeight - previousHeight;
-      const nextStackedPanelsHeight =
-        composerStackedPanelsRef.current?.getBoundingClientRect().height ?? 0;
-      const stackedPanelsHeightChanged =
-        Math.abs(nextStackedPanelsHeight - previousStackedPanelsHeight) >= 0.5;
-      const preserveTaskBannerTail =
-        stackedPanelsHeightChanged && preserveTailForNextTaskBannerResizeRef.current;
       previousHeight = nextHeight;
-      previousStackedPanelsHeight = nextStackedPanelsHeight;
-      if (stackedPanelsHeightChanged) {
-        preserveTailForNextTaskBannerResizeRef.current = false;
-      }
       if (Math.abs(heightDelta) < 0.5) return;
 
-      // Task/tool/approval chrome is not transcript output. Let it resize the
-      // viewport without pulling the conversation upward; only intrinsic
-      // composer resizes (for example a growing draft) preserve a tail stick.
-      // A deliberate task-banner toggle is the exception: keep the tail visible
-      // while honoring the user's own expand/collapse action.
-      if (stackedPanelsHeightChanged && !preserveTaskBannerTail) return;
-
       const scrollContainer = legendListRef.current?.getScrollableNode?.();
-      // A composer resize can make LegendList report `isAtEnd: false` after the viewport
-      // has already changed. Reconstruct the pre-resize viewport so only an existing
-      // tail stick is preserved; a user who was already scrolled away stays there.
+      // Composer panels (tasks, approvals, and queued work) are not transcript output,
+      // but they can shrink the viewport enough to cover the final transcript row. A
+      // resize can make LegendList report `isAtEnd: false` after that has already happened,
+      // so reconstruct the pre-resize viewport: preserve an existing tail stick without
+      // pulling a user who was deliberately reading older content back to the bottom.
       const wasNearEndBeforeResize =
         scrollContainer instanceof HTMLElement &&
         isScrollContainerNearBottom({
@@ -7274,7 +7320,7 @@ export default function ChatView({
           setComposerDraftPrompt(activeThread.id, leftover);
           setComposerTrigger(null);
           // Bring the new question into view even if the user had scrolled up.
-          armTranscriptAutoFollow(activeThread.id, true);
+          armTranscriptAutoFollow(activeThread.id);
           setPendingAutomationConversation({
             threadId: activeThread.id,
             accumulatedMessage: automationRequest.automationMessage,
@@ -7793,7 +7839,7 @@ export default function ChatView({
     ]);
     // Mark the transcript as anchored before the optimistic row lands so the
     // re-snap effect on row count change pulls us to the new tail.
-    armTranscriptAutoFollow(threadIdForSend, true);
+    armTranscriptAutoFollow(threadIdForSend, messageIdForSend);
 
     setThreadError(threadIdForSend, null);
     if (expiredTerminalContextCount > 0) {
@@ -8468,7 +8514,7 @@ export default function ChatView({
         source: "native",
       },
     ]);
-    armTranscriptAutoFollow(threadIdForSend, true);
+    armTranscriptAutoFollow(threadIdForSend, messageIdForSend);
 
     // Nested function so the `try` body holds no value blocks — see the comment on
     // `deleteEmptyTerminalThread` above for why React Compiler requires this shape.
@@ -11593,6 +11639,7 @@ export default function ChatView({
                     onExpandTimelineImage={onExpandTimelineImage}
                     followLiveOutput={hasStreamingAssistantText}
                     onIsAtEndChange={onIsAtEndChange}
+                    onTailLayoutSettled={onTranscriptTailLayoutSettled}
                     markdownCwd={threadWorkspaceCwd ?? undefined}
                     resolvedTheme={resolvedTheme}
                     chatFontSizePx={settings.chatFontSizePx}

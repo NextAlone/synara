@@ -1,4 +1,5 @@
 export const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 64;
+export const SCROLL_END_EPSILON_PX = 1;
 
 interface ScrollPosition {
   scrollTop: number;
@@ -24,4 +25,19 @@ export function isScrollContainerNearBottom(
     : AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
 
   return getScrollContainerDistanceFromBottom(position) <= threshold;
+}
+
+/**
+ * Unlike the auto-follow threshold, this is for visual tail geometry: a tail
+ * that has not reached the physical end can still sit behind the composer.
+ */
+export function isScrollContainerAtEnd(
+  position: ScrollPosition,
+  epsilonPx = SCROLL_END_EPSILON_PX,
+): boolean {
+  const epsilon = Number.isFinite(epsilonPx)
+    ? Math.max(0, epsilonPx)
+    : SCROLL_END_EPSILON_PX;
+
+  return getScrollContainerDistanceFromBottom(position) <= epsilon;
 }

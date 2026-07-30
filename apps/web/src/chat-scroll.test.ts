@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
   getScrollContainerDistanceFromBottom,
+  isScrollContainerAtEnd,
   isScrollContainerNearBottom,
 } from "./chat-scroll";
 
@@ -91,5 +92,27 @@ describe("isScrollContainerNearBottom", () => {
       ),
     ).toBe(true);
     expect(AUTO_SCROLL_BOTTOM_THRESHOLD_PX).toBe(64);
+  });
+});
+
+describe("isScrollContainerAtEnd", () => {
+  it("does not treat the broader auto-follow threshold as the physical end", () => {
+    expect(
+      isScrollContainerAtEnd({
+        scrollTop: 540,
+        clientHeight: 400,
+        scrollHeight: 1_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts sub-pixel layout rounding at the physical end", () => {
+    expect(
+      isScrollContainerAtEnd({
+        scrollTop: 599.5,
+        clientHeight: 400,
+        scrollHeight: 1_000,
+      }),
+    ).toBe(true);
   });
 });
