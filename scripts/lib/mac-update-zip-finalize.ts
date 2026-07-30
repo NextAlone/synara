@@ -51,7 +51,7 @@ function readDirectoryEntries(path: string): string[] {
   }
 }
 
-function findFirstMacAppBundle(root: string): string | null {
+export function findFirstMacAppBundle(root: string): string | null {
   const pending = [root];
   while (pending.length > 0) {
     const current = pending.shift();

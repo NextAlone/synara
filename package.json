@@ -49,6 +49,8 @@
     "dist:desktop:dmg": "node scripts/build-desktop-artifact.ts --platform mac --target dmg",
     "dist:desktop:dmg:arm64": "node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64",
     "dist:desktop:dmg:x64": "node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch x64",
+    "dist:desktop:app:arm64": "node scripts/build-desktop-artifact.ts --platform mac --target dir --arch arm64 --output-dir release/mac-arm64",
+    "install:desktop:arm64:fast": "node scripts/install-desktop-mac-arm64-fast.ts",
     "dist:desktop:linux": "node scripts/build-desktop-artifact.ts --platform linux --target AppImage --arch x64",
     "dist:desktop:win": "node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64",
     "release:smoke": "node scripts/release-smoke.ts",

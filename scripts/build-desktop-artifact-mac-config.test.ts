@@ -63,6 +63,17 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.deepStrictEqual(config.dmg, { sign: false, writeUpdateInfo: false });
   });
 
+  it("builds an unpacked app directory without DMG or update ZIP targets", () => {
+    const config = createDesktopPlatformBuildConfig({
+      platform: "mac",
+      target: "dir",
+      signed: false,
+    });
+    const mac = config.mac as Record<string, unknown>;
+
+    assert.deepStrictEqual(mac.target, ["dir"]);
+  });
+
   it("leaves non-macOS platform configs unchanged", () => {
     const linux = createDesktopPlatformBuildConfig({
       platform: "linux",

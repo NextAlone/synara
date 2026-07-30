@@ -23,7 +23,8 @@ import {
 import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
 import { finalizeSignedMacDmg } from "./lib/mac-dmg-finalize.ts";
-import { finalizeMacUpdateZip } from "./lib/mac-update-zip-finalize.ts";
+import { copyMacAppBundle } from "./lib/mac-app-bundle.ts";
+import { finalizeMacUpdateZip, findFirstMacAppBundle } from "./lib/mac-update-zip-finalize.ts";
 import {
   RELEASE_LOCKFILE_PATH,
   RELEASE_PATCHES_PATH,
@@ -1098,12 +1099,20 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     `[desktop-artifact] Building ${options.platform}/${options.target} (arch=${options.arch}, version=${appVersion})...`,
   );
   const electronBuilderCliPath = requireFromScriptsWorkspace.resolve("electron-builder/cli.js");
+  const electronBuilderArgs = [
+    electronBuilderCliPath,
+    platformConfig.cliFlag,
+    `--${options.arch}`,
+    ...(options.target === "dir" ? ["--dir"] : []),
+    "--publish",
+    "never",
+  ];
   yield* runCommand(
-    ChildProcess.make({
+    ChildProcess.make(process.execPath, electronBuilderArgs, {
       cwd: stageAppDir,
       env: buildEnv,
       ...commandOutputOptions(options.verbose),
-    })`${process.execPath} ${electronBuilderCliPath} ${platformConfig.cliFlag} --${options.arch} --publish never`,
+    }),
   );
 
   const stageDistDir = path.join(stageAppDir, "dist");
@@ -1135,7 +1144,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     );
   }
 
-  if (options.platform === "mac") {
+  if (options.platform === "mac" && options.target === "dmg") {
     yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
     const finalizedZip = yield* Effect.tryPromise({
       try: () =>
@@ -1167,18 +1176,41 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.makeDirectory(options.outputDir, { recursive: true });
 
   const copiedArtifacts: string[] = [];
-  for (const entry of stageEntries) {
-    const from = path.join(stageDistDir, entry);
-    const stat = yield* fs.stat(from).pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!stat || stat.type !== "File") continue;
+  if (options.platform === "mac" && options.target === "dir") {
+    const appBundlePath = findFirstMacAppBundle(stageDistDir);
+    if (!appBundlePath) {
+      return yield* new BuildScriptError({
+        message: `Build completed but no macOS app bundle was found in ${stageDistDir}`,
+      });
+    }
 
-    const outputEntry =
-      options.platform === "mac" && options.arch !== "arm64" && entry === "latest-mac.yml"
-        ? `latest-mac-${options.arch}.yml`
-        : entry;
-    const to = path.join(options.outputDir, outputEntry);
-    yield* fs.copyFile(from, to);
-    copiedArtifacts.push(to);
+    const outputAppPath = path.join(options.outputDir, path.basename(appBundlePath));
+    if (yield* fs.exists(outputAppPath)) {
+      yield* fs.remove(outputAppPath, { recursive: true });
+    }
+    yield* Effect.try({
+      try: () => copyMacAppBundle(appBundlePath, outputAppPath),
+      catch: (cause) =>
+        new BuildScriptError({
+          message: `Could not copy macOS app bundle to ${outputAppPath}.`,
+          cause,
+        }),
+    });
+    copiedArtifacts.push(outputAppPath);
+  } else {
+    for (const entry of stageEntries) {
+      const from = path.join(stageDistDir, entry);
+      const stat = yield* fs.stat(from).pipe(Effect.catch(() => Effect.succeed(null)));
+      if (!stat || stat.type !== "File") continue;
+
+      const outputEntry =
+        options.platform === "mac" && options.arch !== "arm64" && entry === "latest-mac.yml"
+          ? `latest-mac-${options.arch}.yml`
+          : entry;
+      const to = path.join(options.outputDir, outputEntry);
+      yield* fs.copyFile(from, to);
+      copiedArtifacts.push(to);
+    }
   }
 
   if (copiedArtifacts.length === 0) {
