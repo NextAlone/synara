@@ -36,6 +36,21 @@ bun install
 bun run dev
 ```
 
+### Local macOS desktop install (Apple Silicon)
+
+Use the fast path when you need to exercise the packaged app instead of the HMR development
+runtime:
+
+```sh
+bun run install:desktop:arm64:fast
+```
+
+It builds only `release/mac-arm64/Synara.app` and replaces `/Applications/Synara.app` through a
+staged local swap. It does not quit a running Synara process. After it finishes, quit and relaunch
+Synara yourself to run the new build. It intentionally skips the DMG, macOS update ZIP, and updater
+metadata. This is an unsigned developer install, not a replacement for a release artifact or updater
+validation. See the [release checklist](docs/release.md) for that path.
+
 ## Privacy
 
 Synara runs as the workspace layer on your machine. There is no Synara cloud holding your repositories, chats, or project history.

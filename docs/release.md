@@ -2,6 +2,26 @@
 
 This document covers build-only native validation and publishing desktop releases from one tag.
 
+## Local macOS app-only install
+
+For fast local packaged-app verification on Apple Silicon, use:
+
+```sh
+bun run install:desktop:arm64:fast
+```
+
+The command builds only the unpacked `release/mac-arm64/Synara.app`, then replaces
+`/Applications/Synara.app` through a staged local swap. To build the app without installing it, run:
+
+```sh
+bun run dist:desktop:app:arm64
+```
+
+This developer path intentionally skips the DMG, macOS update ZIP, updater metadata, signing, and
+notarization. It does not send a quit request to a running Synara process; after installation, quit
+and relaunch Synara yourself to use the new bundle. It does not validate a release artifact and must
+not be used to prepare files for publication; use the native release workflow below for those checks.
+
 ## What the workflow does
 
 - Triggers:
