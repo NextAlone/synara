@@ -1531,6 +1531,7 @@ export default function ChatView({
     top: number;
   } | null>(null);
   const pendingInteractionAnchorFrameRef = useRef<number | null>(null);
+  const pendingComposerResizeScrollTimeoutRef = useRef<number | null>(null);
   const showScrollDebouncer = useRef(
     new Debouncer(() => setShowScrollToBottom(true), { wait: 150 }),
   );
@@ -4927,7 +4928,18 @@ export default function ChatView({
     // Native smooth scrolling can outlive several virtual-list measurement frames.
     // Keep its transient non-end events from cancelling the explicit follow intent.
     programmaticScrollUntilRef.current = performance.now() + (animated ? 1_000 : 200);
-    legendListRef.current?.scrollToEnd?.({ animated });
+    const list = legendListRef.current;
+    const scrollContainer = list?.getScrollableNode?.();
+    if (scrollContainer instanceof HTMLElement) {
+      // LegendList's item end excludes ListFooterComponent. Use the physical
+      // scroll extent so a short viewport also consumes the tail clearance.
+      scrollContainer.scrollTo({
+        top: scrollContainer.scrollHeight,
+        behavior: animated ? "smooth" : "auto",
+      });
+      return;
+    }
+    list?.scrollToEnd?.({ animated });
   }, []);
   const armTranscriptAutoFollow = useCallback(
     (targetThreadId: ThreadId, postSendMessageId: MessageId | null = null) => {
@@ -4942,6 +4954,11 @@ export default function ChatView({
   const clearTranscriptAutoFollow = useCallback(() => {
     autoFollowThreadIdRef.current = null;
     postSendWorkingTailMessageIdRef.current = null;
+    const pendingComposerResizeScrollTimeout = pendingComposerResizeScrollTimeoutRef.current;
+    if (pendingComposerResizeScrollTimeout !== null) {
+      window.clearTimeout(pendingComposerResizeScrollTimeout);
+      pendingComposerResizeScrollTimeoutRef.current = null;
+    }
     // User input must win over the short post-programmatic-scroll guard, otherwise
     // the next reflow can mistake an intentional upward scroll for an auto-scroll.
     programmaticScrollUntilRef.current = 0;
@@ -5315,7 +5332,6 @@ export default function ChatView({
     if (!composerForm) return;
 
     let previousHeight = composerForm.getBoundingClientRect().height;
-    let pendingScrollTimeout: number | null = null;
     const observer = new ResizeObserver((entries) => {
       const [entry] = entries;
       if (!entry) return;
@@ -5340,11 +5356,12 @@ export default function ChatView({
         });
       if (!wasNearEndBeforeResize) return;
 
+      const pendingScrollTimeout = pendingComposerResizeScrollTimeoutRef.current;
       if (pendingScrollTimeout !== null) {
         window.clearTimeout(pendingScrollTimeout);
       }
-      pendingScrollTimeout = window.setTimeout(() => {
-        pendingScrollTimeout = null;
+      pendingComposerResizeScrollTimeoutRef.current = window.setTimeout(() => {
+        pendingComposerResizeScrollTimeoutRef.current = null;
         scrollToEnd(false);
       }, 0);
     });
@@ -5352,8 +5369,10 @@ export default function ChatView({
     observer.observe(composerForm);
     return () => {
       observer.disconnect();
+      const pendingScrollTimeout = pendingComposerResizeScrollTimeoutRef.current;
       if (pendingScrollTimeout !== null) {
         window.clearTimeout(pendingScrollTimeout);
+        pendingComposerResizeScrollTimeoutRef.current = null;
       }
     };
   }, [

@@ -2443,7 +2443,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       targetText: "auto-follow wiring target",
     });
     const mounted = await mountChatView({
-      viewport: DEFAULT_VIEWPORT,
+      viewport: { ...DEFAULT_VIEWPORT, height: 500 },
       snapshot: currentSnapshot,
     });
     let patchedScrollContainer: HTMLElement | null = null;
@@ -2705,6 +2705,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       // Composer chrome must preserve an existing tail stick, not manufacture one.
       // A user reviewing older content stays put when the task list changes again.
+      scrollContainer.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
       scrollContainer.scrollTop = 0;
       scrollContainer.dispatchEvent(new Event("scroll"));
       await waitForLayout();
@@ -2826,7 +2827,15 @@ describe("ChatView timeline estimator parity (full app)", () => {
             "A late transcript reconciliation must stay in view.",
           );
           expect(scrollToCalls.length).toBeGreaterThan(0);
-          expect(isScrollContainerAtEnd(scrollContainer)).toBe(true);
+          expect(
+            isScrollContainerAtEnd(scrollContainer),
+            `Expected physical end after reconciliation: ${JSON.stringify({
+              scrollTop: scrollContainer.scrollTop,
+              clientHeight: scrollContainer.clientHeight,
+              scrollHeight: scrollContainer.scrollHeight,
+              scrollToCalls,
+            })}`,
+          ).toBe(true);
         },
         { timeout: 4_000, interval: 16 },
       );
