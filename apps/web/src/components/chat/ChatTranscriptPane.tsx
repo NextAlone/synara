@@ -66,6 +66,7 @@ interface ChatTranscriptPaneProps {
   onMessagesTouchMove: TouchEventHandler<HTMLDivElement>;
   onMessagesTouchStart: TouchEventHandler<HTMLDivElement>;
   onMessagesWheel: WheelEventHandler<HTMLDivElement>;
+  onUserScrollIntent: (towardEnd: boolean) => void;
   onIsAtEndChange: (isAtEnd: boolean) => void;
   onTailLayoutSettled?: ComponentProps<typeof MessagesTimeline>["onTailLayoutSettled"];
   onCloseAgentActivityDetail?: () => void;
@@ -124,6 +125,7 @@ export function ChatTranscriptPane({
   onMessagesTouchMove,
   onMessagesTouchStart,
   onMessagesWheel,
+  onUserScrollIntent,
   onIsAtEndChange,
   onTailLayoutSettled,
   onCloseAgentActivityDetail,
@@ -226,6 +228,7 @@ export function ChatTranscriptPane({
             onMessagesTouchStart={onMessagesTouchStart}
             onMessagesTouchMove={onMessagesTouchMove}
             onMessagesTouchEnd={onMessagesTouchEnd}
+            onUserScrollIntent={onUserScrollIntent}
             markdownCwd={markdownCwd}
             resolvedTheme={resolvedTheme}
             chatFontSizePx={chatFontSizePx}

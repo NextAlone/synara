@@ -152,15 +152,17 @@ import {
   type ActiveTrailSnapshot,
   type MessageTrailAnchor,
 } from "./messageTrail.logic";
+import {
+  isScrollContainerNearBottom,
+  TRANSCRIPT_BOTTOM_CLEARANCE_PX,
+} from "../../chat-scroll";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 // Changed-files list in the per-turn card is capped so large turns stay compact;
 // the rest are revealed via an inline "Show more" row.
 const MAX_VISIBLE_CHANGED_FILES = 5;
-// The composer overlaps the transcript by design. The list's own bottom padding
-// supplies most of the clearance, so a small tail shelf keeps the final row visible
-// without leaving an empty card-sized gap when no composer panel is present.
-const BOTTOM_CONTENT_INSET_PX = 16;
+// The composer overlaps the transcript by design. Model that clearance as one
+// measured footer so LegendList's end target and the visible spacer agree.
 const MESSAGE_HOVER_REVEAL_CLASS_NAME =
   "opacity-0 transition-opacity pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto";
 // How long a jumped-to message keeps its highlight tint before fading back out.
@@ -169,9 +171,9 @@ const MARKER_FINE_SCROLL_RETRY_TIMEOUT_MS = 900;
 const MARKER_FINE_SCROLL_MAX_RETRY_FRAMES = 90;
 const MESSAGE_SEND_ENTER_ANIMATION_MS = 180;
 const MESSAGE_SEND_ENTER_CLEANUP_BUFFER_MS = 60;
-// Streaming should follow growth inside the live message row only. Enabling every
-// LegendList trigger also treats composer/todo height changes as new transcript
-// output, which pulls the viewport upward even though no message content arrived.
+// Streaming should follow growth inside the live message row only. Composer/Todo
+// resize follow is owned by ChatView, which can reconstruct the pre-resize viewport
+// and cancel pending work when the user deliberately scrolls away.
 const LIVE_OUTPUT_SCROLL_AT_END = {
   on: { itemLayout: true },
 } as const;
@@ -433,6 +435,7 @@ interface MessagesTimelineProps {
   onMessagesTouchMove?: ComponentProps<typeof LegendList>["onTouchMove"];
   onMessagesTouchStart?: ComponentProps<typeof LegendList>["onTouchStart"];
   onMessagesWheel?: ComponentProps<typeof LegendList>["onWheel"];
+  onUserScrollIntent?: (towardEnd: boolean) => void;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   chatFontSizePx?: number;
@@ -497,6 +500,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onMessagesTouchMove,
   onMessagesTouchStart,
   onMessagesWheel,
+  onUserScrollIntent,
   markdownCwd,
   resolvedTheme,
   chatFontSizePx: chatFontSizePxProp,
@@ -611,9 +615,37 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const resolvedListRef = listRef ?? fallbackListRef;
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const listFooter = useMemo(
-    () => <div aria-hidden="true" style={{ height: BOTTOM_CONTENT_INSET_PX }} />,
+    () => <div aria-hidden="true" style={{ height: TRANSCRIPT_BOTTOM_CLEARANCE_PX }} />,
     [],
   );
+  useLayoutEffect(() => {
+    if (!onUserScrollIntent) {
+      return;
+    }
+    let scrollContainerCleanup: (() => void) | null = null;
+    const attachTimeout = window.setTimeout(() => {
+      const candidate = resolvedListRef.current?.getScrollableNode?.();
+      if (!(candidate instanceof HTMLElement)) {
+        return;
+      }
+      const handlePointerOrTouchIntent = () => onUserScrollIntent(false);
+      const handleWheelIntent = (event: WheelEvent) => onUserScrollIntent(event.deltaY > 0);
+      candidate.addEventListener("pointerdown", handlePointerOrTouchIntent, { passive: true });
+      candidate.addEventListener("touchmove", handlePointerOrTouchIntent, { passive: true });
+      candidate.addEventListener("touchstart", handlePointerOrTouchIntent, { passive: true });
+      candidate.addEventListener("wheel", handleWheelIntent, { passive: true });
+      scrollContainerCleanup = () => {
+        candidate.removeEventListener("pointerdown", handlePointerOrTouchIntent);
+        candidate.removeEventListener("touchmove", handlePointerOrTouchIntent);
+        candidate.removeEventListener("touchstart", handlePointerOrTouchIntent);
+        candidate.removeEventListener("wheel", handleWheelIntent);
+      };
+    }, 0);
+    return () => {
+      window.clearTimeout(attachTimeout);
+      scrollContainerCleanup?.();
+    };
+  }, [onUserScrollIntent, resolvedListRef]);
 
   const presentedWorktreeSetup = useWorktreeSetupPresentation(worktreeSetup);
   const rawRows = useMemo(
@@ -641,6 +673,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const latestMessageRowId = useMemo(() => {
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+      const row = rows[index]!;
+      if (row.kind === "message") {
+        return row.id;
+      }
+    }
+    return null;
+  }, [rows]);
+  const alwaysRenderLatestMessage = useMemo(
+    () => (latestMessageRowId ? { keys: [latestMessageRowId] } : undefined),
+    [latestMessageRowId],
+  );
   const tailLayoutRow = rows.at(-1) ?? null;
   const tailLayoutIndex = rows.length - 1;
   const tailLayoutIndexRef = useRef(tailLayoutIndex);
@@ -652,24 +697,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       return;
     }
 
-    let tailLayoutFrame: number | null = window.requestAnimationFrame(() => {
-      tailLayoutFrame = null;
-      // LegendList applies the measured size of a new tail row in its own frame.
-      // Waiting one frame more lets ChatView reason about final DOM geometry without
-      // calling virtualizer measurement APIs or creating a measure/scroll cycle.
-      tailLayoutFrame = window.requestAnimationFrame(() => {
-        tailLayoutFrame = null;
-        onTailLayoutSettled({
-          kind: tailLayoutRow.kind,
-          element: readLegendListTailElement(resolvedListRef, tailLayoutIndexRef.current),
-        });
+    const tailLayoutFrame = window.requestAnimationFrame(() => {
+      // LegendList 3.3 batches row measurements in the next frame.
+      onTailLayoutSettled({
+        kind: tailLayoutRow.kind,
+        element: readLegendListTailElement(resolvedListRef, tailLayoutIndexRef.current),
       });
     });
 
     return () => {
-      if (tailLayoutFrame !== null) {
-        window.cancelAnimationFrame(tailLayoutFrame);
-      }
+      window.cancelAnimationFrame(tailLayoutFrame);
     };
   }, [onTailLayoutSettled, resolvedListRef, tailLayoutRow]);
   // The newest work group renders its rows inline while the turn is live; every
@@ -932,13 +969,24 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     (event) => {
       onMessagesScroll?.(event);
       const state = readLegendListState(resolvedListRef);
-      if (state) {
+      const scrollContainer = resolvedListRef.current?.getScrollableNode?.();
+      if (scrollContainer instanceof HTMLElement) {
+        onIsAtEndChange?.(isScrollContainerNearBottom(scrollContainer));
+      } else if (state) {
         onIsAtEndChange?.(state.isAtEnd);
+      }
+      if (state) {
         emitTrailHighlightsForViewport(state.start, state.end);
       }
     },
     [emitTrailHighlightsForViewport, onIsAtEndChange, onMessagesScroll, resolvedListRef],
   );
+  const handleListLoad = useCallback(() => {
+    // Unlike initialScrollAtEnd's startup target, this commit-aware request does
+    // not keep re-targeting a user who starts reading history while rows measure.
+    onIsAtEndChange?.(true);
+    scrollLegendListToEnd(resolvedListRef);
+  }, [onIsAtEndChange, resolvedListRef]);
   const handleViewableItemsChanged = useCallback<
     NonNullable<ComponentProps<typeof LegendList>["onViewableItemsChanged"]>
   >(
@@ -2113,6 +2161,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     <div ref={timelineRootRef} className="contents" data-messages-timeline-root="true">
       <LegendList<MessagesTimelineRow>
         ref={resolvedListRef}
+        // A trailing Working row must not recycle the adjacent streaming message
+        // out of the DOM while its text is still growing.
+        alwaysRender={alwaysRenderLatestMessage}
         data={rows}
         keyExtractor={(row) => row.id}
         renderItem={({ item }) => renderRowContent(item)}
@@ -2120,11 +2171,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         // LegendList caches rendered rows, so every local expansion map that changes row content
         // has to be surfaced through extraData.
         extraData={timelineExtraData}
-        initialScrollAtEnd
         maintainScrollAtEnd={followLiveOutput ? LIVE_OUTPUT_SCROLL_AT_END : false}
         maintainScrollAtEndThreshold={0.1}
-        maintainVisibleContentPosition={!followLiveOutput}
+        maintainVisibleContentPosition
         onClickCapture={onMessagesClickCapture}
+        onLoad={handleListLoad}
         onMouseUp={onMessagesMouseUp}
         onPointerCancel={onMessagesPointerCancel}
         onPointerDown={onMessagesPointerDown}
@@ -2140,6 +2191,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         onTouchMove={onMessagesTouchMove}
         onTouchStart={onMessagesTouchStart}
         onWheel={onMessagesWheel}
+        recycleItems={false}
         data-chat-scroll-container="true"
         ListFooterComponent={listFooter}
         // `scroll-fade-b` (vendored shadcn 4.12.0 util in index.css) masks the bottom
@@ -2147,7 +2199,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         // via `animation-timeline: scroll()`, so the fade clears at the live edge and a
         // pinned or non-scrollable transcript stays crisp (no permanent shadow).
         className={cn(
-          "scroll-fade-b h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
+          "scroll-fade-b h-full overflow-x-hidden overscroll-y-contain pt-3 [scrollbar-gutter:stable] sm:pt-4",
           ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
           CHAT_COLUMN_GUTTER_CLASS_NAME,
         )}

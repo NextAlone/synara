@@ -117,7 +117,10 @@ import {
   saveConfirmedCustomBinaryPaths,
 } from "../confirmedCustomBinaryPathStore";
 import { isElectron } from "../env";
-import { isScrollContainerAtEnd, isScrollContainerNearBottom } from "../chat-scroll";
+import {
+  isScrollContainerAtEnd,
+  isScrollContainerNearBottom,
+} from "../chat-scroll";
 import { stripDiffSearchParams } from "../diffRouteSearch";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { ensureHomeChatProject, isHomeChatContainerProject } from "../lib/chatProjects";
@@ -1565,6 +1568,8 @@ export default function ChatView({
   const legendListRef = useRef<LegendListRef | null>(null);
   const timelineControllerRef = useRef<MessagesTimelineController | null>(null);
   const isAtEndRef = useRef(true);
+  const isUserScrollingTowardEndRef = useRef(false);
+  const hasExplicitTranscriptScrollIntentRef = useRef(false);
   const autoFollowThreadIdRef = useRef<ThreadId | null>(null);
   const postSendWorkingTailMessageIdRef = useRef<MessageId | null>(null);
   const pendingInteractionAnchorRef = useRef<{
@@ -1572,7 +1577,6 @@ export default function ChatView({
     top: number;
   } | null>(null);
   const pendingInteractionAnchorFrameRef = useRef<number | null>(null);
-  const pendingComposerResizeScrollTimeoutRef = useRef<number | null>(null);
   const showScrollDebouncer = useRef(
     new Debouncer(() => setShowScrollToBottom(true), { wait: 150 }),
   );
@@ -1602,7 +1606,6 @@ export default function ChatView({
   }, [threadId]);
   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const composerFormRef = useRef<HTMLFormElement>(null);
-  const composerStackedPanelsRef = useRef<HTMLDivElement>(null);
   // Set by whichever mounted GitActionsControl instance (header quick-action or the
   // Environment panel row) last registered — either performs the identical commit &
   // push mutation for this thread's repo, so it doesn't matter which one is "current".
@@ -4970,25 +4973,42 @@ export default function ChatView({
   // Guards isAtEndRef from flipping during reflow-induced scroll events that
   // fire immediately after an explicit scrollToEnd.
   const programmaticScrollUntilRef = useRef(0);
+  const scrollToEndRequestIdRef = useRef(0);
+  const pendingAwayFromEndTimeoutRef = useRef<number | null>(null);
   const scrollToEnd = useCallback((animated = false) => {
     // Native smooth scrolling can outlive several virtual-list measurement frames.
     // Keep its transient non-end events from cancelling the explicit follow intent.
     programmaticScrollUntilRef.current = performance.now() + (animated ? 1_000 : 200);
+    // LegendList 3.3 makes scrollToEnd commit-aware: wait through its batched row
+    // measurements, then let the list mount and target the final row. The request id
+    // lets real user input cancel this before the imperative call can pull the
+    // viewport back down.
+    const requestId = ++scrollToEndRequestIdRef.current;
     const list = legendListRef.current;
-    const scrollContainer = list?.getScrollableNode?.();
-    if (scrollContainer instanceof HTMLElement) {
-      // LegendList's item end excludes ListFooterComponent. Use the physical
-      // scroll extent so a short viewport also consumes the tail clearance.
-      scrollContainer.scrollTo({
-        top: scrollContainer.scrollHeight,
-        behavior: animated ? "smooth" : "auto",
-      });
+    if (!list) {
       return;
     }
-    list?.scrollToEnd?.({ animated });
+    window.setTimeout(() => {
+      window.requestAnimationFrame(() => {
+        if (
+          scrollToEndRequestIdRef.current !== requestId ||
+          legendListRef.current !== list
+        ) {
+          return;
+        }
+        void list.scrollToEnd?.({ animated });
+      });
+    }, 0);
   }, []);
   const armTranscriptAutoFollow = useCallback(
     (targetThreadId: ThreadId, postSendMessageId: MessageId | null = null) => {
+      const pendingAwayFromEndTimeout = pendingAwayFromEndTimeoutRef.current;
+      if (pendingAwayFromEndTimeout !== null) {
+        window.clearTimeout(pendingAwayFromEndTimeout);
+        pendingAwayFromEndTimeoutRef.current = null;
+      }
+      isUserScrollingTowardEndRef.current = false;
+      hasExplicitTranscriptScrollIntentRef.current = false;
       autoFollowThreadIdRef.current = targetThreadId;
       postSendWorkingTailMessageIdRef.current = postSendMessageId;
       isAtEndRef.current = true;
@@ -4998,17 +5018,26 @@ export default function ChatView({
     [],
   );
   const clearTranscriptAutoFollow = useCallback(() => {
+    const pendingAwayFromEndTimeout = pendingAwayFromEndTimeoutRef.current;
+    if (pendingAwayFromEndTimeout !== null) {
+      window.clearTimeout(pendingAwayFromEndTimeout);
+      pendingAwayFromEndTimeoutRef.current = null;
+    }
     autoFollowThreadIdRef.current = null;
     postSendWorkingTailMessageIdRef.current = null;
-    const pendingComposerResizeScrollTimeout = pendingComposerResizeScrollTimeoutRef.current;
-    if (pendingComposerResizeScrollTimeout !== null) {
-      window.clearTimeout(pendingComposerResizeScrollTimeout);
-      pendingComposerResizeScrollTimeoutRef.current = null;
-    }
+    scrollToEndRequestIdRef.current += 1;
     // User input must win over the short post-programmatic-scroll guard, otherwise
     // the next reflow can mistake an intentional upward scroll for an auto-scroll.
     programmaticScrollUntilRef.current = 0;
   }, []);
+  const onTranscriptUserScrollIntent = useCallback(
+    (towardEnd: boolean) => {
+      hasExplicitTranscriptScrollIntentRef.current = true;
+      isUserScrollingTowardEndRef.current = towardEnd;
+      clearTranscriptAutoFollow();
+    },
+    [clearTranscriptAutoFollow],
+  );
   const transcriptMessageCount = useMemo(
     () => timelineEntries.filter((entry) => entry.kind === "message").length,
     [timelineEntries],
@@ -5022,6 +5051,11 @@ export default function ChatView({
     }
     return null;
   }, [timelineEntries]);
+  useEffect(() => {
+    if (latestTranscriptMessage?.role === "assistant") {
+      postSendWorkingTailMessageIdRef.current = null;
+    }
+  }, [latestTranscriptMessage?.id, latestTranscriptMessage?.role]);
   const transcriptTailKey = buildTranscriptTailKey(latestTranscriptMessage);
   const transcriptAutoFollowSignal = buildTranscriptAutoFollowSignal({
     messageCount: transcriptMessageCount,
@@ -5032,10 +5066,36 @@ export default function ChatView({
     if (!isAtEnd && performance.now() < programmaticScrollUntilRef.current) return;
     isAtEndRef.current = isAtEnd;
     if (isAtEnd) {
+      const pendingAwayFromEndTimeout = pendingAwayFromEndTimeoutRef.current;
+      if (pendingAwayFromEndTimeout !== null) {
+        window.clearTimeout(pendingAwayFromEndTimeout);
+        pendingAwayFromEndTimeoutRef.current = null;
+      }
+      if (
+        !hasExplicitTranscriptScrollIntentRef.current ||
+        isUserScrollingTowardEndRef.current
+      ) {
+        hasExplicitTranscriptScrollIntentRef.current = false;
+      }
+      isUserScrollingTowardEndRef.current = false;
       showScrollDebouncer.current.cancel();
       setShowScrollToBottom(false);
     } else {
-      showScrollDebouncer.current.maybeExecute();
+      const pendingAwayFromEndTimeout = pendingAwayFromEndTimeoutRef.current;
+      if (pendingAwayFromEndTimeout !== null) {
+        window.clearTimeout(pendingAwayFromEndTimeout);
+      }
+      pendingAwayFromEndTimeoutRef.current = window.setTimeout(() => {
+        pendingAwayFromEndTimeoutRef.current = null;
+        if (
+          isAtEndRef.current ||
+          performance.now() < programmaticScrollUntilRef.current
+        ) {
+          return;
+        }
+        scrollToEndRequestIdRef.current += 1;
+        showScrollDebouncer.current.maybeExecute();
+      }, 0);
     }
   }, []);
   const onTranscriptTailLayoutSettled = useCallback(
@@ -5069,17 +5129,11 @@ export default function ChatView({
       const shouldFollowPostSendWorkingTail =
         tail.kind === "working" &&
         shouldFollowPendingTurn &&
-        postSendMessageId !== null &&
-        Array.from(scrollContainer.querySelectorAll<HTMLElement>("[data-message-id]")).some(
-          (element) => element.dataset.messageId === postSendMessageId,
-        );
+        postSendMessageId !== null;
       if (
         (tail.kind === "message" && (isAtEndRef.current || shouldFollowPendingTurn)) ||
         shouldFollowPostSendWorkingTail
       ) {
-        if (shouldFollowPostSendWorkingTail) {
-          postSendWorkingTailMessageIdRef.current = null;
-        }
         isAtEndRef.current = true;
         showScrollDebouncer.current.cancel();
         setShowScrollToBottom(false);
@@ -5398,11 +5452,9 @@ export default function ChatView({
       if (Math.abs(heightDelta) < 0.5) return;
 
       const scrollContainer = legendListRef.current?.getScrollableNode?.();
-      // Composer panels (tasks, approvals, and queued work) are not transcript output,
-      // but they can shrink the viewport enough to cover the final transcript row. A
-      // resize can make LegendList report `isAtEnd: false` after that has already happened,
-      // so reconstruct the pre-resize viewport: preserve an existing tail stick without
-      // pulling a user who was deliberately reading older content back to the bottom.
+      // A normal-flow composer resize has already changed clientHeight when its
+      // ResizeObserver fires. Reconstruct the previous viewport so only an existing
+      // tail stick is preserved; LegendList then owns the final, commit-aware target.
       const wasNearEndBeforeResize =
         scrollContainer instanceof HTMLElement &&
         isScrollContainerNearBottom({
@@ -5410,27 +5462,21 @@ export default function ChatView({
           clientHeight: scrollContainer.clientHeight + heightDelta,
           scrollHeight: scrollContainer.scrollHeight,
         });
-      if (!wasNearEndBeforeResize) return;
-
-      const pendingScrollTimeout = pendingComposerResizeScrollTimeoutRef.current;
-      if (pendingScrollTimeout !== null) {
-        window.clearTimeout(pendingScrollTimeout);
-      }
-      pendingComposerResizeScrollTimeoutRef.current = window.setTimeout(() => {
-        pendingComposerResizeScrollTimeoutRef.current = null;
+      // Disclosure animations deliver a series of ResizeObserver entries. Once
+      // the first entry confirms a tail stick, carry that intent through the
+      // animation; explicit wheel/pointer/touch input clears the guard immediately.
+      const isContinuingProgrammaticFollow =
+        performance.now() < programmaticScrollUntilRef.current;
+      if (
+        !hasExplicitTranscriptScrollIntentRef.current &&
+        (wasNearEndBeforeResize || isContinuingProgrammaticFollow)
+      ) {
         scrollToEnd(false);
-      }, 0);
+      }
     });
 
     observer.observe(composerForm);
-    return () => {
-      observer.disconnect();
-      const pendingScrollTimeout = pendingComposerResizeScrollTimeoutRef.current;
-      if (pendingScrollTimeout !== null) {
-        window.clearTimeout(pendingScrollTimeout);
-        pendingComposerResizeScrollTimeoutRef.current = null;
-      }
-    };
+    return () => observer.disconnect();
   }, [
     activeThread?.id,
     isInactiveSplitPane,
@@ -5441,6 +5487,13 @@ export default function ChatView({
 
   useEffect(() => {
     isAtEndRef.current = true;
+    isUserScrollingTowardEndRef.current = false;
+    hasExplicitTranscriptScrollIntentRef.current = false;
+    const pendingAwayFromEndTimeout = pendingAwayFromEndTimeoutRef.current;
+    if (pendingAwayFromEndTimeout !== null) {
+      window.clearTimeout(pendingAwayFromEndTimeout);
+      pendingAwayFromEndTimeoutRef.current = null;
+    }
     showScrollDebouncer.current.cancel();
     // Capture the carried sidebar-open intent synchronously (ref reads/writes stay
     // in render->commit order); defer only the setState so this thread-change reset
@@ -5454,7 +5507,14 @@ export default function ChatView({
       setShowScrollToBottom(false);
       setPlanSidebarOpen(openPlanSidebar);
     }, 0);
-    return () => window.clearTimeout(settle);
+    return () => {
+      window.clearTimeout(settle);
+      const pendingTimeout = pendingAwayFromEndTimeoutRef.current;
+      if (pendingTimeout !== null) {
+        window.clearTimeout(pendingTimeout);
+        pendingAwayFromEndTimeoutRef.current = null;
+      }
+    };
   }, [activeThread?.id]);
 
   useEffect(() => {
@@ -10361,6 +10421,8 @@ export default function ChatView({
   }, []);
   const onScrollToBottom = useCallback(() => {
     isAtEndRef.current = true;
+    isUserScrollingTowardEndRef.current = false;
+    hasExplicitTranscriptScrollIntentRef.current = false;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
     scrollToEnd(true);
@@ -10955,7 +11017,7 @@ export default function ChatView({
           <ComposerColumnFrame>
             {/* A bare wrapper keeps the normal-flow panels' -mb-px seam onto the input shell
                 via margin collapse. */}
-            <div ref={composerStackedPanelsRef}>
+            <div>
               {showComposerLiveChangesHeader ? (
                 <ComposerLiveChangesHeader
                   fileCount={activeTurnLiveDiffState.fileCount}
@@ -11819,6 +11881,7 @@ export default function ChatView({
                     onMessagesTouchStart={onMessagesTouchStart}
                     onMessagesTouchMove={onMessagesTouchMove}
                     onMessagesTouchEnd={onMessagesTouchEnd}
+                    onUserScrollIntent={onTranscriptUserScrollIntent}
                     onOpenAgentActivity={setOpenAgentActivityId}
                     onCloseAgentActivityDetail={() => setOpenAgentActivityId(null)}
                     scrollButtonVisible={showScrollToBottom}
@@ -11833,7 +11896,7 @@ export default function ChatView({
 
                 <div
                   className={cn(
-                    "relative z-10 -mt-5 w-full shrink-0 overflow-visible pt-0 sm:pt-0",
+                    "relative z-10 -mt-3 w-full shrink-0 overflow-visible pt-0 sm:pt-0",
                     ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
                     CHAT_COLUMN_GUTTER_CLASS_NAME,
                     // A trailing BranchToolbar only renders for legacy git threads; otherwise the

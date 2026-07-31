@@ -1,5 +1,6 @@
 export const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 64;
 export const SCROLL_END_EPSILON_PX = 1;
+export const TRANSCRIPT_BOTTOM_CLEARANCE_PX = 24;
 
 interface ScrollPosition {
   scrollTop: number;

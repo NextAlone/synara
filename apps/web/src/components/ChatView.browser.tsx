@@ -1747,7 +1747,18 @@ async function measureUserRow(options: {
       expect(measuredRow, "Unable to measure targeted user row height.").toBeTruthy();
       timelineWidthMeasuredPx = measuredRow!.getBoundingClientRect().width;
       measuredRowHeightPx = measuredRow!.getBoundingClientRect().height;
-      renderedInVirtualizedRegion = measuredRow!.closest("[data-index]") instanceof HTMLElement;
+      const contentContainer = measuredRow!.closest(".legend-list-content-container");
+      let ancestor = measuredRow!.parentElement;
+      let hasPositionedContainer = false;
+      while (ancestor && ancestor !== contentContainer) {
+        if (window.getComputedStyle(ancestor).position === "absolute") {
+          hasPositionedContainer = true;
+          break;
+        }
+        ancestor = ancestor.parentElement;
+      }
+      renderedInVirtualizedRegion =
+        contentContainer instanceof HTMLElement && hasPositionedContainer;
       expect(timelineWidthMeasuredPx, "Unable to measure timeline width.").toBeGreaterThan(0);
       expect(measuredRowHeightPx, "Unable to measure targeted user row height.").toBeGreaterThan(0);
     },
@@ -2427,9 +2438,17 @@ describe("ChatView timeline estimator parity (full app)", () => {
           );
           expect(workingRow, "Unable to find the post-send Working row.").toBeTruthy();
           expect(composerForm, "Unable to find the post-send composer.").toBeTruthy();
-          expect(workingRow!.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-            composerForm!.getBoundingClientRect().top + 1,
-          );
+          expect(
+            workingRow!.getBoundingClientRect().bottom,
+            `Expected Working row above composer after send: ${JSON.stringify({
+              workingBottom: workingRow!.getBoundingClientRect().bottom,
+              composerTop: composerForm!.getBoundingClientRect().top,
+              scrollTop: scrollContainer.scrollTop,
+              clientHeight: scrollContainer.clientHeight,
+              scrollHeight: scrollContainer.scrollHeight,
+              scrollToCalls,
+            })}`,
+          ).toBeLessThanOrEqual(composerForm!.getBoundingClientRect().top + 1);
           expect(scrollButton?.getAttribute("aria-hidden")).toBe("true");
           expect(scrollToCalls.length).toBeGreaterThan(0);
         },
@@ -2604,10 +2623,22 @@ describe("ChatView timeline estimator parity (full app)", () => {
         timeout: 4_000,
         interval: 16,
       });
-      await vi.waitFor(() => expect(isScrollContainerAtEnd(scrollContainer)).toBe(true), {
-        timeout: 4_000,
-        interval: 16,
-      });
+      await vi.waitFor(
+        () =>
+          expect(
+            isScrollContainerAtEnd(scrollContainer),
+            `Expected physical end after live assistant append: ${JSON.stringify({
+              scrollTop: scrollContainer.scrollTop,
+              clientHeight: scrollContainer.clientHeight,
+              scrollHeight: scrollContainer.scrollHeight,
+              scrollToCalls,
+            })}`,
+          ).toBe(true),
+        {
+          timeout: 4_000,
+          interval: 16,
+        },
+      );
 
       scrollContainer.scrollTop = scrollContainer.scrollHeight;
       scrollContainer.dispatchEvent(new Event("scroll"));
@@ -2656,7 +2687,17 @@ describe("ChatView timeline estimator parity (full app)", () => {
               : latest;
           }, null);
 
-          expect(scrollToCalls.length).toBeGreaterThan(0);
+          expect(
+            scrollToCalls.length,
+            `Expected Todo resize to re-stick the transcript: ${JSON.stringify({
+              scrollTop: scrollContainer.scrollTop,
+              clientHeight: scrollContainer.clientHeight,
+              scrollHeight: scrollContainer.scrollHeight,
+              distanceFromBottom: getScrollContainerDistanceFromBottom(scrollContainer),
+              finalRowBottom: finalTranscriptRow?.getBoundingClientRect().bottom,
+              taskListTop: taskListCard?.getBoundingClientRect().top,
+            })}`,
+          ).toBeGreaterThan(0);
           expect(isScrollContainerAtEnd(scrollContainer)).toBe(true);
           expect(taskListCard, "Unable to find active task-list card.").toBeTruthy();
           expect(finalTranscriptRow, "Unable to find final transcript row.").toBeTruthy();
@@ -2755,9 +2796,19 @@ describe("ChatView timeline estimator parity (full app)", () => {
         Math.abs(scrollContainer.scrollTop - scrollTopBeforeAwayTaskListUpdate),
       ).toBeLessThanOrEqual(1);
 
-      scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      scrollContainer.dispatchEvent(new Event("scroll"));
-      await waitForLayout();
+      const scrollToBottomButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Scroll to bottom"]'),
+        "Unable to find the scroll-to-bottom button after reviewing history.",
+      );
+      scrollToBottomButton.click();
+      await vi.waitFor(
+        () => {
+          expect(isScrollContainerAtEnd(scrollContainer)).toBe(true);
+          expect(document.body.textContent).toContain(liveAssistantMessage.text);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
       scrollToCalls.length = 0;
       const streamedTailText = [
         liveAssistantMessage.text,
@@ -6536,7 +6587,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
         targetText: "idle composer clearance target",
       }),
     });
-    const maxIdleComposerClearancePx = 24;
+    const minIdleComposerClearancePx = 8;
+    const maxIdleComposerClearancePx = 20;
 
     try {
       const scrollContainer = await waitForElement(
@@ -6572,7 +6624,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
             composerShell.getBoundingClientRect().top - finalTranscriptRow!.getBoundingClientRect().bottom;
 
           expect(isScrollContainerAtEnd(scrollContainer)).toBe(true);
-          expect(clearancePx, "Final transcript row must stay clear of the composer.").toBeGreaterThanOrEqual(-1);
+          expect(
+            clearancePx,
+            "Idle composer must retain a visible Codex-like gap after the transcript tail.",
+          ).toBeGreaterThanOrEqual(minIdleComposerClearancePx);
           expect(
             clearancePx,
             "Idle composer must not leave a large empty tail after the last transcript row.",
@@ -6650,8 +6705,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
             measured = readStackLayout();
             expect(
               measured.distanceFromBottomPx,
-              `${phase}: transcript must stay at the end`,
-            ).toBeLessThanOrEqual(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);
+              `${phase}: transcript must reach the physical end`,
+            ).toBeLessThanOrEqual(1);
             expect(
               measured.gapPx,
               `${phase}: final row must not be obscured`,
@@ -6682,7 +6737,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
       });
       const collapsed = await waitForBoundedGap("collapsed");
       expect(collapsed.taskCardHeightPx).toBeLessThan(expanded.taskCardHeightPx - 20);
-      expect(Math.abs(collapsed.gapPx - expanded.gapPx)).toBeLessThanOrEqual(8);
+      expect(
+        Math.abs(collapsed.gapPx - expanded.gapPx),
+        `Expected collapsed gap to match initial expanded gap: ${JSON.stringify({
+          expanded,
+          collapsed,
+        })}`,
+      ).toBeLessThanOrEqual(8);
 
       const expandButton = await waitForElement(
         () => document.querySelector<HTMLButtonElement>('button[aria-label="Expand task banner"]'),
@@ -6696,7 +6757,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
       });
       const reexpanded = await waitForBoundedGap("re-expanded");
       expect(reexpanded.taskCardHeightPx).toBeGreaterThan(collapsed.taskCardHeightPx + 20);
-      expect(Math.abs(reexpanded.gapPx - expanded.gapPx)).toBeLessThanOrEqual(8);
+      expect(
+        Math.abs(reexpanded.gapPx - expanded.gapPx),
+        `Expected re-expanded gap to match initial expanded gap: ${JSON.stringify({
+          expanded,
+          reexpanded,
+        })}`,
+      ).toBeLessThanOrEqual(8);
 
       const finalCollapseButton = await waitForElement(
         () =>
@@ -6712,6 +6779,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         expect(readStackLayout().taskCardHeightPx).toBeLessThan(expanded.taskCardHeightPx - 20);
       });
 
+      scrollContainer.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
       scrollContainer.scrollTop = 0;
       scrollContainer.dispatchEvent(new Event("scroll"));
       await vi.waitFor(() => {
@@ -6730,9 +6798,17 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 4_000, interval: 16 },
       );
       await waitForLayout();
-      expect(readStackLayout().distanceFromBottomPx).toBeGreaterThan(
-        AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
-      );
+      const awayAfterExpansion = readStackLayout();
+      expect(
+        awayAfterExpansion.distanceFromBottomPx,
+        `Expected expanded Todo to preserve the history position: ${JSON.stringify({
+          awayAfterExpansion,
+          scrollTop: scrollContainer.scrollTop,
+          clientHeight: scrollContainer.clientHeight,
+          scrollHeight: scrollContainer.scrollHeight,
+          scrollTopBeforeExpansion,
+        })}`,
+      ).toBeGreaterThan(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);
       await waitForLayout();
       expect(readStackLayout().distanceFromBottomPx).toBeGreaterThan(
         AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
