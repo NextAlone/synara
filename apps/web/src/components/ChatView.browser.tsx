@@ -2752,6 +2752,49 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       expect(scrollContainer.scrollTop).toBeGreaterThan(scrollTopBeforeTaskListGrowth);
 
+      // A live work group grows immediately before the stable trailing Working row.
+      // It must expose the tail control when it overflows, without treating tool-only
+      // activity as assistant output and silently pulling the viewport down.
+      scrollToCalls.length = 0;
+      const toolOnlyActivityText = "Inspect scroll tail after tasks";
+      syncActiveThread((thread) => ({
+        ...thread,
+        activities: [
+          ...thread.activities,
+          {
+            id: EventId.makeUnsafe("activity-auto-follow-tool-after-tasks"),
+            createdAt: isoAt(1_208 + 0.25),
+            kind: "tool.completed",
+            summary: "work update after Todo",
+            tone: "tool",
+            turnId: activeTurnId,
+            payload: {
+              itemType: "dynamic_tool_call",
+              toolName: "inspect-scroll-tail-after-tasks",
+            },
+          },
+        ],
+        updatedAt: isoAt(1_208 + 0.25),
+      }));
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain(toolOnlyActivityText);
+          const scrollButton = document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Scroll to bottom"]',
+          );
+          expect(scrollButton?.getAttribute("aria-hidden")).toBe("false");
+          expect(scrollToCalls).toHaveLength(0);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await vi.waitFor(() => expect(isScrollContainerAtEnd(scrollContainer)).toBe(true), {
+        timeout: 4_000,
+        interval: 16,
+      });
+
       // Composer chrome must preserve an existing tail stick, not manufacture one.
       // A user reviewing older content stays put when the task list changes again.
       scrollContainer.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));

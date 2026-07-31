@@ -698,7 +698,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
 
     const tailLayoutFrame = window.requestAnimationFrame(() => {
-      // LegendList 3.3 batches row measurements in the next frame.
+      // LegendList 3.3 batches row measurements in the next frame. Re-run when
+      // any visible row changes: the trailing Working row keeps a stable identity
+      // while the live work group immediately before it grows.
       onTailLayoutSettled({
         kind: tailLayoutRow.kind,
         element: readLegendListTailElement(resolvedListRef, tailLayoutIndexRef.current),
@@ -708,7 +710,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     return () => {
       window.cancelAnimationFrame(tailLayoutFrame);
     };
-  }, [onTailLayoutSettled, resolvedListRef, tailLayoutRow]);
+  }, [onTailLayoutSettled, resolvedListRef, rows, tailLayoutRow]);
   // The newest work group renders its rows inline while the turn is live; every
   // older run of tool calls folds into a "Ran N commands..." summary row.
   const lastLiveWorkGroupId = useMemo(() => findLastLiveWorkGroupId(rows), [rows]);
