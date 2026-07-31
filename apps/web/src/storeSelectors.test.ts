@@ -7,6 +7,7 @@ import {
   createAllThreadsSelector,
   createAllThreadsMessagelessSelector,
   createComposerThreadMentionSourcesSelector,
+  createSidebarTreeThreadsSelector,
   createThreadExistsSelector,
   createThreadProjectIdSelector,
   createThreadShellsSelector,
@@ -30,6 +31,18 @@ const summaryA = {
   createdAt: "2026-01-01T00:00:00.000Z",
   latestUserMessageAt: null,
 } as SidebarThreadSummary;
+
+function makeSummary(
+  id: ThreadId,
+  overrides: Partial<SidebarThreadSummary> = {},
+): SidebarThreadSummary {
+  return {
+    ...summaryA,
+    id,
+    title: id,
+    ...overrides,
+  };
+}
 
 interface TestStateSlices {
   threadIds?: readonly ThreadId[];
@@ -119,6 +132,83 @@ describe("createComposerThreadMentionSourcesSelector", () => {
 
     expect(after).toBe(before);
     expect(summaryReads).toBe(readsAfterFirstSelection);
+  });
+});
+
+describe("createSidebarTreeThreadsSelector", () => {
+  it("hides unarchived descendants of an archived thread", () => {
+    const parentId = "thread-parent" as ThreadId;
+    const childId = "thread-child" as ThreadId;
+    const grandchildId = "thread-grandchild" as ThreadId;
+    const visibleRootId = "thread-visible-root" as ThreadId;
+    const threadIds = [parentId, childId, grandchildId, visibleRootId];
+    const selectTreeThreads = createSidebarTreeThreadsSelector();
+
+    const treeThreads = selectTreeThreads(
+      makeState({
+        threadIds,
+        sidebarThreadSummaryById: {
+          [parentId]: makeSummary(parentId, {
+            archivedAt: "2026-07-31T03:55:20.188Z",
+          }),
+          [childId]: makeSummary(childId, { parentThreadId: parentId }),
+          [grandchildId]: makeSummary(grandchildId, { parentThreadId: childId }),
+          [visibleRootId]: makeSummary(visibleRootId),
+        },
+      }),
+    );
+
+    expect(treeThreads.map((thread) => thread.id)).toEqual([visibleRootId]);
+  });
+
+  it("restores an archived thread and its descendants together", () => {
+    const parentId = "thread-parent" as ThreadId;
+    const childId = "thread-child" as ThreadId;
+    const threadIds = [parentId, childId];
+    const selectTreeThreads = createSidebarTreeThreadsSelector();
+
+    expect(
+      selectTreeThreads(
+        makeState({
+          threadIds,
+          sidebarThreadSummaryById: {
+            [parentId]: makeSummary(parentId, {
+              archivedAt: "2026-07-31T03:55:20.188Z",
+            }),
+            [childId]: makeSummary(childId, { parentThreadId: parentId }),
+          },
+        }),
+      ),
+    ).toEqual([]);
+
+    expect(
+      selectTreeThreads(
+        makeState({
+          threadIds,
+          sidebarThreadSummaryById: {
+            [parentId]: makeSummary(parentId, { archivedAt: null }),
+            [childId]: makeSummary(childId, { parentThreadId: parentId }),
+          },
+        }),
+      ).map((thread) => thread.id),
+    ).toEqual([parentId, childId]);
+  });
+
+  it("keeps a child visible when its parent is genuinely missing", () => {
+    const childId = "thread-child" as ThreadId;
+    const missingParentId = "thread-missing-parent" as ThreadId;
+    const selectTreeThreads = createSidebarTreeThreadsSelector();
+
+    expect(
+      selectTreeThreads(
+        makeState({
+          threadIds: [childId],
+          sidebarThreadSummaryById: {
+            [childId]: makeSummary(childId, { parentThreadId: missingParentId }),
+          },
+        }),
+      ).map((thread) => thread.id),
+    ).toEqual([childId]);
   });
 });
 

@@ -20,6 +20,7 @@ import {
 import { toastManager } from "../components/ui/toast";
 import { deleteActiveThreadFromClient } from "../lib/activeThreadDelete";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
+import { collectThreadSubtreeIds } from "../lib/threadHierarchy";
 import { vcsRemoveWorkspaceMutationOptions } from "../lib/vcsReactQuery";
 import {
   archiveThreadFromClient,
@@ -399,12 +400,13 @@ export function useSidebarThreadActions(input: {
 
       pendingThreadIds.add(threadId);
       const runArchive = async (): Promise<boolean> => {
+        const archivedSubtreeThreadIds = collectThreadSubtreeIds(sidebarTreeThreads, [threadId]);
         await archiveThreadFromClient(api.orchestration, threadId);
-        if (routeThreadId === threadId) {
+        if (routeThreadId && archivedSubtreeThreadIds.has(routeThreadId)) {
           const fallbackThreadId = getFallbackThreadIdAfterDelete({
             threads: sidebarTreeThreads,
             deletedThreadId: threadId,
-            deletedThreadIds: new Set<ThreadId>(),
+            deletedThreadIds: archivedSubtreeThreadIds,
             sortOrder: appSettings.sidebarThreadSortOrder,
           });
           if (fallbackThreadId) {

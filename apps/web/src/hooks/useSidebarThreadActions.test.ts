@@ -424,9 +424,47 @@ describe("useSidebarThreadActions", () => {
     sidebarThreads = [activeThread, archivedThread, fallbackThread];
     sidebarTreeThreads = [activeThread, fallbackThread];
 
-    await expect(render({ routeThreadId: THREAD_ID }).archiveThread(THREAD_ID)).resolves.toBe(
-      true,
+    await expect(render({ routeThreadId: THREAD_ID }).archiveThread(THREAD_ID)).resolves.toBe(true);
+
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: FALLBACK_ID }, replace: true }),
     );
+  });
+
+  it("does not navigate an archived parent to one of its subagent children", async () => {
+    const childId = ThreadId.makeUnsafe("thread-child");
+    const activeThread = makeThread(THREAD_ID, { updatedAt: "2026-07-20T00:00:00.000Z" });
+    const childThread = makeThread(childId, {
+      parentThreadId: THREAD_ID,
+      updatedAt: "2026-07-22T00:00:00.000Z",
+    });
+    const fallbackThread = makeThread(FALLBACK_ID, {
+      updatedAt: "2026-07-19T00:00:00.000Z",
+    });
+    sidebarThreads = [activeThread, fallbackThread];
+    sidebarTreeThreads = [activeThread, childThread, fallbackThread];
+
+    await expect(render({ routeThreadId: THREAD_ID }).archiveThread(THREAD_ID)).resolves.toBe(true);
+
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: FALLBACK_ID }, replace: true }),
+    );
+  });
+
+  it("navigates an active subagent away when its parent is archived", async () => {
+    const childId = ThreadId.makeUnsafe("thread-child");
+    const activeThread = makeThread(THREAD_ID, { updatedAt: "2026-07-20T00:00:00.000Z" });
+    const childThread = makeThread(childId, {
+      parentThreadId: THREAD_ID,
+      updatedAt: "2026-07-22T00:00:00.000Z",
+    });
+    const fallbackThread = makeThread(FALLBACK_ID, {
+      updatedAt: "2026-07-19T00:00:00.000Z",
+    });
+    sidebarThreads = [activeThread, fallbackThread];
+    sidebarTreeThreads = [activeThread, childThread, fallbackThread];
+
+    await expect(render({ routeThreadId: childId }).archiveThread(THREAD_ID)).resolves.toBe(true);
 
     expect(harness.navigate).toHaveBeenCalledWith(
       expect.objectContaining({ params: { threadId: FALLBACK_ID }, replace: true }),

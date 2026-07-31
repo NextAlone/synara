@@ -5,6 +5,7 @@
 import type { ProjectId, ThreadEnvironmentMode, ThreadId } from "@synara/contracts";
 
 import type { AppState } from "./storeState";
+import { collectThreadSubtreeIds } from "./lib/threadHierarchy";
 import { resolveThreadDisplayProvider } from "./lib/threadDisplayProvider";
 import { collectByIds, getThreadFromState, getThreadsFromState } from "./threadDerivation";
 import type {
@@ -329,7 +330,13 @@ export function createSidebarTreeThreadsSelector(): (
     }
 
     previousSummaries = sidebarSummaries;
-    previousTreeSummaries = sidebarSummaries.filter((thread) => thread.archivedAt == null);
+    // Archiving a parent hides its whole subagent subtree. Otherwise removing
+    // only the parent promotes each child into a UUID-labelled root row.
+    const hiddenThreadIds = collectThreadSubtreeIds(
+      sidebarSummaries,
+      sidebarSummaries.filter((thread) => thread.archivedAt != null).map((thread) => thread.id),
+    );
+    previousTreeSummaries = sidebarSummaries.filter((thread) => !hiddenThreadIds.has(thread.id));
     return previousTreeSummaries;
   };
 }
