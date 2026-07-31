@@ -36,6 +36,7 @@ import { PullRequestList } from "~/components/pullRequest/PullRequestList";
 import {
   filterPullRequestEntriesByInvolvement,
   groupPullRequestEntriesByInvolvement,
+  matchesPullRequestRepositoryFilter,
   matchesPullRequestSearchQuery,
   orderPullRequestEntriesPinnedFirst,
   pullRequestPinToggleInputs,
@@ -43,6 +44,7 @@ import {
 import {
   PullRequestFilterPillGroup,
   PullRequestProjectFilterPopover,
+  PullRequestRepositoryFilterPopover,
 } from "~/components/pullRequest/PullRequestListFilters";
 import { PullRequestsUnavailableState } from "~/components/pullRequest/PullRequestsUnavailableState";
 import { usePullRequestPaneStateIcon } from "~/components/pullRequest/usePullRequestPaneStateIcon";
@@ -82,6 +84,7 @@ export interface PullRequestsSearch {
   involvement: PullRequestInvolvement;
   state: PullRequestState;
   projectId?: ProjectId;
+  repository?: string;
   selectedProjectId?: ProjectId;
   selectedRepo?: string;
   number?: number;
@@ -92,6 +95,7 @@ interface PullRequestsSearchPatch {
   involvement?: PullRequestInvolvement;
   state?: PullRequestState;
   projectId?: ProjectId | undefined;
+  repository?: string | undefined;
   selectedProjectId?: ProjectId | undefined;
   selectedRepo?: string | undefined;
   number?: number | undefined;
@@ -118,6 +122,10 @@ export const Route = createFileRoute("/_chat/pull-requests/")({
     state: raw.state === "closed" || raw.state === "merged" ? raw.state : "open",
     ...(typeof raw.projectId === "string" && raw.projectId
       ? { projectId: raw.projectId as ProjectId }
+      : {}),
+    ...(typeof raw.repository === "string" &&
+    isValidGitHubRepositoryNameWithOwner(raw.repository)
+      ? { repository: raw.repository.trim() }
       : {}),
     ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
       ? { selectedProjectId: raw.selectedProjectId as ProjectId }
@@ -174,6 +182,7 @@ function PullRequestsRouteView() {
             involvement: next.involvement,
             state: next.state,
             ...(next.projectId ? { projectId: next.projectId } : {}),
+            ...(next.repository ? { repository: next.repository } : {}),
             ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
             ...(next.selectedRepo ? { selectedRepo: next.selectedRepo } : {}),
             ...(next.number ? { number: next.number } : {}),
@@ -195,12 +204,27 @@ function PullRequestsRouteView() {
   const scopedProjectName = search.projectId
     ? repositoryProjects.find(([projectId]) => projectId === search.projectId)?.[1]
     : undefined;
+  const repositoryOptions = useMemo(() => {
+    const repositoriesByKey = new Map<string, string>();
+    for (const batch of listQuery.data?.repositoryBatches ?? []) {
+      const key = batch.repository.toLowerCase();
+      if (!repositoriesByKey.has(key)) repositoriesByKey.set(key, batch.repository);
+    }
+    if (search.repository && !repositoriesByKey.has(search.repository.toLowerCase())) {
+      // Keep a URL-selected repository visible long enough for the user to clear it when the
+      // remote disappeared or its current list request failed.
+      repositoriesByKey.set(search.repository.toLowerCase(), search.repository);
+    }
+    return [...repositoriesByKey.values()].toSorted((left, right) => left.localeCompare(right));
+  }, [listQuery.data?.repositoryBatches, search.repository]);
   // Precise fallback for the filtered tabs: when a repository hit the per-repo entry cap, the
   // client-side involvement filter over the truncated superset can miss older matches, so the
   // active tab additionally fetches the server-filtered list. In the common (untruncated) case
   // this query never runs; the exceptional loading/error states are surfaced explicitly below.
   const supersetTruncated = (listQuery.data?.repositoryBatches ?? []).some(
-    (batch) => batch.truncated,
+    (batch) =>
+      batch.truncated &&
+      matchesPullRequestRepositoryFilter(batch.repository, search.repository),
   );
   const needsExactInvolvement = shouldLoadExactPullRequestInvolvement({
     involvement: search.involvement,
@@ -252,11 +276,22 @@ function PullRequestsRouteView() {
             activeListData?.entries ?? [],
             activeListData?.viewer ?? listQuery.data?.viewer,
             search.involvement,
-          ).filter((entry) => matchesPullRequestSearchQuery(entry, query)),
+          ).filter(
+            (entry) =>
+              matchesPullRequestRepositoryFilter(entry.repository, search.repository) &&
+              matchesPullRequestSearchQuery(entry, query),
+          ),
           { preferredProjectId: search.selectedProjectId },
         ),
       ),
-    [activeListData, listQuery.data?.viewer, query, search.involvement, search.selectedProjectId],
+    [
+      activeListData,
+      listQuery.data?.viewer,
+      query,
+      search.involvement,
+      search.repository,
+      search.selectedProjectId,
+    ],
   );
   const grouped = useMemo(
     () =>
@@ -265,12 +300,14 @@ function PullRequestsRouteView() {
         : null,
     [entries, listQuery.data?.viewer, search.involvement],
   );
-  // A crafted URL must not show Project A's list while opening Project B's PR: when the list
-  // is project-scoped, the selection must belong to that same project.
+  // A crafted URL must not open a PR outside the visible project/repository scope.
   const selectionMatchesScope =
-    search.projectId === undefined ||
-    search.selectedProjectId === undefined ||
-    search.selectedProjectId === search.projectId;
+    (search.projectId === undefined ||
+      search.selectedProjectId === undefined ||
+      search.selectedProjectId === search.projectId) &&
+    (search.repository === undefined ||
+      search.selectedRepo === undefined ||
+      search.selectedRepo.toLowerCase() === search.repository.toLowerCase());
   const selectedInput =
     selectionMatchesScope && search.selectedProjectId && search.selectedRepo && search.number
       ? {
@@ -375,7 +412,11 @@ function PullRequestsRouteView() {
   }, [activeActionCount, listInput, mutateRefresh]);
 
   const truncatedRepositoryCount =
-    activeListData?.repositoryBatches.filter((batch) => batch.truncated).length ?? 0;
+    activeListData?.repositoryBatches.filter(
+      (batch) =>
+        batch.truncated &&
+        matchesPullRequestRepositoryFilter(batch.repository, search.repository),
+    ).length ?? 0;
 
   return (
     <div className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}>
@@ -455,7 +496,16 @@ function PullRequestsRouteView() {
                   <PullRequestProjectFilterPopover
                     projects={repositoryProjects}
                     value={search.projectId}
-                    onChange={(projectId) => updateSearch({ projectId, ...CLEARED_SELECTION })}
+                    onChange={(projectId) =>
+                      updateSearch({ projectId, repository: undefined, ...CLEARED_SELECTION })
+                    }
+                  />
+                  <PullRequestRepositoryFilterPopover
+                    repositories={repositoryOptions}
+                    value={search.repository}
+                    onChange={(repository) =>
+                      updateSearch({ repository, ...CLEARED_SELECTION })
+                    }
                   />
                 </div>
               </div>
@@ -488,7 +538,7 @@ function PullRequestsRouteView() {
                     <EmptyDescription>
                       {search.involvement === "reviewing" && search.state !== "open"
                         ? "Select Open to see pull requests currently awaiting your review."
-                        : "Try another involvement, state, project, or search filter."}
+                        : "Try another involvement, state, project, repository, or search filter."}
                     </EmptyDescription>
                   </EmptyHeader>
                 </Empty>

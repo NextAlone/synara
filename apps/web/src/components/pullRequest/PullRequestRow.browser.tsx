@@ -12,7 +12,10 @@ import { useState } from "react";
 
 import { PullRequestAvatar } from "./PullRequestAvatar";
 import { PullRequestList } from "./PullRequestList";
-import { PullRequestProjectFilterPopover } from "./PullRequestListFilters";
+import {
+  PullRequestProjectFilterPopover,
+  PullRequestRepositoryFilterPopover,
+} from "./PullRequestListFilters";
 import { PullRequestRow } from "./PullRequestRow";
 import { groupPullRequestEntriesByInvolvement } from "./pullRequestList.logic";
 import { focusPullRequestRow, isFocusInsideRightDock } from "./pullRequestFocus";
@@ -289,6 +292,44 @@ describe("PullRequestProjectFilterPopover", () => {
     expect(allProjectsOption?.getAttribute("aria-pressed")).toBe("false");
     // Close the portalled popover before the browser renderer unmounts this test root.
     await page.getByRole("button", { name: "All projects" }).click();
+  });
+});
+
+describe("PullRequestRepositoryFilterPopover", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("announces the selected repository and returns an exact repository choice", async () => {
+    const onChange = vi.fn();
+    await render(
+      <PullRequestRepositoryFilterPopover
+        repositories={["acme/api", "acme/widgets"]}
+        value="acme/widgets"
+        onChange={onChange}
+      />,
+    );
+
+    const trigger = page.getByRole("button", {
+      name: "Filter pull requests by repository: acme/widgets",
+    });
+    expect(trigger).toBeVisible();
+    expect(
+      document
+        .querySelector('button[aria-label="Filter pull requests by repository: acme/widgets"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    await trigger.click();
+    const selectedOption = page.getByRole("button", { name: "acme/widgets", exact: true });
+    expect(selectedOption).toBeVisible();
+    expect(
+      Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.trim() === "acme/widgets")
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    await page.getByRole("button", { name: "acme/api" }).click();
+    expect(onChange).toHaveBeenCalledWith("acme/api");
   });
 });
 

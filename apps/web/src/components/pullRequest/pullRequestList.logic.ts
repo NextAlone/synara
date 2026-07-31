@@ -5,7 +5,7 @@
 //          this classification in the route component itself.
 // Layer: Web domain helpers (no React)
 // Exports: PullRequestListGroupKey, PullRequestListGroup, grouping, pinned ordering,
-//          involvement/search filters, identity, and badge helpers
+//          involvement/repository/search filters, identity, and badge helpers
 
 import type {
   PullRequestInvolvement,
@@ -82,6 +82,18 @@ export function filterPullRequestEntriesByInvolvement(
     );
   }
   return [...entries];
+}
+
+/** Exact repository filter used by the route and its truncation metadata. Repository identity is
+ * case-insensitive on GitHub; an absent selection means the default all-repositories view. */
+export function matchesPullRequestRepositoryFilter(
+  repository: string,
+  selectedRepository: string | undefined,
+): boolean {
+  return (
+    selectedRepository === undefined ||
+    repository.toLowerCase() === selectedRepository.trim().toLowerCase()
+  );
 }
 
 /** Free-text list filter: matches title, repository, head branch, "#123"/"123", and author. */

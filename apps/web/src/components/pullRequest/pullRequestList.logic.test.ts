@@ -6,6 +6,7 @@ import {
   countUniqueViewerReviewRequests,
   filterPullRequestEntriesByInvolvement,
   groupPullRequestEntriesByInvolvement,
+  matchesPullRequestRepositoryFilter,
   matchesPullRequestSearchQuery,
   orderPullRequestEntriesPinnedFirst,
   pullRequestListEntryKey,
@@ -265,6 +266,14 @@ describe("filterPullRequestEntriesByInvolvement", () => {
   it("returns no authored entries when the viewer login is unknown", () => {
     const entry = makeEntry({ author: makeActor("someone") });
     expect(filterPullRequestEntriesByInvolvement([entry], null, "authored")).toEqual([]);
+  });
+});
+
+describe("matchesPullRequestRepositoryFilter", () => {
+  it("defaults to every repository and otherwise matches GitHub identity case-insensitively", () => {
+    expect(matchesPullRequestRepositoryFilter("acme/widgets", undefined)).toBe(true);
+    expect(matchesPullRequestRepositoryFilter("acme/widgets", "Acme/Widgets")).toBe(true);
+    expect(matchesPullRequestRepositoryFilter("acme/widgets", "acme/api")).toBe(false);
   });
 });
 
