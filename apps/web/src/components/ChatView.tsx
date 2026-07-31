@@ -5017,6 +5017,21 @@ export default function ChatView({
     },
     [],
   );
+  const followTranscriptAfterQueuedComposerSend = useCallback(
+    (targetThreadId: ThreadId) => {
+      // Persisting queued image previews can outlive the active thread. Never
+      // scroll whichever transcript happens to be mounted after a switch.
+      if (activeThreadIdRef.current !== targetThreadId) {
+        return;
+      }
+      // A locally queued turn adds composer chrome, not a transcript message, so
+      // the message-count auto-follow signal will not run. The user's explicit
+      // submit still owns the same tail-follow intent as a normal send.
+      armTranscriptAutoFollow(targetThreadId);
+      scrollToEnd(false);
+    },
+    [armTranscriptAutoFollow, scrollToEnd],
+  );
   const clearTranscriptAutoFollow = useCallback(() => {
     const pendingAwayFromEndTimeout = pendingAwayFromEndTimeoutRef.current;
     if (pendingAwayFromEndTimeout !== null) {
@@ -7346,6 +7361,7 @@ export default function ChatView({
             ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
             runtimeMode,
           });
+          followTranscriptAfterQueuedComposerSend(activeThread.id);
           return true;
         }
         clearComposerInput(activeThread.id);
@@ -7640,6 +7656,7 @@ export default function ChatView({
         interactionMode: interactionModeForSend,
         envMode: envModeForSend,
       });
+      followTranscriptAfterQueuedComposerSend(activeThread.id);
       return true;
     }
     const threadIdForSend = activeThread.id;

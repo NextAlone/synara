@@ -4213,12 +4213,33 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => document.querySelector<HTMLFormElement>('form[data-chat-composer-form="true"]'),
         "Unable to find composer form.",
       );
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      scrollContainer.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+      scrollContainer.scrollTop = 0;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await vi.waitFor(() => {
+        expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(
+          AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+        );
+      });
+
       composerForm.requestSubmit();
 
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("queue this follow-up");
           expect(document.body.textContent).toContain("Steer");
+          expect(
+            isScrollContainerAtEnd(scrollContainer),
+            `Expected queued send to restore the physical transcript end: ${JSON.stringify({
+              scrollTop: scrollContainer.scrollTop,
+              clientHeight: scrollContainer.clientHeight,
+              scrollHeight: scrollContainer.scrollHeight,
+            })}`,
+          ).toBe(true);
         },
         { timeout: 8_000, interval: 16 },
       );
