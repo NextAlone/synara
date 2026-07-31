@@ -6,12 +6,14 @@ import {
   type AutomationCreateInput,
   type AutomationDefinition,
   CheckpointRef,
+  DEFAULT_SERVER_SETTINGS_VIEW,
   EventId,
   MessageId,
   ORCHESTRATION_WS_METHODS,
   type OrchestrationReadModel,
   type ProjectId,
   type ServerConfig,
+  type ServerSettingsView,
   SpaceId,
   ThreadId,
   TurnId,
@@ -93,6 +95,7 @@ interface WsRequestEnvelope {
 interface TestFixture {
   snapshot: OrchestrationReadModel;
   serverConfig: ServerConfig;
+  serverSettings: ServerSettingsView;
   welcome: WsWelcomePayload;
   gitBranchByCwd: Record<string, string>;
 }
@@ -442,6 +445,7 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
   return {
     snapshot,
     serverConfig: createBaseServerConfig(),
+    serverSettings: DEFAULT_SERVER_SETTINGS_VIEW,
     gitBranchByCwd: {},
     welcome: {
       cwd: "/repo/project",
@@ -1069,6 +1073,9 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
+  }
+  if (tag === WS_METHODS.serverGetSettings) {
+    return fixture.serverSettings;
   }
   if (tag === WS_METHODS.projectsListDevServers) {
     return { servers: [] };
@@ -1925,6 +1932,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       projectDraftThreadIdByProjectId: {},
       stickyModelSelectionByProvider: {},
       stickyActiveProvider: null,
+      lastSelectedJjWorkspaceBaseByProjectId: {},
     });
     useStore.setState({
       shellSnapshotSequence: 0,
@@ -5576,6 +5584,71 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("reuses the remembered JJ base when a fresh draft defaults to New workspace", async () => {
+    useComposerDraftStore
+      .getState()
+      .setLastSelectedJjWorkspaceBase(PROJECT_ID, "feature/reuse-base");
+    const baseSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-jj-workspace-base-test" as MessageId,
+      targetText: "jj workspace base test",
+    });
+    const snapshot = {
+      ...baseSnapshot,
+      projects: baseSnapshot.projects.map((project) =>
+        project.id === PROJECT_ID
+          ? {
+              ...project,
+              vcs: {
+                ...project.vcs,
+                binding: project.vcs.binding
+                  ? {
+                      ...project.vcs.binding,
+                      backend: "jj" as const,
+                    }
+                  : null,
+              },
+            }
+          : project,
+      ),
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot,
+      configureFixture: (nextFixture) => {
+        nextFixture.serverSettings = {
+          ...nextFixture.serverSettings,
+          defaultThreadEnvMode: "worktree",
+          vcsBackend: "jj",
+        };
+      },
+    });
+
+    try {
+      const newThreadButton = page.getByTestId("new-thread-button");
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new JJ draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+            envMode: "worktree",
+            branch: "feature/reuse-base",
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("creates a detached worktree on first send in New worktree mode", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
@@ -6209,6 +6282,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       },
       stickyModelSelectionByProvider: {},
       stickyActiveProvider: null,
+      lastSelectedJjWorkspaceBaseByProjectId: {},
     });
 
     const mounted = await mountChatView({

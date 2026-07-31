@@ -4,6 +4,7 @@ import {
   type AssociatedWorktreeMetadata,
 } from "@synara/shared/threadWorkspace";
 import { Schema } from "effect";
+import { normalizeJjWorkspaceBase } from "../lib/jjWorkspaceBase";
 import type { ThreadWorkspacePatch } from "../types";
 
 export const EnvMode = Schema.Literals(["local", "worktree"]);
@@ -50,9 +51,10 @@ export function shouldShowJjChangeDistance(input: {
 export function resolveDefaultWorktreeBaseRef(input: {
   backend: VcsToolbarBackend | null | undefined;
   currentReference: string | null;
+  lastSelectedJjWorkspaceBase?: string | null;
 }): string | null {
   if (input.backend === "jj") {
-    return JJ_WORKTREE_BASE_CURRENT;
+    return normalizeJjWorkspaceBase(input.lastSelectedJjWorkspaceBase) ?? JJ_WORKTREE_BASE_CURRENT;
   }
   return input.currentReference;
 }

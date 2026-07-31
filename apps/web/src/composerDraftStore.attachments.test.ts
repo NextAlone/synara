@@ -2,6 +2,7 @@ import { OrchestrationProposedPlanId, ThreadId } from "@synara/contracts";
 import * as Schema from "effect/Schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pendingComposerAttachmentSyncGenerationCount } from "./composerDraftAttachments";
+import { COMPOSER_DRAFT_STORAGE_VERSION } from "./composerDraftDomain";
 import {
   captureComposerPromptHistorySavedDraft,
   COMPOSER_DRAFT_STORAGE_KEY,
@@ -385,7 +386,7 @@ describe("composerDraftStore prompt history saved draft", () => {
     setLocalStorageItem(
       COMPOSER_DRAFT_STORAGE_KEY,
       {
-        version: 5,
+        version: COMPOSER_DRAFT_STORAGE_VERSION,
         state: {
           draftsByThreadId: {
             [threadId]: {
@@ -779,6 +780,7 @@ describe("composerDraftStore syncPersistedAttachments", () => {
       projectDraftThreadIdByProjectId: {},
       stickyModelSelectionByProvider: {},
       stickyActiveProvider: null,
+      lastSelectedJjWorkspaceBaseByProjectId: {},
     });
   });
 
@@ -962,7 +964,7 @@ describe("composerDraftStore syncPersistedAttachments", () => {
     setLocalStorageItem(
       COMPOSER_DRAFT_STORAGE_KEY,
       {
-        version: 5,
+        version: COMPOSER_DRAFT_STORAGE_VERSION,
         state: {
           draftsByThreadId: {
             [threadId]: {
@@ -1041,7 +1043,7 @@ describe("composerDraftStore syncPersistedAttachments", () => {
     setLocalStorageItem(
       COMPOSER_DRAFT_STORAGE_KEY,
       {
-        version: 5,
+        version: COMPOSER_DRAFT_STORAGE_VERSION,
         state: {
           draftsByThreadId: {
             [threadId]: {

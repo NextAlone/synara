@@ -273,7 +273,14 @@ export function useHandleNewThread() {
         markTemporaryThread(threadId);
       }
       const createdAt = new Date().toISOString();
-      const draftSeed = createFreshDraftThreadSeed({ createdAt, entryPoint, options });
+      const draftSeed = createFreshDraftThreadSeed({
+        createdAt,
+        entryPoint,
+        options,
+        vcsBackend: settings.vcsBackend,
+        lastSelectedJjWorkspaceBase:
+          useComposerDraftStore.getState().lastSelectedJjWorkspaceBaseByProjectId[projectId] ?? null,
+      });
       const committed = await stageDraftNavigation({
         // Keep the previous routed draft alive while the destination loads. Replacing the
         // project's primary slot earlier makes the route guard redirect the old URL to Home.

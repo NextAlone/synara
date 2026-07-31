@@ -292,6 +292,9 @@ export default function BranchToolbar({
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
+  const setLastSelectedJjWorkspaceBase = useComposerDraftStore(
+    (store) => store.setLastSelectedJjWorkspaceBase,
+  );
   const queryClient = useQueryClient();
   const [allThreadsSelector] = useState(() => createAllThreadsSelector());
   const threads = useStore(allThreadsSelector);
@@ -299,6 +302,11 @@ export default function BranchToolbar({
 
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
   const activeProjectId = serverThread?.projectId ?? draftThread?.projectId ?? null;
+  const lastSelectedJjWorkspaceBase = useComposerDraftStore((store) =>
+    activeProjectId
+      ? (store.lastSelectedJjWorkspaceBaseByProjectId[activeProjectId] ?? null)
+      : null,
+  );
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
@@ -316,6 +324,15 @@ export default function BranchToolbar({
   const activeProvider =
     serverThread?.session?.provider ?? serverThread?.modelSelection.provider ?? null;
   const usesFixedLocalWorkspace = fixedLocalWorkspaceCwd !== undefined;
+  const handleJjWorktreeBaseSelected = useCallback(
+    (base: string) => {
+      if (!activeProjectId || usesFixedLocalWorkspace) {
+        return;
+      }
+      setLastSelectedJjWorkspaceBase(activeProjectId, base);
+    },
+    [activeProjectId, setLastSelectedJjWorkspaceBase, usesFixedLocalWorkspace],
+  );
   const branchCwd = usesFixedLocalWorkspace
     ? fixedLocalWorkspaceCwd
     : (activeWorktreePath ?? activeWorkingDirectory ?? activeProject?.cwd ?? null);
@@ -681,6 +698,8 @@ export default function BranchToolbar({
             envLocked={envLocked}
             hasServerThread={hasServerThread}
             onSetThreadWorkspace={setThreadWorkspace}
+            lastSelectedJjWorkspaceBase={lastSelectedJjWorkspaceBase}
+            onJjWorktreeBaseSelected={handleJjWorktreeBaseSelected}
             variant={variant}
             {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
             {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}

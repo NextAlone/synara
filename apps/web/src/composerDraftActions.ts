@@ -59,6 +59,7 @@ import {
   stripNonStickyModelOptions,
 } from "./composerDraftModels";
 import { isComposerAppSnapCaptureSource } from "./lib/composerImageSource";
+import { normalizeJjWorkspaceBase } from "./lib/jjWorkspaceBase";
 import { ensureInlineTerminalContextPlaceholders } from "./lib/terminalContext";
 import { buildModelSelection } from "./providerModelOptions";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
@@ -111,6 +112,7 @@ export const createComposerDraftStoreState =
     projectDraftThreadIdByProjectId: {},
     stickyModelSelectionByProvider: {},
     stickyActiveProvider: null,
+    lastSelectedJjWorkspaceBaseByProjectId: {},
     getDraftThreadByProjectId: (projectId, entryPoint = "chat") => {
       if (projectId.length === 0) {
         return null;
@@ -491,6 +493,23 @@ export const createComposerDraftStoreState =
         return {
           stickyModelSelectionByProvider: nextMap,
           stickyActiveProvider: normalized.provider,
+        };
+      });
+    },
+    setLastSelectedJjWorkspaceBase: (projectId, base) => {
+      const normalizedBase = normalizeJjWorkspaceBase(base);
+      if (projectId.length === 0 || normalizedBase === null) {
+        return;
+      }
+      set((state) => {
+        if (state.lastSelectedJjWorkspaceBaseByProjectId[projectId] === normalizedBase) {
+          return state;
+        }
+        return {
+          lastSelectedJjWorkspaceBaseByProjectId: {
+            ...state.lastSelectedJjWorkspaceBaseByProjectId,
+            [projectId]: normalizedBase,
+          },
         };
       });
     },

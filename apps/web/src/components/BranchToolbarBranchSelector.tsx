@@ -108,6 +108,8 @@ interface BranchToolbarBranchSelectorProps {
   envLocked: boolean;
   hasServerThread: boolean;
   onSetThreadWorkspace: (patch: ThreadWorkspacePatch) => void;
+  lastSelectedJjWorkspaceBase?: string | null;
+  onJjWorktreeBaseSelected?: (base: string) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
   variant?: BranchSelectorVariant;
@@ -418,6 +420,8 @@ export function BranchToolbarBranchSelector({
   envLocked,
   hasServerThread,
   onSetThreadWorkspace,
+  lastSelectedJjWorkspaceBase,
+  onJjWorktreeBaseSelected,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
   variant: variantProp,
@@ -647,6 +651,9 @@ export function BranchToolbarBranchSelector({
   }, [isDroppingStash, runBranchAction, stashDiscardDialog]);
 
   const selectWorktreeBaseRef = (ref: string) => {
+    if (isJjBackend) {
+      onJjWorktreeBaseSelected?.(ref);
+    }
     onSetThreadWorkspace({ branch: ref, worktreePath: null });
     setIsBranchMenuOpen(false);
     onComposerFocusRequest?.();
@@ -826,6 +833,7 @@ export function BranchToolbarBranchSelector({
     const defaultBase = resolveDefaultWorktreeBaseRef({
       backend: activeBackend,
       currentReference: currentGitBranch,
+      lastSelectedJjWorkspaceBase,
     });
     if (!defaultBase) {
       return;
@@ -837,6 +845,7 @@ export function BranchToolbarBranchSelector({
     activeWorktreePath,
     currentGitBranch,
     effectiveEnvMode,
+    lastSelectedJjWorkspaceBase,
     onSetThreadWorkspace,
   ]);
 

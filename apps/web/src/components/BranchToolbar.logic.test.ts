@@ -296,6 +296,16 @@ describe("jj local vs worktree base helpers", () => {
     );
   });
 
+  it("prefers the project's remembered JJ workspace base", () => {
+    expect(
+      resolveDefaultWorktreeBaseRef({
+        backend: "jj",
+        currentReference: "main",
+        lastSelectedJjWorkspaceBase: " feature/reuse-base ",
+      }),
+    ).toBe("feature/reuse-base");
+  });
+
   it("exposes @ and @- as synthetic JJ worktree bases", () => {
     expect(getJjWorktreeBaseSpecialItems().map((item) => item.value)).toEqual(["@", "@-"]);
     expect(isJjSyntheticWorktreeBaseRef("@")).toBe(true);

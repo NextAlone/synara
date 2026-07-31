@@ -240,6 +240,8 @@ describe("threadBootstrap", () => {
       createFreshDraftThreadSeed({
         createdAt: "2026-04-05T10:00:00.000Z",
         entryPoint: "terminal",
+        vcsBackend: "git",
+        lastSelectedJjWorkspaceBase: null,
         options: {
           branch: "feature/new-terminal",
           worktreePath: "/repo/.worktrees/new-terminal",
@@ -262,6 +264,8 @@ describe("threadBootstrap", () => {
       createFreshDraftThreadSeed({
         createdAt: "2026-04-05T10:00:00.000Z",
         entryPoint: "chat",
+        vcsBackend: "git",
+        lastSelectedJjWorkspaceBase: null,
         options: {
           temporary: true,
         },
@@ -275,6 +279,23 @@ describe("threadBootstrap", () => {
       runtimeMode: "full-access",
       entryPoint: "chat",
       isTemporary: true,
+    });
+  });
+
+  it("seeds a fresh JJ workspace with the project's remembered base", () => {
+    expect(
+      createFreshDraftThreadSeed({
+        createdAt: "2026-04-05T10:00:00.000Z",
+        entryPoint: "chat",
+        vcsBackend: "jj",
+        lastSelectedJjWorkspaceBase: "feature/reuse-base",
+        options: {
+          envMode: "worktree",
+        },
+      }),
+    ).toMatchObject({
+      branch: "feature/reuse-base",
+      envMode: "worktree",
     });
   });
 

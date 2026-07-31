@@ -13,6 +13,7 @@ import {
   type RuntimeMode,
   type ThreadEnvironmentMode,
   type ThreadId,
+  type VcsBackend,
 } from "@synara/contracts";
 import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 import {
@@ -22,6 +23,7 @@ import {
   resolvePreferredComposerModelSelection,
 } from "../composerDraftStore";
 import { DEFAULT_INTERACTION_MODE, type Thread, type ThreadPrimarySurface } from "../types";
+import { resolveDraftThreadBranchForEnvironmentMode } from "./jjWorkspaceBase";
 
 export interface NewThreadOptions {
   branch?: string | null;
@@ -211,13 +213,23 @@ export function createFreshDraftThreadSeed(input: {
   createdAt: string;
   entryPoint: ThreadPrimarySurface;
   options: NewThreadOptions | undefined;
+  vcsBackend: VcsBackend;
+  lastSelectedJjWorkspaceBase: string | null;
 }): Omit<DraftThreadState, "projectId" | "interactionMode"> {
+  const envMode = input.options?.envMode ?? "local";
   return {
     createdAt: input.createdAt,
-    branch: input.options?.branch ?? null,
+    branch: resolveDraftThreadBranchForEnvironmentMode({
+      mode: envMode,
+      vcsBackend: input.vcsBackend,
+      activeThreadBranch: null,
+      draftThreadBranch: input.options?.branch ?? null,
+      activeRootBranch: null,
+      lastSelectedJjWorkspaceBase: input.lastSelectedJjWorkspaceBase,
+    }),
     worktreePath: input.options?.worktreePath ?? null,
     workingDirectory: input.options?.workingDirectory ?? null,
-    envMode: input.options?.envMode ?? "local",
+    envMode,
     runtimeMode: DEFAULT_RUNTIME_MODE,
     entryPoint: input.entryPoint,
     ...(input.options?.temporary ? { isTemporary: true } : {}),
