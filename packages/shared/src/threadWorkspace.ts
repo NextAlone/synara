@@ -1,7 +1,9 @@
 // FILE: threadWorkspace.ts
 // Purpose: Share worktree and workspace-root helpers used across web and server flows.
 // Layer: Shared util
-// Exports: associated worktree helpers plus workspace-root comparison helpers
+// Exports: thread workspace normalization plus workspace-root comparison helpers
+
+import type { ProjectKind, ThreadEnvironmentMode } from "@synara/contracts";
 
 export interface AssociatedWorktreeMetadata {
   associatedWorktreePath: string | null;
@@ -13,6 +15,23 @@ export interface AssociatedWorktreeMetadataPatch {
   associatedWorktreePath?: string | null;
   associatedWorktreeBranch?: string | null;
   associatedWorktreeRef?: string | null;
+}
+
+export interface CreatedThreadWorkspaceInput {
+  readonly envMode: ThreadEnvironmentMode;
+  readonly branch: string | null;
+  readonly worktreePath: string | null;
+  readonly workingDirectory?: string | null | undefined;
+  readonly associatedWorktreePath?: string | null | undefined;
+  readonly associatedWorktreeBranch?: string | null | undefined;
+  readonly associatedWorktreeRef?: string | null | undefined;
+}
+
+export interface CreatedThreadWorkspaceMetadata extends AssociatedWorktreeMetadata {
+  readonly envMode: ThreadEnvironmentMode;
+  readonly branch: string | null;
+  readonly worktreePath: string | null;
+  readonly workingDirectory: string | null;
 }
 
 export interface NormalizeWorkspaceRootForComparisonOptions {
@@ -141,6 +160,38 @@ export function deriveAssociatedWorktreeMetadata(input: {
           : input.worktreePath
             ? (input.branch ?? null)
             : null,
+  };
+}
+
+/**
+ * Resolves the workspace fields stored by `thread.create` and mirrored by the
+ * client's durable-command reconciliation. Keeping this shared prevents the
+ * optimistic sidebar row from briefly disagreeing with the server projection.
+ */
+export function resolveCreatedThreadWorkspaceMetadata(
+  projectKind: ProjectKind | undefined,
+  input: CreatedThreadWorkspaceInput,
+): CreatedThreadWorkspaceMetadata {
+  if (projectKind === "studio") {
+    return {
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      // Older Studio clients used worktreePath for "Use a folder".
+      workingDirectory:
+        input.workingDirectory !== undefined ? input.workingDirectory : input.worktreePath,
+      associatedWorktreePath: null,
+      associatedWorktreeBranch: null,
+      associatedWorktreeRef: null,
+    };
+  }
+
+  return {
+    envMode: input.envMode,
+    branch: input.branch,
+    worktreePath: input.worktreePath,
+    workingDirectory: input.workingDirectory ?? null,
+    ...deriveAssociatedWorktreeMetadata(input),
   };
 }
 

@@ -3,6 +3,7 @@
 // Exports: Pure projection transitions used by the facade and orchestration reducer.
 
 import {
+  type ClientOrchestrationCommand,
   type MessageId,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
@@ -12,6 +13,7 @@ import {
   type TurnId,
 } from "@synara/contracts";
 import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
+import { resolveCreatedThreadWorkspaceMetadata } from "@synara/shared/threadWorkspace";
 
 import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
 import {
@@ -66,6 +68,7 @@ import type {
 } from "./types";
 
 type ReadModelThread = OrchestrationReadModel["threads"][number];
+type ThreadCreateCommand = Extract<ClientOrchestrationCommand, { type: "thread.create" }>;
 export type ProjectMatchPolicy = "id-only" | "id-or-cwd";
 
 function toThreadShell(thread: Thread): ThreadShell {
@@ -1201,6 +1204,79 @@ export function applyThreadUpdate(
   return commitThreadProjection(writeThreadState(state, updatedThread, currentThread), threadId, {
     updateSidebarSummary: options?.updateSidebarSummary ?? true,
   });
+}
+
+/**
+ * Installs the durable `thread.create` acknowledgement immediately instead of
+ * making Sidebar visibility depend on the asynchronous shell stream. A shell or
+ * detail snapshot that won the race is never overwritten.
+ */
+export function reconcileCreatedThreadInClientState(
+  state: AppState,
+  command: ThreadCreateCommand,
+): AppState {
+  if (
+    state.deletedProjectIdsById?.[command.projectId] !== undefined ||
+    state.deletedThreadIdsById?.[command.threadId] !== undefined
+  ) {
+    return state;
+  }
+
+  if (getThreadFromState(state, command.threadId)) {
+    return commitThreadProjection(state, command.threadId);
+  }
+
+  const projectKind = state.projects.find((project) => project.id === command.projectId)?.kind;
+  const workspace = resolveCreatedThreadWorkspaceMetadata(projectKind, {
+    envMode: command.envMode ?? "local",
+    branch: command.branch,
+    worktreePath: command.worktreePath,
+    workingDirectory: command.workingDirectory,
+    associatedWorktreePath: command.associatedWorktreePath,
+    associatedWorktreeBranch: command.associatedWorktreeBranch,
+    associatedWorktreeRef: command.associatedWorktreeRef,
+  });
+  const shell: ThreadShell = {
+    id: command.threadId,
+    codexThreadId: null,
+    projectId: command.projectId,
+    title: command.title,
+    modelSelection: command.modelSelection,
+    runtimeMode: command.runtimeMode,
+    interactionMode: command.interactionMode,
+    error: null,
+    createdAt: command.createdAt,
+    updatedAt: command.createdAt,
+    archivedAt: null,
+    isPinned: command.isPinned ?? false,
+    ...workspace,
+    createBranchFlowCompleted:
+      projectKind === "studio" ? false : (command.createBranchFlowCompleted ?? false),
+    parentThreadId: command.parentThreadId ?? null,
+    creationSource: command.creationSource ?? null,
+    sourceThreadId: command.sourceThreadId ?? null,
+    subagentAgentId: command.subagentAgentId ?? null,
+    subagentNickname: command.subagentNickname ?? null,
+    subagentRole: command.subagentRole ?? null,
+    forkSourceThreadId: null,
+    sidechatSourceThreadId: null,
+    lastKnownPr: command.lastKnownPr ?? null,
+    handoff: null,
+    latestUserMessageAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    lastVisitedAt: command.createdAt,
+  };
+  const nextState = writeThreadShellProjection(state, {
+    shell,
+    session: null,
+    turnState: { latestTurn: null },
+  });
+  return clearThreadDetailSyncFailureInClientState(
+    commitThreadProjection(nextState, command.threadId),
+    command.threadId,
+  );
 }
 
 export function syncServerShellSnapshot(

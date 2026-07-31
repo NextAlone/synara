@@ -56,6 +56,9 @@ async function dispatchPromoteThreadCreate(
 
   try {
     await api.orchestration.dispatchCommand(command);
+    // The acknowledgement is durable. Install the shell row before retiring the
+    // draft so Sidebar visibility does not depend on a live stream round-trip.
+    useStore.getState().reconcileCreatedThread(command);
     markPromotedDraftThreads(new Set([command.threadId]));
     return "created";
   } catch (error) {

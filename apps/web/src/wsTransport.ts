@@ -245,6 +245,7 @@ const RETRYABLE_STREAM_CAPACITY_ERROR_CODES = new Set([
 ]);
 const DEFAULT_STREAM_CAPACITY_RETRY_MS = 1_000;
 const MAX_STREAM_CAPACITY_RETRY_MS = 10_000;
+const COMPLETED_STREAM_RESTART_DELAY_MS = 500;
 
 /**
  * Capacity rejections are admission failures the server marks retryable: the
@@ -1143,6 +1144,20 @@ export class WsTransport {
             this.activeThreadStreamInputs.delete(key);
           }
           if (wasReplacedOrStopped || this.disposed) {
+            return;
+          }
+          if (restart && Exit.isSuccess(exit)) {
+            // Subscription streams are expected to stay open. A clean remote end
+            // is still a lost feed, but the socket may remain healthy, so restart
+            // the stream in place instead of reconnecting every RPC channel.
+            this.streamCapacityRetries.delete(key);
+            this.streamDuplicateRetries.delete(key);
+            this.streamThreadBootstrapRetries.delete(key);
+            window.setTimeout(() => {
+              if (!this.disposed && !this.streamCleanups.has(key)) {
+                restart();
+              }
+            }, COMPLETED_STREAM_RESTART_DELAY_MS);
             return;
           }
           if (restart && Exit.isFailure(exit)) {

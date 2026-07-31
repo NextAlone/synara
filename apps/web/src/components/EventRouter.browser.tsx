@@ -51,10 +51,19 @@ interface TestFixture {
 let fixture: TestFixture;
 let shellStreamRequestId: string | null = null;
 let shellStreamClient: EffectRpcWebSocketClient | null = null;
+let lifecycleStreamRequestId: string | null = null;
+let lifecycleStreamClient: EffectRpcWebSocketClient | null = null;
 const threadStreamRequestIdByThreadId = new Map<ThreadId, string>();
 const threadStreamClientByThreadId = new Map<ThreadId, EffectRpcWebSocketClient>();
 let delayNextThreadSnapshot = false;
 let subscribeShellRequestCount = 0;
+let getShellSnapshotRequestCount = 0;
+let delayNextShellSnapshotResponse = false;
+let pendingShellSnapshotResponse: {
+  readonly client: EffectRpcWebSocketClient;
+  readonly requestId: string;
+  readonly result: unknown;
+} | null = null;
 const subscribeThreadRequestCountById = new Map<ThreadId, number>();
 let subscribeThreadRequests: ThreadId[] = [];
 let replayEvents: OrchestrationEvent[] = [];
@@ -170,6 +179,7 @@ function findThreadDetailFromFixtureSnapshot(threadId: ThreadId): OrchestrationT
 
 function resolveWsRpc(tag: string, body?: unknown): unknown {
   if (tag === ORCHESTRATION_WS_METHODS.getShellSnapshot) {
+    getShellSnapshotRequestCount += 1;
     return createShellSnapshotFromReadModel(fixture.snapshot);
   }
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
@@ -250,6 +260,8 @@ const worker = setupWorker(
         return;
       }
       if (method === WS_METHODS.subscribeServerLifecycle) {
+        lifecycleStreamRequestId = request.id;
+        lifecycleStreamClient = client;
         sendEffectRpcChunk(client, request.id, {
           type: "welcome",
           payload: fixture.welcome,
@@ -300,6 +312,18 @@ const worker = setupWorker(
         return;
       }
       const result = resolveWsRpc(method, requestBody);
+      if (
+        method === ORCHESTRATION_WS_METHODS.getShellSnapshot &&
+        delayNextShellSnapshotResponse
+      ) {
+        delayNextShellSnapshotResponse = false;
+        pendingShellSnapshotResponse = {
+          client,
+          requestId: request.id,
+          result,
+        };
+        return;
+      }
       if (
         method === ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot &&
         delayNextThreadDetailSnapshotResponse
@@ -406,6 +430,25 @@ function sendPendingThreadDetailSnapshotResponse() {
   sendEffectRpcExit(pending.client, pending.requestId, pending.result);
 }
 
+function sendServerWelcomePush() {
+  if (!lifecycleStreamRequestId || !lifecycleStreamClient) {
+    throw new Error("Server lifecycle stream is not connected");
+  }
+  sendEffectRpcChunk(lifecycleStreamClient, lifecycleStreamRequestId, {
+    type: "welcome",
+    payload: fixture.welcome,
+  });
+}
+
+function sendPendingShellSnapshotResponse() {
+  const pending = pendingShellSnapshotResponse;
+  if (pending === null) {
+    throw new Error("No delayed shell snapshot response is pending");
+  }
+  pendingShellSnapshotResponse = null;
+  sendEffectRpcExit(pending.client, pending.requestId, pending.result);
+}
+
 function sendShellEventPush(event: OrchestrationShellStreamEvent) {
   if (!shellStreamRequestId || !shellStreamClient) {
     throw new Error("Shell stream is not connected");
@@ -434,6 +477,8 @@ describe("EventRouter scoped orchestration sync", () => {
     document.body.innerHTML = "";
     shellStreamRequestId = null;
     shellStreamClient = null;
+    lifecycleStreamRequestId = null;
+    lifecycleStreamClient = null;
     threadStreamRequestIdByThreadId.clear();
     threadStreamClientByThreadId.clear();
     delayNextThreadSnapshot = false;
@@ -466,6 +511,9 @@ describe("EventRouter scoped orchestration sync", () => {
       studioWorkspaceRoot: null,
     });
     subscribeShellRequestCount = 0;
+    getShellSnapshotRequestCount = 0;
+    delayNextShellSnapshotResponse = false;
+    pendingShellSnapshotResponse = null;
     subscribeThreadRequestCountById.clear();
     subscribeThreadRequests = [];
     replayEvents = [];
@@ -477,6 +525,78 @@ describe("EventRouter scoped orchestration sync", () => {
 
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("keeps shell events live while a reconnect snapshot query is still pending", async () => {
+    const mounted = await mountApp();
+    const reconnectThreadId = ThreadId.makeUnsafe("thread-reconnect-shell-race");
+
+    try {
+      const baselineSnapshotRequests = getShellSnapshotRequestCount;
+      delayNextShellSnapshotResponse = true;
+      sendServerWelcomePush();
+
+      await vi.waitFor(
+        () => {
+          expect(getShellSnapshotRequestCount).toBeGreaterThan(baselineSnapshotRequests);
+          expect(pendingShellSnapshotResponse).not.toBeNull();
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
+      const baseThread = fixture.snapshot.threads[0]!;
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: 2,
+        threads: [
+          ...fixture.snapshot.threads,
+          {
+            ...baseThread,
+            id: reconnectThreadId,
+            title: "Reconnect shell race",
+            messages: [],
+            activities: [],
+            proposedPlans: [],
+            checkpoints: [],
+            latestTurn: null,
+            session: null,
+            updatedAt: "2026-03-04T12:00:05.000Z",
+          } satisfies OrchestrationReadModel["threads"][number],
+        ],
+        updatedAt: "2026-03-04T12:00:05.000Z",
+      };
+
+      sendShellEventPush({
+        kind: "thread-upserted",
+        sequence: 2,
+        thread: createShellSnapshotFromReadModel(fixture.snapshot).threads.find(
+          (thread) => thread.id === reconnectThreadId,
+        )!,
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(useStore.getState().threadIds?.includes(reconnectThreadId)).toBe(true);
+          expect(useStore.getState().sidebarThreadSummaryById[reconnectThreadId]?.title).toBe(
+            "Reconnect shell race",
+          );
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
+      sendPendingShellSnapshotResponse();
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+      expect(useStore.getState().threadIds?.includes(reconnectThreadId)).toBe(true);
+      expect(useStore.getState().sidebarThreadSummaryById[reconnectThreadId]?.title).toBe(
+        "Reconnect shell race",
+      );
+    } finally {
+      if (pendingShellSnapshotResponse !== null) {
+        sendPendingShellSnapshotResponse();
+      }
+      await mounted.cleanup();
+    }
   });
 
   it("drops duplicate thread events after the thread snapshot sequence advances", async () => {

@@ -64,6 +64,40 @@ describe("threadCreatePromotion", () => {
     ).toBe(true);
   });
 
+  it("installs the acknowledged thread in the sidebar without waiting for a shell snapshot", async () => {
+    const command = makeThreadCreateCommand("thread-created-visible");
+    const getShellSnapshot = vi.fn();
+    const dispatchCommand = vi.fn(() => Promise.resolve({ sequence: 1 }));
+    const api = makeApi({ dispatchCommand, getShellSnapshot });
+
+    await expect(promoteThreadCreate(command, api)).resolves.toBe("created");
+
+    expect(dispatchCommand).toHaveBeenCalledWith(command);
+    expect(getShellSnapshot).not.toHaveBeenCalled();
+    expect(getThreadFromState(useStore.getState(), command.threadId)).toMatchObject({
+      id: command.threadId,
+      projectId: command.projectId,
+      title: command.title,
+    });
+    expect(useStore.getState().sidebarThreadSummaryById[command.threadId]).toMatchObject({
+      id: command.threadId,
+      projectId: command.projectId,
+      title: command.title,
+    });
+  });
+
+  it("does not install a sidebar row when thread.create is rejected", async () => {
+    const command = makeThreadCreateCommand("thread-create-rejected");
+    const failure = new Error("create failed");
+    const dispatchCommand = vi.fn(() => Promise.reject(failure));
+    const api = makeApi({ dispatchCommand });
+
+    await expect(promoteThreadCreate(command, api)).rejects.toBe(failure);
+
+    expect(getThreadFromState(useStore.getState(), command.threadId)).toBeUndefined();
+    expect(useStore.getState().sidebarThreadSummaryById[command.threadId]).toBeUndefined();
+  });
+
   it("joins concurrent promotions for the same thread id", async () => {
     let resolveDispatch: (() => void) | null = null;
     const dispatchCommand = vi.fn(

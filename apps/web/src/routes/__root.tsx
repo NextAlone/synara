@@ -1171,22 +1171,41 @@ function EventRouter() {
       );
     };
 
-    const loadShellSnapshotOnce = async () => {
-      const snapshot = await api.orchestration.getShellSnapshot();
-      if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
-        return;
+    const applyShellSnapshot = (
+      snapshot: OrchestrationShellSnapshot,
+      options?: { readonly bootstrapOnly?: boolean },
+    ) => {
+      if (disposed) {
+        return false;
+      }
+      // A query started before a newer live event must not roll the Sidebar back
+      // when its response arrives later.
+      if (snapshot.snapshotSequence < shellSnapshotSequence) {
+        return false;
+      }
+      if (options?.bootstrapOnly && !shouldApplyBootstrapShellSnapshot(snapshot)) {
+        return false;
       }
       shellSnapshotSequence = snapshot.snapshotSequence;
       syncServerShellSnapshot(snapshot);
       reconcilePromotedDraftsFromShellThreads(snapshot.threads);
       removeOrphanedTerminalsForCurrentState();
       flushShellBuffer(snapshot.snapshotSequence);
+      return true;
+    };
+
+    const loadShellSnapshotOnce = async (options?: { readonly force?: boolean }) => {
+      const snapshot = await api.orchestration.getShellSnapshot();
+      applyShellSnapshot(snapshot, { bootstrapOnly: options?.force !== true });
     };
 
     const ensureScopedSubscriptions = async () => {
-      shellSnapshotSequence = -1;
-      pendingShellEvents = [];
-      await api.orchestration.subscribeShell().catch(() => loadShellSnapshotOnce());
+      // Transport reconnect already restores an owned shell stream. Do not clear
+      // the cursor before this idempotent subscribe: if the stream is already
+      // active there will be no second snapshot to release buffered events.
+      await api.orchestration
+        .subscribeShell()
+        .catch(() => loadShellSnapshotOnce({ force: true }));
       await enqueueThreadSubscriptionOperation(async () => {
         threadSnapshotSequenceById.clear();
         pendingThreadEventsById.clear();
@@ -1467,11 +1486,7 @@ function EventRouter() {
 
     const unsubShellEvent = api.orchestration.onShellEvent((item) => {
       if (item.kind === "snapshot") {
-        shellSnapshotSequence = item.snapshot.snapshotSequence;
-        syncServerShellSnapshot(item.snapshot);
-        reconcilePromotedDraftsFromShellThreads(item.snapshot.threads);
-        removeOrphanedTerminalsForCurrentState();
-        flushShellBuffer(item.snapshot.snapshotSequence);
+        applyShellSnapshot(item.snapshot);
         return;
       }
 
@@ -1651,7 +1666,9 @@ function EventRouter() {
         if (disposed) {
           return;
         }
-        await loadShellSnapshotOnce();
+        // Welcome is also emitted after reconnect. Reconcile even when the store
+        // is already hydrated so a missed shell event cannot survive the boundary.
+        await loadShellSnapshotOnce({ force: true });
 
         if (!payload.bootstrapProjectId || !payload.bootstrapThreadId) {
           return;

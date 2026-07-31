@@ -4,6 +4,7 @@
 
 import { Fragment, type ReactNode, createElement, useEffect } from "react";
 import {
+  type ClientOrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
@@ -23,6 +24,7 @@ import {
   clearThreadDetailSyncFailureInClientState,
   evictThreadDetailFromClientState,
   markThreadDetailSyncFailedInClientState,
+  reconcileCreatedThreadInClientState,
   removeDeletedProjectFromClientState,
   removeDeletedThreadFromClientState,
   syncServerReadModel,
@@ -41,6 +43,7 @@ import { initialState, type AppState } from "./storeState";
 import type { Project, ThreadWorkspacePatch } from "./types";
 
 type ReadModelThread = OrchestrationReadModel["threads"][number];
+type ThreadCreateCommand = Extract<ClientOrchestrationCommand, { type: "thread.create" }>;
 
 export type { AppState } from "./storeState";
 export { EMPTY_THREAD_IDS } from "./storeState";
@@ -50,6 +53,7 @@ export {
   clearThreadDetailSyncFailureInClientState,
   evictThreadDetailFromClientState,
   markThreadDetailSyncFailedInClientState,
+  reconcileCreatedThreadInClientState,
   removeDeletedProjectFromClientState,
   removeDeletedThreadFromClientState,
   syncServerReadModel,
@@ -297,6 +301,7 @@ interface AppStore extends AppState {
   markThreadUnread: (threadId: ThreadId) => void;
   markThreadArchived: (threadId: ThreadId, archivedAt?: string) => void;
   markThreadUnarchived: (threadId: ThreadId) => void;
+  reconcileCreatedThread: (command: ThreadCreateCommand) => void;
   toggleProject: (projectId: Project["id"]) => void;
   setProjectExpanded: (projectId: Project["id"], expanded: boolean) => void;
   setAllProjectsExpanded: (expanded: boolean) => void;
@@ -350,6 +355,8 @@ export const useStore = create<AppStore>((set) => ({
   markThreadArchived: (threadId, archivedAt) =>
     set((state) => markThreadArchived(state, threadId, archivedAt)),
   markThreadUnarchived: (threadId) => set((state) => markThreadUnarchived(state, threadId)),
+  reconcileCreatedThread: (command) =>
+    set((state) => reconcileCreatedThreadInClientState(state, command)),
   toggleProject: (projectId) => set((state) => toggleProject(state, projectId)),
   setProjectExpanded: (projectId, expanded) =>
     set((state) => setProjectExpanded(state, projectId, expanded)),

@@ -2,10 +2,12 @@
 // Purpose: Exercises the public store facade, persistence, and simple UI actions.
 
 import {
+  CommandId,
   ProjectId,
   SpaceId,
   ThreadId,
   TurnId,
+  type ClientOrchestrationCommand,
   type OrchestrationReadModel,
 } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -16,6 +18,7 @@ import {
   markThreadArchived,
   markThreadUnread,
   markThreadUnarchived,
+  reconcileCreatedThreadInClientState,
   renameProjectLocally,
   reorderProjects,
   setThreadWorkspace,
@@ -151,6 +154,56 @@ describe("store facade", () => {
     expect(createSidebarTreeThreadsSelector()(restored).map((thread) => thread.id)).toEqual([
       threadId,
     ]);
+  });
+
+  it("installs a durable thread.create acknowledgement into the sidebar immediately", () => {
+    const threadId = ThreadId.makeUnsafe("thread-created-locally");
+    const base = makeState(makeThread({ id: threadId }));
+    const state: AppState = {
+      ...base,
+      threadIds: [],
+      threadShellById: {},
+      threadSessionById: {},
+      threadTurnStateById: {},
+      messageIdsByThreadId: {},
+      messageByThreadId: {},
+      activityIdsByThreadId: {},
+      activityByThreadId: {},
+      proposedPlanIdsByThreadId: {},
+      proposedPlanByThreadId: {},
+      turnDiffIdsByThreadId: {},
+      turnDiffSummaryByThreadId: {},
+      sidebarThreadSummaryById: {},
+      threadDetailSyncById: { [threadId]: "failed" },
+    };
+    const command = {
+      type: "thread.create",
+      commandId: CommandId.makeUnsafe("cmd-thread-created-locally"),
+      threadId,
+      projectId: ProjectId.makeUnsafe("project-1"),
+      title: "Created locally",
+      modelSelection: { provider: "codex", model: "gpt-5" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      envMode: "worktree",
+      branch: "feature/sidebar",
+      worktreePath: "/tmp/project/.worktrees/sidebar",
+      createdAt: "2026-07-31T03:00:00.000Z",
+    } satisfies Extract<ClientOrchestrationCommand, { type: "thread.create" }>;
+
+    const next = reconcileCreatedThreadInClientState(state, command);
+
+    expect(next.threadIds).toContain(threadId);
+    expect(next.threadDetailSyncById?.[threadId]).toBeUndefined();
+    expect(next.sidebarThreadSummaryById[threadId]).toMatchObject({
+      id: threadId,
+      title: "Created locally",
+      branch: "feature/sidebar",
+      worktreePath: "/tmp/project/.worktrees/sidebar",
+      associatedWorktreePath: "/tmp/project/.worktrees/sidebar",
+      associatedWorktreeBranch: "feature/sidebar",
+    });
+    expect(createSidebarTreeThreadsSelector()(next).map((thread) => thread.id)).toContain(threadId);
   });
 
   it("does not regress a semantic branch when local workspace patches only report a temp branch", () => {

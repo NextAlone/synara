@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   isScratchWorkspacePath,
   isWorkspaceRootWithin,
+  resolveCreatedThreadWorkspaceMetadata,
   SCRATCH_WORKSPACES_DIRNAME,
 } from "./threadWorkspace";
 
@@ -72,5 +73,43 @@ describe("isScratchWorkspacePath", () => {
 
   it("does not match a directory name that merely shares the prefix", () => {
     expect(isScratchWorkspacePath(`/tmp/${SCRATCH_WORKSPACES_DIRNAME}-extra/file.pdf`)).toBe(false);
+  });
+});
+
+describe("resolveCreatedThreadWorkspaceMetadata", () => {
+  it("derives associated worktree fields for regular projects", () => {
+    expect(
+      resolveCreatedThreadWorkspaceMetadata("project", {
+        envMode: "worktree",
+        branch: "feature/sidebar",
+        worktreePath: "/repo/.worktrees/sidebar",
+      }),
+    ).toEqual({
+      envMode: "worktree",
+      branch: "feature/sidebar",
+      worktreePath: "/repo/.worktrees/sidebar",
+      workingDirectory: null,
+      associatedWorktreePath: "/repo/.worktrees/sidebar",
+      associatedWorktreeBranch: "feature/sidebar",
+      associatedWorktreeRef: "feature/sidebar",
+    });
+  });
+
+  it("strips worktree semantics from Studio threads while preserving the selected folder", () => {
+    expect(
+      resolveCreatedThreadWorkspaceMetadata("studio", {
+        envMode: "worktree",
+        branch: "feature/sidebar",
+        worktreePath: "/repo/selected-folder",
+      }),
+    ).toEqual({
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      workingDirectory: "/repo/selected-folder",
+      associatedWorktreePath: null,
+      associatedWorktreeBranch: null,
+      associatedWorktreeRef: null,
+    });
   });
 });

@@ -3,7 +3,7 @@
 // Layer: Web transport tests
 // Depends on: the global WebSocket constructor shim and desktop bridge URL contract.
 
-import { Cause } from "effect";
+import { Cause, Exit, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ORCHESTRATION_WS_METHODS,
@@ -388,6 +388,44 @@ describe("WsTransport", () => {
       expect(retry).not.toHaveBeenCalled();
       expect(internals.streamCapacityRetryTimers.has(key)).toBe(false);
       expect(internals.streamCapacityRetries.has(key)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restarts a subscription stream that ends successfully", async () => {
+    vi.useFakeTimers();
+    try {
+      window.setTimeout = globalThis.setTimeout.bind(globalThis);
+      const { internals } = makeBareTransport();
+      const key = "orchestration.shell";
+      const cancel = vi.fn();
+      const restart = vi.fn();
+      let onExit: ((exit: Exit.Exit<unknown, unknown>) => void) | undefined;
+      const runCallback = vi.fn(
+        (
+          _effect: unknown,
+          options: { readonly onExit: (exit: Exit.Exit<unknown, unknown>) => void },
+        ) => {
+          onExit = options.onExit;
+          return cancel;
+        },
+      );
+      Object.assign(internals, {
+        disposed: false,
+        getClientRuntime: () => ({ runCallback }),
+      });
+
+      internals.startStream({}, key, Stream.empty, vi.fn(), restart);
+      expect(onExit).toBeDefined();
+
+      onExit?.(Exit.succeed(undefined));
+
+      expect(internals.streamCleanups.has(key)).toBe(false);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(restart).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(restart).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

@@ -17,8 +17,8 @@ import {
   TurnId,
 } from "@synara/contracts";
 import {
-  deriveAssociatedWorktreeMetadata,
   deriveAssociatedWorktreeMetadataPatch,
+  resolveCreatedThreadWorkspaceMetadata,
   workspaceRootsEqual,
 } from "@synara/shared/threadWorkspace";
 import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
@@ -326,28 +326,6 @@ function validateProjectPinLimit(input: {
   );
 }
 
-function deriveCommandAssociatedWorktreeMetadata(input: {
-  readonly branch: string | null;
-  readonly worktreePath: string | null;
-  readonly associatedWorktreePath?: string | null;
-  readonly associatedWorktreeBranch?: string | null;
-  readonly associatedWorktreeRef?: string | null;
-}) {
-  return deriveAssociatedWorktreeMetadata({
-    branch: input.branch,
-    worktreePath: input.worktreePath,
-    ...(input.associatedWorktreePath !== undefined
-      ? { associatedWorktreePath: input.associatedWorktreePath }
-      : {}),
-    ...(input.associatedWorktreeBranch !== undefined
-      ? { associatedWorktreeBranch: input.associatedWorktreeBranch }
-      : {}),
-    ...(input.associatedWorktreeRef !== undefined
-      ? { associatedWorktreeRef: input.associatedWorktreeRef }
-      : {}),
-  });
-}
-
 function deriveCommandAssociatedWorktreeMetadataPatch(input: {
   readonly branch?: string | null;
   readonly worktreePath?: string | null;
@@ -368,60 +346,6 @@ function deriveCommandAssociatedWorktreeMetadataPatch(input: {
       ? { associatedWorktreeRef: input.associatedWorktreeRef }
       : {}),
   });
-}
-
-type CreatedThreadWorkspaceCommand = Pick<
-  Extract<
-    OrchestrationCommand,
-    { type: "thread.create" | "thread.handoff.create" | "thread.fork.create" }
-  >,
-  | "envMode"
-  | "branch"
-  | "worktreePath"
-  | "workingDirectory"
-  | "associatedWorktreePath"
-  | "associatedWorktreeBranch"
-  | "associatedWorktreeRef"
->;
-
-function resolveCreatedThreadWorkspaceMetadata(
-  projectKind: ProjectKind | undefined,
-  command: CreatedThreadWorkspaceCommand,
-) {
-  if (projectKind === "studio") {
-    return {
-      envMode: "local" as const,
-      branch: null,
-      worktreePath: null,
-      // Backward compatibility: older Studio clients sent "Use a folder" through
-      // worktreePath. Preserve that folder while stripping its worktree semantics.
-      workingDirectory:
-        command.workingDirectory !== undefined ? command.workingDirectory : command.worktreePath,
-      associatedWorktreePath: null,
-      associatedWorktreeBranch: null,
-      associatedWorktreeRef: null,
-    };
-  }
-
-  return {
-    envMode: command.envMode,
-    branch: command.branch,
-    worktreePath: command.worktreePath,
-    workingDirectory: command.workingDirectory ?? null,
-    ...deriveCommandAssociatedWorktreeMetadata({
-      branch: command.branch,
-      worktreePath: command.worktreePath,
-      ...(command.associatedWorktreePath !== undefined
-        ? { associatedWorktreePath: command.associatedWorktreePath }
-        : {}),
-      ...(command.associatedWorktreeBranch !== undefined
-        ? { associatedWorktreeBranch: command.associatedWorktreeBranch }
-        : {}),
-      ...(command.associatedWorktreeRef !== undefined
-        ? { associatedWorktreeRef: command.associatedWorktreeRef }
-        : {}),
-    }),
-  };
 }
 
 function resolveThreadWorkspaceMetadataPatch(
