@@ -22,6 +22,7 @@ export function createInitialDesktopUpdateState(
     canRetry: false,
     installFailureCount: 0,
     releaseUrl: null,
+    resumableInterruptedTurns: [],
   };
 }
 

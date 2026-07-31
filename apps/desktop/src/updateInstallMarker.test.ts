@@ -6,6 +6,7 @@ import * as FS from "node:fs";
 import * as OS from "node:os";
 import * as Path from "node:path";
 
+import type { DesktopUpdateInterruptedTurn, ThreadId, TurnId } from "@synara/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fsFailure = vi.hoisted(() => ({ failRename: false }));
@@ -24,6 +25,7 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 import {
+  acknowledgeInstallInterruptedTurnSync,
   clearInstallMarker,
   createUpdateInstallMarker,
   markInstallHandoffSync,
@@ -59,7 +61,15 @@ function marker(overrides: Partial<UpdateInstallMarker> = {}): UpdateInstallMark
     consecutiveFailures: 0,
     lastFailureAt: null,
     artifact,
+    interruptedTurns: [],
     ...overrides,
+  };
+}
+
+function interruptedTurn(threadId: string, turnId: string): DesktopUpdateInterruptedTurn {
+  return {
+    threadId: threadId as ThreadId,
+    turnId: turnId as TurnId,
   };
 }
 
@@ -87,6 +97,40 @@ describe("updateInstallMarker", () => {
     expect(readInstallMarker(filePath)).toEqual({ status: "valid", marker: value });
     clearInstallMarker(filePath);
     expect(readInstallMarker(filePath)).toEqual({ status: "missing" });
+  });
+
+  it("persists unique interrupted turns for a successful update", () => {
+    const filePath = createMarkerPath();
+    const turn = interruptedTurn("thread-1", "turn-1");
+    const value = createUpdateInstallMarker({
+      fromVersion: "1.0.0",
+      toVersion: "1.1.0",
+      requestedAt: "2026-07-01T00:00:00.000Z",
+      consecutiveFailures: 0,
+      artifact,
+      interruptedTurns: [turn, turn],
+    });
+
+    writeInstallMarker(filePath, value);
+
+    expect(readInstallMarker(filePath)).toEqual({
+      status: "valid",
+      marker: marker({
+        attemptId: value.attemptId,
+        interruptedTurns: [turn],
+      }),
+    });
+  });
+
+  it("normalizes existing schema-2 markers without interruption metadata", () => {
+    const filePath = createMarkerPath();
+    const { interruptedTurns: _interruptedTurns, ...existingMarker } = marker();
+    FS.writeFileSync(filePath, JSON.stringify(existingMarker), "utf8");
+
+    expect(readInstallMarker(filePath)).toEqual({
+      status: "valid",
+      marker: marker(),
+    });
   });
 
   it("atomically replaces the marker without leaving temporary files", () => {
@@ -211,6 +255,37 @@ describe("updateInstallMarker", () => {
         lastFailureAt: "2026-07-02T00:00:00.000Z",
       }),
     });
+  });
+
+  it("acknowledges interrupted turns durably and clears the final marker", () => {
+    const filePath = createMarkerPath();
+    const first = interruptedTurn("thread-1", "turn-1");
+    const second = interruptedTurn("thread-2", "turn-2");
+    writeInstallMarker(
+      filePath,
+      marker({
+        phase: "completed",
+        interruptedTurns: [first, second],
+      }),
+    );
+
+    expect(acknowledgeInstallInterruptedTurnSync(filePath, first)).toEqual({
+      status: "acknowledged",
+      remaining: [second],
+    });
+    expect(readInstallMarker(filePath)).toEqual({
+      status: "valid",
+      marker: marker({
+        phase: "completed",
+        interruptedTurns: [second],
+      }),
+    });
+
+    expect(acknowledgeInstallInterruptedTurnSync(filePath, second)).toEqual({
+      status: "acknowledged",
+      remaining: [],
+    });
+    expect(readInstallMarker(filePath)).toEqual({ status: "missing" });
   });
 
   it("returns one attempted increment when repeated writes fail", () => {

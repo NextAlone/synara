@@ -84,7 +84,9 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   getUpdateState: () => ipcRenderer.invoke(IPC.updateGetState),
   checkForUpdates: () => ipcRenderer.invoke(IPC.updateCheck),
   downloadUpdate: () => ipcRenderer.invoke(IPC.updateDownload),
-  installUpdate: () => ipcRenderer.invoke(IPC.updateInstall),
+  installUpdate: (input) => ipcRenderer.invoke(IPC.updateInstall, input),
+  acknowledgeUpdateContinuation: (input) =>
+    ipcRenderer.invoke(IPC.updateContinuationAcknowledge, input),
   onUpdateState: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
       if (typeof state !== "object" || state === null) return;

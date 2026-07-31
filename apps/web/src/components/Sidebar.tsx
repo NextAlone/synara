@@ -228,6 +228,11 @@ import {
   shouldToastDesktopUpdateActionResult,
 } from "./desktopUpdate.logic";
 import {
+  buildDesktopUpdateInterruptionConfirmation,
+  collectRunningDesktopUpdateTurns,
+  isDesktopUpdateContinuationApplicable,
+} from "../desktopUpdateContinuation";
+import {
   getUpstreamUpdateNotice,
   getUpstreamUpdateNoticeSignature,
   getUpstreamUpdateNoticeTooltip,
@@ -4980,6 +4985,41 @@ export default function Sidebar() {
   }, []);
 
   useEffect(() => {
+    const bridge = window.desktopBridge;
+    const continuations = desktopUpdateState?.resumableInterruptedTurns ?? [];
+    if (
+      !bridge ||
+      !threadsHydrated ||
+      continuations.length === 0 ||
+      typeof bridge.acknowledgeUpdateContinuation !== "function"
+    ) {
+      return;
+    }
+    const threadById = new Map(sidebarThreads.map((thread) => [thread.id, thread]));
+    for (const continuation of continuations) {
+      const thread = threadById.get(continuation.threadId) ?? null;
+      if (
+        isDesktopUpdateContinuationApplicable(
+          continuation,
+          thread?.id ?? null,
+          thread?.latestTurn?.turnId ?? null,
+          thread?.latestTurn?.state ?? null,
+        )
+      ) {
+        continue;
+      }
+      // Startup projection reconciliation may still be settling the exact turn.
+      // Keep the durable continuation until the thread reaches a terminal state.
+      if (thread && (thread.latestTurn === null || thread.latestTurn.state === "running")) {
+        continue;
+      }
+      void bridge.acknowledgeUpdateContinuation(continuation).catch((error) => {
+        console.warn("[desktop-updater] Could not discard a stale update continuation.", error);
+      });
+    }
+  }, [desktopUpdateState?.resumableInterruptedTurns, sidebarThreads, threadsHydrated]);
+
+  useEffect(() => {
     if (!isElectron) return;
     const bridge = window.desktopBridge;
     if (
@@ -5279,7 +5319,7 @@ export default function Sidebar() {
     ],
   );
 
-  const handleDesktopUpdateButtonClick = useCallback(() => {
+  const handleDesktopUpdateButtonClick = useCallback(async () => {
     const bridge = window.desktopBridge;
     if (!bridge || !desktopUpdateState) return;
     if (desktopUpdateButtonDisabled || desktopUpdateButtonAction === "none") return;
@@ -5387,10 +5427,25 @@ export default function Sidebar() {
     }
 
     if (desktopUpdateButtonAction === "install") {
+      const interruptedTurns = collectRunningDesktopUpdateTurns(sidebarThreads);
+      if (interruptedTurns.length > 0) {
+        const confirmed = await bridge.confirm(
+          buildDesktopUpdateInterruptionConfirmation(
+            desktopUpdateState.downloadedVersion ?? desktopUpdateState.availableVersion,
+            interruptedTurns.length,
+          ),
+        ).catch((error) => {
+          surfaceDesktopUpdateError(error);
+          return false;
+        });
+        if (!confirmed) {
+          return;
+        }
+      }
       setInstallingDesktopUpdate(true);
       persistAppStateNow();
       void bridge
-        .installUpdate()
+        .installUpdate({ interruptedTurns })
         .then((result) => {
           setDesktopUpdateState(result.state);
           setInstallingDesktopUpdate(false);
@@ -5425,6 +5480,7 @@ export default function Sidebar() {
     desktopUpdateButtonAction,
     desktopUpdateButtonDisabled,
     desktopUpdateState,
+    sidebarThreads,
     surfaceDesktopUpdateError,
   ]);
 

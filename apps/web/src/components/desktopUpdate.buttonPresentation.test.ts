@@ -19,6 +19,7 @@ const baseState: DesktopUpdateState = {
   canRetry: false,
   installFailureCount: 0,
   releaseUrl: null,
+  resumableInterruptedTurns: [],
 };
 
 describe("desktop update button presentation timeline", () => {

@@ -39,6 +39,8 @@ import * as Effect from "effect/Effect";
 import type {
   DesktopTheme,
   DesktopUpdateActionResult,
+  DesktopUpdateInstallInput,
+  DesktopUpdateInterruptedTurn,
   DesktopUpdateState,
   DesktopUpstreamUpdateState,
 } from "@synara/contracts";
@@ -169,9 +171,12 @@ import {
   resolveElectronUpdaterPendingCacheDir,
 } from "./updatePendingCache";
 import {
+  acknowledgeInstallInterruptedTurnSync,
   clearInstallMarker,
   createUpdateInstallMarker,
   markInstallHandoffSync,
+  normalizeDesktopUpdateInterruptedTurns,
+  parseDesktopUpdateInterruptedTurns,
   readInstallMarker,
   recordInstallMarkerFailureSync,
   resolveInstallMarkerOutcome,
@@ -2445,12 +2450,25 @@ function processInstallMarkerOnStartup(): void {
     console.info(
       `[desktop-updater] Update to ${marker.toVersion} installed successfully (from ${marker.fromVersion})`,
     );
-    try {
-      clearInstallMarker(filePath);
-    } catch (error) {
-      console.warn(
-        `[desktop-updater] Failed to clear successful update install marker: ${formatErrorMessage(error)}`,
-      );
+    if (marker.interruptedTurns.length > 0) {
+      setUpdateState({ resumableInterruptedTurns: marker.interruptedTurns });
+      if (marker.phase !== "completed") {
+        try {
+          writeInstallMarker(filePath, { ...marker, phase: "completed" });
+        } catch (error) {
+          console.warn(
+            `[desktop-updater] Failed to finalize update continuation marker: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
+    } else {
+      try {
+        clearInstallMarker(filePath);
+      } catch (error) {
+        console.warn(
+          `[desktop-updater] Failed to clear successful update install marker: ${formatErrorMessage(error)}`,
+        );
+      }
     }
     clearLegacyUpdaterZipAfterVerifiedInstall();
     return;
@@ -2951,6 +2969,7 @@ async function waitForMigrationRecoveryInstallHandoff(): Promise<void> {
 
 async function runDownloadedUpdateInstall(
   preparationAttempt: UpdateInstallPreparationAttempt,
+  interruptedTurns: readonly DesktopUpdateInterruptedTurn[],
 ): Promise<{
   accepted: boolean;
   completed: boolean;
@@ -2986,6 +3005,7 @@ async function runDownloadedUpdateInstall(
     existingMarkerResult.marker.toVersion === versionToInstall
       ? existingMarkerResult.marker
       : null;
+  const persistedInterruptedTurns = existingMarker?.interruptedTurns ?? [];
   const marker = createUpdateInstallMarker({
     fromVersion: app.getVersion(),
     toVersion: versionToInstall,
@@ -2993,6 +3013,11 @@ async function runDownloadedUpdateInstall(
     consecutiveFailures: existingMarker?.consecutiveFailures ?? 0,
     lastFailureAt: existingMarker?.lastFailureAt ?? null,
     artifact,
+    interruptedTurns: normalizeDesktopUpdateInterruptedTurns([
+      ...interruptedTurns,
+      ...updateState.resumableInterruptedTurns,
+      ...persistedInterruptedTurns,
+    ]),
   });
   const handoffExpectation: UpdateInstallHandoffExpectation = {
     attemptId: marker.attemptId,
@@ -3047,7 +3072,7 @@ async function runDownloadedUpdateInstall(
   }
 }
 
-async function installDownloadedUpdate(): Promise<{
+async function installDownloadedUpdate(input?: DesktopUpdateInstallInput): Promise<{
   accepted: boolean;
   completed: boolean;
 }> {
@@ -3061,7 +3086,10 @@ async function installDownloadedUpdate(): Promise<{
   isUpdaterInstallPreparing = true;
 
   try {
-    return await runDownloadedUpdateInstall(preparationAttempt);
+    return await runDownloadedUpdateInstall(
+      preparationAttempt,
+      normalizeDesktopUpdateInterruptedTurns(input?.interruptedTurns),
+    );
   } finally {
     if (!isUpdaterQuitAndInstallInFlight && isUpdaterInstallPreparing) {
       clearUpdaterInstallInFlightAfterError();
@@ -4062,7 +4090,7 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.removeHandler(IPC.updateInstall);
-  ipcMain.handle(IPC.updateInstall, async () => {
+  ipcMain.handle(IPC.updateInstall, async (_event, rawInput: unknown) => {
     if (isQuitting) {
       return {
         accepted: false,
@@ -4070,12 +4098,57 @@ function registerIpcHandlers(): void {
         state: updateState,
       } satisfies DesktopUpdateActionResult;
     }
-    const result = await installDownloadedUpdate();
+    const interruptedTurns =
+      rawInput === undefined
+        ? []
+        : typeof rawInput === "object" && rawInput !== null
+          ? parseDesktopUpdateInterruptedTurns(
+              (rawInput as { interruptedTurns?: unknown }).interruptedTurns,
+            )
+          : null;
+    if (interruptedTurns === null) {
+      throw new Error("Update installation requires a valid interrupted-turn list.");
+    }
+    const result = await installDownloadedUpdate({ interruptedTurns });
     return {
       accepted: result.accepted,
       completed: result.completed,
       state: updateState,
     } satisfies DesktopUpdateActionResult;
+  });
+
+  ipcMain.removeHandler(IPC.updateContinuationAcknowledge);
+  ipcMain.handle(IPC.updateContinuationAcknowledge, async (_event, rawInput: unknown) => {
+    const acknowledged = parseDesktopUpdateInterruptedTurns([rawInput])?.[0];
+    if (!acknowledged) {
+      throw new Error("A valid interrupted thread and turn are required.");
+    }
+    const isResumable = updateState.resumableInterruptedTurns.some(
+      (turn) =>
+        turn.threadId === acknowledged.threadId && turn.turnId === acknowledged.turnId,
+    );
+    if (!isResumable) {
+      return updateState;
+    }
+    const result = acknowledgeInstallInterruptedTurnSync(
+      getUpdateInstallMarkerPath(),
+      acknowledged,
+    );
+    if (result.status === "invalid") {
+      throw new Error(`The update continuation marker is invalid: ${result.error}`);
+    }
+    if (result.status === "write-failed") {
+      throw new Error("The update continuation could not be acknowledged.", {
+        cause: result.error,
+      });
+    }
+    setUpdateState({
+      resumableInterruptedTurns: updateState.resumableInterruptedTurns.filter(
+        (turn) =>
+          turn.threadId !== acknowledged.threadId || turn.turnId !== acknowledged.turnId,
+      ),
+    });
+    return updateState;
   });
 
   ipcMain.removeHandler(IPC.notificationsIsSupported);

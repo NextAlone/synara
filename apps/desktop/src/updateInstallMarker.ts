@@ -5,6 +5,8 @@
 import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
 
+import type { DesktopUpdateInterruptedTurn } from "@synara/contracts";
+
 import { writePrivateTextFileAtomicallySync } from "./atomicFile";
 import { isUpdateVersionNewer } from "./updateState";
 import {
@@ -15,8 +17,9 @@ import {
 
 const INSTALL_MARKER_SCHEMA_VERSION = 2;
 const INSTALL_MARKER_STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_INTERRUPTED_TURNS = 256;
 
-export type InstallMarkerPhase = "requested" | "handoff" | "failed";
+export type InstallMarkerPhase = "requested" | "handoff" | "failed" | "completed";
 
 export interface UpdateInstallMarker {
   readonly schemaVersion: 2;
@@ -29,6 +32,7 @@ export interface UpdateInstallMarker {
   readonly consecutiveFailures: number;
   readonly lastFailureAt: string | null;
   readonly artifact: UpdateArtifactIdentity;
+  readonly interruptedTurns: readonly DesktopUpdateInterruptedTurn[];
 }
 
 export interface UpdateInstallHandoffExpectation {
@@ -64,6 +68,16 @@ export type InstallMarkerFailureRecordResult =
       readonly error: unknown;
     };
 
+export type InstallMarkerInterruptionAcknowledgeResult =
+  | {
+      readonly status: "acknowledged";
+      readonly remaining: readonly DesktopUpdateInterruptedTurn[];
+    }
+  | { readonly status: "unchanged"; readonly marker: UpdateInstallMarker }
+  | { readonly status: "missing" }
+  | { readonly status: "invalid"; readonly error: string }
+  | { readonly status: "write-failed"; readonly error: unknown };
+
 function isIsoTimestamp(value: unknown): value is string {
   if (typeof value !== "string") {
     return false;
@@ -74,6 +88,63 @@ function isIsoTimestamp(value: unknown): value is string {
 
 function isNullableIsoTimestamp(value: unknown): value is string | null {
   return value === null || isIsoTimestamp(value);
+}
+
+function isInterruptedTurn(value: unknown): value is DesktopUpdateInterruptedTurn {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const turn = value as Record<string, unknown>;
+  return (
+    typeof turn.threadId === "string" &&
+    turn.threadId.trim().length > 0 &&
+    turn.threadId.length <= 512 &&
+    typeof turn.turnId === "string" &&
+    turn.turnId.trim().length > 0 &&
+    turn.turnId.length <= 512
+  );
+}
+
+function isInterruptedTurnList(value: unknown): value is readonly DesktopUpdateInterruptedTurn[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_INTERRUPTED_TURNS &&
+    value.every(isInterruptedTurn)
+  );
+}
+
+export function parseDesktopUpdateInterruptedTurns(
+  value: unknown,
+): readonly DesktopUpdateInterruptedTurn[] | null {
+  return isInterruptedTurnList(value) ? normalizeDesktopUpdateInterruptedTurns(value) : null;
+}
+
+export function normalizeDesktopUpdateInterruptedTurns(
+  value: unknown,
+): readonly DesktopUpdateInterruptedTurn[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const result: DesktopUpdateInterruptedTurn[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value) {
+    if (!isInterruptedTurn(candidate)) {
+      continue;
+    }
+    const key = `${candidate.threadId}\0${candidate.turnId}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push({
+      threadId: candidate.threadId,
+      turnId: candidate.turnId,
+    });
+    if (result.length >= MAX_INTERRUPTED_TURNS) {
+      break;
+    }
+  }
+  return result;
 }
 
 function isUpdateInstallMarker(value: unknown): value is UpdateInstallMarker {
@@ -91,12 +162,16 @@ function isUpdateInstallMarker(value: unknown): value is UpdateInstallMarker {
     marker.toVersion.trim().length > 0 &&
     isIsoTimestamp(marker.requestedAt) &&
     isNullableIsoTimestamp(marker.handoffAt) &&
-    (marker.phase === "requested" || marker.phase === "handoff" || marker.phase === "failed") &&
+    (marker.phase === "requested" ||
+      marker.phase === "handoff" ||
+      marker.phase === "failed" ||
+      marker.phase === "completed") &&
     typeof marker.consecutiveFailures === "number" &&
     Number.isInteger(marker.consecutiveFailures) &&
     marker.consecutiveFailures >= 0 &&
     isNullableIsoTimestamp(marker.lastFailureAt) &&
-    isUpdateArtifactIdentity(marker.artifact)
+    isUpdateArtifactIdentity(marker.artifact) &&
+    (marker.interruptedTurns === undefined || isInterruptedTurnList(marker.interruptedTurns))
   );
 }
 
@@ -111,6 +186,7 @@ export function createUpdateInstallMarker(args: {
   readonly consecutiveFailures: number;
   readonly lastFailureAt?: string | null;
   readonly artifact: UpdateArtifactIdentity;
+  readonly interruptedTurns?: readonly DesktopUpdateInterruptedTurn[];
 }): UpdateInstallMarker {
   return {
     schemaVersion: INSTALL_MARKER_SCHEMA_VERSION,
@@ -123,6 +199,7 @@ export function createUpdateInstallMarker(args: {
     consecutiveFailures: args.consecutiveFailures,
     lastFailureAt: args.lastFailureAt ?? null,
     artifact: args.artifact,
+    interruptedTurns: normalizeDesktopUpdateInterruptedTurns(args.interruptedTurns),
   };
 }
 
@@ -142,7 +219,13 @@ export function readInstallMarker(filePath: string): InstallMarkerReadResult {
     if (!isUpdateInstallMarker(parsed)) {
       return { status: "invalid", error: "Marker does not match schema version 2." };
     }
-    return { status: "valid", marker: parsed };
+    return {
+      status: "valid",
+      marker: {
+        ...parsed,
+        interruptedTurns: normalizeDesktopUpdateInterruptedTurns(parsed.interruptedTurns),
+      },
+    };
   } catch (error) {
     return { status: "invalid", error: formatReadError(error) };
   }
@@ -195,6 +278,9 @@ export function recordInstallMarkerFailureSync(
   if (!installMarkerMatchesHandoffExpectation(result.marker, expected)) {
     return { status: "mismatch" };
   }
+  if (result.marker.phase === "completed") {
+    return { status: "mismatch" };
+  }
   if (result.marker.phase === "failed") {
     return { status: "already-failed", marker: result.marker };
   }
@@ -210,6 +296,37 @@ export function recordInstallMarkerFailureSync(
     return { status: "recorded", marker };
   } catch (error) {
     return { status: "write-failed", marker, error };
+  }
+}
+
+export function acknowledgeInstallInterruptedTurnSync(
+  filePath: string,
+  acknowledged: DesktopUpdateInterruptedTurn,
+): InstallMarkerInterruptionAcknowledgeResult {
+  const result = readInstallMarker(filePath);
+  if (result.status !== "valid") {
+    return result;
+  }
+  const remaining = result.marker.interruptedTurns.filter(
+    (turn) =>
+      turn.threadId !== acknowledged.threadId || turn.turnId !== acknowledged.turnId,
+  );
+  if (remaining.length === result.marker.interruptedTurns.length) {
+    return { status: "unchanged", marker: result.marker };
+  }
+  try {
+    if (remaining.length === 0) {
+      clearInstallMarker(filePath);
+    } else {
+      writeInstallMarker(filePath, {
+        ...result.marker,
+        phase: "completed",
+        interruptedTurns: remaining,
+      });
+    }
+    return { status: "acknowledged", remaining };
+  } catch (error) {
+    return { status: "write-failed", error };
   }
 }
 

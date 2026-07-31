@@ -22,6 +22,7 @@ export const DESKTOP_IPC_CHANNELS = {
   updateCheck: "desktop:update-check",
   updateDownload: "desktop:update-download",
   updateInstall: "desktop:update-install",
+  updateContinuationAcknowledge: "desktop:update-continuation-acknowledge",
   upstreamUpdateState: "desktop:upstream-update-state",
   upstreamUpdateGetState: "desktop:upstream-update-get-state",
   notificationsIsSupported: "desktop:notifications-is-supported",

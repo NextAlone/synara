@@ -306,6 +306,7 @@ import {
 } from "~/lib/icons";
 import { ComposerQueuedHeader } from "./chat/ComposerQueuedHeader";
 import { ComposerLiveChangesHeader } from "./chat/ComposerLiveChangesHeader";
+import { ComposerUpdateContinuationPanel } from "./chat/ComposerUpdateContinuationPanel";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
@@ -357,6 +358,11 @@ import {
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useComposerFocusRequestStore } from "../composerFocusRequestStore";
 import { useWorkflowRunUiStore, useWorkflowRunUiThreadState } from "../workflowRunUiStore";
+import {
+  DESKTOP_UPDATE_CONTINUATION_PROMPT,
+  isDesktopUpdateContinuationApplicable,
+  useDesktopUpdateContinuation,
+} from "../desktopUpdateContinuation";
 import { appendComposerPromptText } from "../lib/chatReferences";
 import {
   appendOriginalComposerPromptBlocks,
@@ -998,6 +1004,40 @@ type ComposerPluginSuggestion = {
 };
 
 const EMPTY_COMPOSER_PLUGIN_SUGGESTIONS: ComposerPluginSuggestion[] = [];
+
+type ProgrammaticComposerTurnContext = Pick<
+  QueuedComposerChatTurn,
+  | "selectedProvider"
+  | "selectedModel"
+  | "selectedPromptEffort"
+  | "modelSelection"
+  | "providerOptionsForDispatch"
+  | "runtimeMode"
+  | "interactionMode"
+  | "envMode"
+>;
+
+function buildProgrammaticComposerTurn(
+  prompt: string,
+  context: ProgrammaticComposerTurnContext,
+): QueuedComposerChatTurn {
+  return {
+    id: randomUUID(),
+    kind: "chat",
+    createdAt: new Date().toISOString(),
+    previewText: prompt,
+    prompt,
+    images: [],
+    files: [],
+    assistantSelections: [],
+    terminalContexts: [],
+    fileComments: [],
+    pastedTexts: [],
+    skills: [],
+    mentions: [],
+    ...context,
+  };
+}
 
 function buildQueuedComposerPreviewText(input: {
   trimmedPrompt: string;
@@ -5015,7 +5055,7 @@ export default function ChatView({
       }
 
       const shouldFollowPendingTurn =
-        activeThread?.id !== undefined && autoFollowThreadIdRef.current === activeThread.id;
+        activeThreadId !== null && autoFollowThreadIdRef.current === activeThreadId;
       const postSendMessageId = postSendWorkingTailMessageIdRef.current;
       // Work rows remain excluded from generic transcript auto-follow. The initial
       // Working row is different: it completes the explicit send transition before
@@ -5049,7 +5089,17 @@ export default function ChatView({
       showScrollDebouncer.current.cancel();
       setShowScrollToBottom(true);
     },
-    [activeThread?.id, onIsAtEndChange, scrollToEnd],
+    [activeThreadId, onIsAtEndChange, scrollToEnd],
+  );
+  const desktopUpdateContinuation = useDesktopUpdateContinuation(threadId);
+  const [continuingAfterDesktopUpdate, setContinuingAfterDesktopUpdate] = useState(false);
+  const [dismissingDesktopUpdateContinuation, setDismissingDesktopUpdateContinuation] =
+    useState(false);
+  const showDesktopUpdateContinuation = isDesktopUpdateContinuationApplicable(
+    desktopUpdateContinuation,
+    threadId,
+    activeLatestTurnId,
+    activeLatestTurnState,
   );
   const cancelPendingInteractionAnchorAdjustment = useCallback(() => {
     const pendingFrame = pendingInteractionAnchorFrameRef.current;
@@ -8234,6 +8284,75 @@ export default function ChatView({
     return turnStartSucceeded;
   };
 
+  const onContinueAfterDesktopUpdate = async () => {
+    const bridge = window.desktopBridge;
+    if (
+      !bridge ||
+      !desktopUpdateContinuation ||
+      !showDesktopUpdateContinuation ||
+      continuingAfterDesktopUpdate ||
+      dismissingDesktopUpdateContinuation ||
+      activePendingProgress !== null ||
+      isComposerApprovalState
+    ) {
+      return;
+    }
+    setContinuingAfterDesktopUpdate(true);
+    const queuedTurn = buildProgrammaticComposerTurn(DESKTOP_UPDATE_CONTINUATION_PROMPT, {
+      selectedProvider,
+      selectedModel,
+      selectedPromptEffort,
+      modelSelection: selectedModelSelection,
+      ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+      runtimeMode,
+      interactionMode,
+      envMode,
+    });
+    const sent = await onSend(undefined, "queue", queuedTurn).catch((error) => {
+      toastManager.add({
+        type: "error",
+        title: "Couldn’t continue interrupted task",
+        description: error instanceof Error ? error.message : "Try again.",
+      });
+      return false;
+    });
+    if (sent) {
+      await bridge.acknowledgeUpdateContinuation(desktopUpdateContinuation).catch((error) => {
+        toastManager.add({
+          type: "warning",
+          title: "Continuation started, but its update notice could not be cleared",
+          description: error instanceof Error ? error.message : "It will be retried later.",
+        });
+      });
+    }
+    setContinuingAfterDesktopUpdate(false);
+  };
+
+  const onDismissDesktopUpdateContinuation = () => {
+    const bridge = window.desktopBridge;
+    if (
+      !bridge ||
+      !desktopUpdateContinuation ||
+      continuingAfterDesktopUpdate ||
+      dismissingDesktopUpdateContinuation
+    ) {
+      return;
+    }
+    setDismissingDesktopUpdateContinuation(true);
+    void bridge
+      .acknowledgeUpdateContinuation(desktopUpdateContinuation)
+      .catch((error) => {
+        toastManager.add({
+          type: "error",
+          title: "Couldn’t dismiss interrupted task",
+          description: error instanceof Error ? error.message : "Try again.",
+        });
+      })
+      .finally(() => {
+        setDismissingDesktopUpdateContinuation(false);
+      });
+  };
+
   const onRespondToApproval = useCallback(
     async (
       requestId: ApprovalRequestId,
@@ -8751,29 +8870,20 @@ export default function ChatView({
     if (!lateSendHandlers) return;
     const { workflowTaskId } = workflowRunState;
     const prompt = buildWorkflowResumePrompt(workflowRunState.scriptPath, workflowRunState.runId);
-    const sent = await lateSendHandlers.send(undefined, "queue", {
-      id: randomUUID(),
-      kind: "chat",
-      createdAt: new Date().toISOString(),
-      previewText: prompt,
-      prompt,
-      images: [],
-      files: [],
-      assistantSelections: [],
-      terminalContexts: [],
-      fileComments: [],
-      pastedTexts: [],
-      skills: [],
-      mentions: [],
-      selectedProvider,
-      selectedModel,
-      selectedPromptEffort,
-      modelSelection: selectedModelSelection,
-      ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
-      runtimeMode,
-      interactionMode,
-      envMode,
-    });
+    const sent = await lateSendHandlers.send(
+      undefined,
+      "queue",
+      buildProgrammaticComposerTurn(prompt, {
+        selectedProvider,
+        selectedModel,
+        selectedPromptEffort,
+        modelSelection: selectedModelSelection,
+        ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+        runtimeMode,
+        interactionMode,
+        envMode,
+      }),
+    );
     if (sent && activeThreadId) {
       markWorkflowRunDismissed(activeThreadId, workflowTaskId);
     }
@@ -10883,6 +10993,31 @@ export default function ChatView({
                   }
                 />
               ) : null}
+              {showDesktopUpdateContinuation ? (
+                <ComposerUpdateContinuationPanel
+                  continuing={continuingAfterDesktopUpdate}
+                  dismissing={dismissingDesktopUpdateContinuation}
+                  disabled={
+                    isSendBusy ||
+                    isConnecting ||
+                    hasLiveTurn ||
+                    isVoiceRecording ||
+                    isVoiceTranscribing ||
+                    activePendingProgress !== null ||
+                    isComposerApprovalState
+                  }
+                  onContinue={() => {
+                    void onContinueAfterDesktopUpdate();
+                  }}
+                  onDismiss={onDismissDesktopUpdateContinuation}
+                  attachedToPrevious={
+                    showComposerLiveChangesHeader ||
+                    showComposerActiveTaskListCard ||
+                    showComposerWorkflowRunCard ||
+                    showComposerSubagentStrip
+                  }
+                />
+              ) : null}
               <ComposerQueuedHeader
                 queuedTurns={queuedComposerTurns}
                 onSteer={onSteerQueuedComposerTurn}
@@ -10893,7 +11028,8 @@ export default function ChatView({
                   showComposerLiveChangesHeader ||
                   showComposerActiveTaskListCard ||
                   showComposerWorkflowRunCard ||
-                  showComposerSubagentStrip
+                  showComposerSubagentStrip ||
+                  showDesktopUpdateContinuation
                 }
               />
               {/* Pending approvals and AskUserQuestion prompts both render as a detached

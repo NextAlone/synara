@@ -217,7 +217,7 @@ import type {
   OrchestrationThreadStreamItem,
 } from "./orchestration";
 import type { EditorId } from "./editor";
-import type { ThreadId } from "./baseSchemas";
+import type { ThreadId, TurnId } from "./baseSchemas";
 import type {
   ProviderComposerCapabilities,
   ProviderGetComposerCapabilitiesInput,
@@ -279,6 +279,17 @@ export interface DesktopRuntimeInfo {
   runningUnderArm64Translation: boolean;
 }
 
+export interface DesktopUpdateInterruptedTurn {
+  threadId: ThreadId;
+  turnId: TurnId;
+}
+
+export interface DesktopUpdateInstallInput {
+  interruptedTurns: readonly DesktopUpdateInterruptedTurn[];
+}
+
+export type DesktopUpdateContinuationAcknowledgeInput = DesktopUpdateInterruptedTurn;
+
 export interface DesktopUpdateState {
   enabled: boolean;
   status: DesktopUpdateStatus;
@@ -299,6 +310,9 @@ export interface DesktopUpdateState {
   // read-only install location, unsupported platform). Null when no GitHub
   // update source is configured.
   releaseUrl: string | null;
+  // Turns deliberately interrupted by a successfully installed update. These
+  // remain available until the renderer continues or dismisses each one.
+  resumableInterruptedTurns: readonly DesktopUpdateInterruptedTurn[];
 }
 
 /**
@@ -557,7 +571,10 @@ export interface DesktopBridge {
   getUpdateState: () => Promise<DesktopUpdateState>;
   checkForUpdates: () => Promise<DesktopUpdateState>;
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
-  installUpdate: () => Promise<DesktopUpdateActionResult>;
+  installUpdate: (input?: DesktopUpdateInstallInput) => Promise<DesktopUpdateActionResult>;
+  acknowledgeUpdateContinuation: (
+    input: DesktopUpdateContinuationAcknowledgeInput,
+  ) => Promise<DesktopUpdateState>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
   getUpstreamUpdateState: () => Promise<DesktopUpstreamUpdateState>;
   onUpstreamUpdateState: (listener: (state: DesktopUpstreamUpdateState) => void) => () => void;

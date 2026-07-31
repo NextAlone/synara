@@ -29,6 +29,7 @@ const baseState: DesktopUpdateState = {
   canRetry: false,
   installFailureCount: 0,
   releaseUrl: null,
+  resumableInterruptedTurns: [],
 };
 
 describe("getDownloadStallTimeoutMessage", () => {
