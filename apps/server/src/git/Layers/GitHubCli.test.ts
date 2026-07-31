@@ -887,6 +887,7 @@ layer("GitHubCliLive", (it) => {
           url: "https://github.com/acme/app/pull/9",
           headRefName: "empty-message",
           baseRefName: "main",
+          headRefOid: "2222222222222222222222222222222222222222",
           state: "OPEN",
           createdAt: "2026-07-01T00:00:00Z",
           updatedAt: "2026-07-02T00:00:00Z",
@@ -924,6 +925,7 @@ layer("GitHubCliLive", (it) => {
         detail.commits.map((commit) => commit.messageHeadline),
         ["", ""],
       );
+      assert.equal(detail.headOid, "2222222222222222222222222222222222222222");
       // Avatars are derived from real user logins only: "platform" is a Team (slug), and a
       // slug-derived URL could show an unrelated user who happens to share the name.
       assert.deepStrictEqual(detail.reviewers, [
@@ -1002,6 +1004,64 @@ layer("GitHubCliLive", (it) => {
         "github.com/acme/app",
         "--squash",
       ]);
+    }),
+  );
+
+  it.effect("fast-forwards an explicit base ref without permitting force updates", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          ref: "refs/heads/stack/base",
+          object: { sha: "2222222222222222222222222222222222222222" },
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const gh = yield* GitHubCli;
+      const result = yield* gh.fastForwardBranch({
+        cwd: "/repo",
+        repository: "acme/app",
+        branch: "stack/base",
+        targetOid: "2222222222222222222222222222222222222222",
+      });
+
+      assert.equal(result.oid, "2222222222222222222222222222222222222222");
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
+        "api",
+        "--hostname",
+        "github.com",
+        "--method",
+        "PATCH",
+        "repos/acme/app/git/refs/heads/stack/base",
+        "-f",
+        "sha=2222222222222222222222222222222222222222",
+        "-F",
+        "force=false",
+      ]);
+    }),
+  );
+
+  it.effect("turns GitHub's non-fast-forward rejection into an actionable error", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockRejectedValueOnce(
+        new Error("gh: Update is not a fast forward (HTTP 422)"),
+      );
+
+      const gh = yield* GitHubCli;
+      const error = yield* gh
+        .fastForwardBranch({
+          cwd: "/repo",
+          repository: "acme/app",
+          branch: "main",
+          targetOid: "2222222222222222222222222222222222222222",
+        })
+        .pipe(Effect.flip);
+
+      expect(error.detail).toContain("base branch is not an ancestor");
+      expect(error.operation).toBe("fastForwardBranch");
     }),
   );
 

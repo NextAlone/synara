@@ -13,6 +13,8 @@ import {
   describePullRequestState,
   pullRequestDetailInputFromPane,
   pullRequestDetailInputKey,
+  pullRequestMergeStrategies,
+  pullRequestMergeStrategyLabel,
   pullRequestPaneTabLabel,
   stripHtmlComments,
 } from "./pullRequestDetail.logic";
@@ -77,6 +79,33 @@ describe("describePullRequestState", () => {
     expect(describePullRequestState("open", false)).toBe("Ready for review");
     expect(describePullRequestState("merged", true)).toBe("Merged");
     expect(describePullRequestState("closed", false)).toBe("Closed");
+  });
+});
+
+describe("pull request merge strategies", () => {
+  const mergeCapabilities = {
+    merge: true,
+    squash: false,
+    rebase: true,
+    deleteBranchOnMerge: false,
+  } as const;
+
+  it("adds strict fast-forward only when the detail has a reviewed head OID", () => {
+    expect(
+      pullRequestMergeStrategies({
+        mergeCapabilities,
+        headOid: "2222222222222222222222222222222222222222",
+      }),
+    ).toEqual(["merge", "rebase", "fast-forward"]);
+    expect(pullRequestMergeStrategies({ mergeCapabilities, headOid: null })).toEqual([
+      "merge",
+      "rebase",
+    ]);
+  });
+
+  it("gives fast-forward an explicit user-facing label", () => {
+    expect(pullRequestMergeStrategyLabel("fast-forward")).toBe("Fast-forward");
+    expect(pullRequestMergeStrategyLabel("squash")).toBe("squash");
   });
 });
 

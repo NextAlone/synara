@@ -5,12 +5,14 @@
 //          descriptor, and the flattened chronological timeline event list.
 // Layer: Web domain helpers (no React)
 // Exports: pullRequestDetailInputKey, pullRequestPaneTabLabel, pullRequestDetailInputFromPane,
-//          describePullRequestState, stripHtmlComments, PullRequestTimelineEvent,
+//          describePullRequestState, pullRequestMergeStrategies,
+//          pullRequestMergeStrategyLabel, stripHtmlComments, PullRequestTimelineEvent,
 //          buildPullRequestTimelineEvents
 
 import type {
   PullRequestDetail,
   PullRequestDetailInput,
+  PullRequestMergeMethod,
   PullRequestState,
 } from "@synara/contracts";
 
@@ -56,6 +58,23 @@ export function describePullRequestState(state: PullRequestState, isDraft: boole
   if (state === "open") return "Ready for review";
   if (state === "merged") return "Merged";
   return "Closed";
+}
+
+export type PullRequestMergeStrategy = PullRequestMergeMethod | "fast-forward";
+
+/** Repository settings govern GitHub's built-in merge methods. Strict fast-forward is a separate
+ * ref update and is offered only when the detail snapshot carries the exact reviewed head OID. */
+export function pullRequestMergeStrategies(
+  detail: Pick<PullRequestDetail, "mergeCapabilities" | "headOid">,
+): PullRequestMergeStrategy[] {
+  const methods = (["merge", "squash", "rebase"] as const).filter(
+    (method) => detail.mergeCapabilities[method],
+  );
+  return detail.headOid ? [...methods, "fast-forward"] : methods;
+}
+
+export function pullRequestMergeStrategyLabel(strategy: PullRequestMergeStrategy): string {
+  return strategy === "fast-forward" ? "Fast-forward" : strategy;
 }
 
 // stripHtmlComments now lives with the rest of the markdown preprocessing.

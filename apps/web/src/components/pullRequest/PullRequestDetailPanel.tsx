@@ -1,8 +1,8 @@
 // FILE: PullRequestDetailPanel.tsx
 // Purpose: Orchestrator for the pull request detail surface — owns the queries, gh-backed
-//          actions (merge/ready/draft/close/reopen, fix findings, copy link), the header with
-//          its Summary/Timeline/Code tab switcher, the Code tab's diff viewport, and the
-//          confirm dialogs. Summary and Timeline rendering live in their own tab components.
+//          actions (merge/fast-forward/ready/draft/close/reopen, fix findings, copy link), the
+//          header with its Summary/Timeline/Code tab switcher, the Code tab's diff viewport,
+//          and the confirm dialogs. Summary and Timeline rendering live in their own tabs.
 // Layer: Pull request presentation
 // Exports: PullRequestDetailPanel
 
@@ -82,6 +82,11 @@ import { useStore } from "~/store";
 import { createProjectSelector, createThreadSelector } from "~/storeSelectors";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
+import {
+  pullRequestMergeStrategies,
+  pullRequestMergeStrategyLabel,
+  type PullRequestMergeStrategy,
+} from "./pullRequestDetail.logic";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { PullRequestWarningNote } from "./PullRequestWarningNote";
 
@@ -89,6 +94,7 @@ type DetailTab = "summary" | "timeline" | "code";
 
 const ACTION_SUCCESS_LABELS: Record<PullRequestAction, string> = {
   merge: "Pull request merged",
+  "fast-forward": "Pull request fast-forwarded",
   ready: "Marked ready for review",
   draft: "Converted to draft",
   close: "Pull request closed",
@@ -157,27 +163,40 @@ export function PullRequestDetailPanel({
   const [panelState, setPanelState] = useState<{
     key: string;
     tab: DetailTab;
-    mergeMethod: PullRequestMergeMethod;
-    confirmAction: "merge" | "close" | null;
+    mergeStrategy: PullRequestMergeStrategy;
+    confirmAction: "merge" | "fast-forward" | "close" | null;
+    confirmHeadOid: string | null;
   } | null>(null);
   const isCurrentPanelState = panelState !== null && panelState.key === panelKey;
   const tab = isCurrentPanelState ? panelState.tab : initialTab;
-  const mergeMethod = isCurrentPanelState ? panelState.mergeMethod : "merge";
+  const mergeStrategy = isCurrentPanelState ? panelState.mergeStrategy : "merge";
   const confirmAction = isCurrentPanelState ? panelState.confirmAction : null;
+  const confirmHeadOid = isCurrentPanelState ? panelState.confirmHeadOid : null;
   const patchPanelState = (patch: {
     tab?: DetailTab;
-    mergeMethod?: PullRequestMergeMethod;
-    confirmAction?: "merge" | "close" | null;
+    mergeStrategy?: PullRequestMergeStrategy;
+    confirmAction?: "merge" | "fast-forward" | "close" | null;
+    confirmHeadOid?: string | null;
   }) =>
     setPanelState((current) =>
       current !== null && current.key === panelKey
         ? { ...current, ...patch }
-        : { key: panelKey, tab: initialTab, mergeMethod: "merge", confirmAction: null, ...patch },
+        : {
+            key: panelKey,
+            tab: initialTab,
+            mergeStrategy: "merge",
+            confirmAction: null,
+            confirmHeadOid: null,
+            ...patch,
+          },
     );
   const setTab = (next: DetailTab) => patchPanelState({ tab: next });
-  const setMergeMethod = (next: PullRequestMergeMethod) => patchPanelState({ mergeMethod: next });
-  const setConfirmAction = (next: "merge" | "close" | null) =>
-    patchPanelState({ confirmAction: next });
+  const setMergeStrategy = (next: PullRequestMergeStrategy) =>
+    patchPanelState({ mergeStrategy: next });
+  const setConfirmAction = (
+    next: "merge" | "fast-forward" | "close" | null,
+    expectedHeadOid: string | null = null,
+  ) => patchPanelState({ confirmAction: next, confirmHeadOid: expectedHeadOid });
   const [preparingThread, setPreparingThread] = useState<"findings" | "conflicts" | null>(null);
   const actionInFlightRef = useRef(false);
   const detailQuery = useQuery(pullRequestDetailQueryOptions(input, { pollingEnabled }));
@@ -210,7 +229,11 @@ export function PullRequestDetailPanel({
   // Promise chains instead of async/try-finally in the two runners below:
   // React Compiler does not yet support try/finally and would skip this
   // component entirely.
-  const runAction = (action: PullRequestAction, method?: PullRequestMergeMethod) => {
+  const runAction = (
+    action: PullRequestAction,
+    method?: PullRequestMergeMethod,
+    expectedHeadOid?: string,
+  ) => {
     if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
     void actionMutation
@@ -218,8 +241,25 @@ export function PullRequestDetailPanel({
         ...input,
         action,
         ...(method ? { mergeMethod: method } : {}),
+        ...(action === "fast-forward" && expectedHeadOid
+          ? { expectedHeadOid }
+          : {}),
       })
-      .then(() => {
+      .then((result) => {
+        if (action === "fast-forward" && result.fastForwardStatus !== "merged") {
+          toastManager.add({
+            type: result.fastForwardStatus === "head-changed" ? "warning" : "info",
+            title:
+              result.fastForwardStatus === "head-changed"
+                ? "Reviewed commits fast-forwarded"
+                : "Base branch fast-forwarded",
+            description:
+              result.fastForwardStatus === "head-changed"
+                ? "The PR received another commit during the update and remains open. Refresh before merging again."
+                : "GitHub accepted the ref update and is reconciling the pull request state.",
+          });
+          return;
+        }
         toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
       })
       .catch((error: unknown) => {
@@ -334,12 +374,10 @@ export function PullRequestDetailPanel({
     }
   };
 
-  const allowedMethods = detail
-    ? (["merge", "squash", "rebase"] as const).filter((method) => detail.mergeCapabilities[method])
-    : [];
-  const selectedMergeMethod = allowedMethods.includes(mergeMethod)
-    ? mergeMethod
-    : (allowedMethods[0] ?? "merge");
+  const mergeStrategies = detail ? pullRequestMergeStrategies(detail) : [];
+  const selectedMergeStrategy = mergeStrategies.includes(mergeStrategy)
+    ? mergeStrategy
+    : (mergeStrategies[0] ?? "merge");
   const actionPending = actionMutation.isPending;
   // Which action is in flight — drives the in-flight labels. Optimistic transitions
   // (draft/ready/close/reopen) flip the UI instantly via the mutation's cache patch, so
@@ -431,16 +469,20 @@ export function PullRequestDetailPanel({
                   {detail.state === "open" &&
                   !detail.isDraft &&
                   detail.mergeability !== "conflicting" &&
-                  allowedMethods.length > 0 ? (
+                  mergeStrategies.length > 0 ? (
                     <>
                       <MenuRadioGroup
-                        value={selectedMergeMethod}
-                        onValueChange={(value) => setMergeMethod(value as PullRequestMergeMethod)}
+                        value={selectedMergeStrategy}
+                        onValueChange={(value) =>
+                          setMergeStrategy(value as PullRequestMergeStrategy)
+                        }
                       >
-                        {allowedMethods.map((method) => (
-                          <MenuRadioItem key={method} value={method} disabled={actionPending}>
+                        {mergeStrategies.map((strategy) => (
+                          <MenuRadioItem key={strategy} value={strategy} disabled={actionPending}>
                             <GitMergeIcon className="size-3.5 shrink-0" />
-                            <span className="capitalize">{method}</span>
+                            <span className="capitalize">
+                              {pullRequestMergeStrategyLabel(strategy)}
+                            </span>
                           </MenuRadioItem>
                         ))}
                       </MenuRadioGroup>
@@ -526,7 +568,7 @@ export function PullRequestDetailPanel({
                   </TooltipTrigger>
                   <TooltipPopup side="bottom">Resolve merge conflicts before merging</TooltipPopup>
                 </Tooltip>
-              ) : detail.state === "open" && !detail.isDraft && allowedMethods.length > 0 ? (
+              ) : detail.state === "open" && !detail.isDraft && mergeStrategies.length > 0 ? (
                 // One pill, no method chevron beside it: a split button's label can never sit
                 // on the group's centre (it lands half the chevron's width to the left) and its
                 // inner corners are pinned to radius 0, so Merge read as a different control
@@ -536,15 +578,24 @@ export function PullRequestDetailPanel({
                   size="xs"
                   className={PR_HEADER_ACTION_BUTTON_CLASS_NAME}
                   disabled={actionPending}
-                  onClick={() => setConfirmAction("merge")}
+                  onClick={() => {
+                    if (selectedMergeStrategy === "fast-forward" && detail.headOid) {
+                      // Freeze the rendered head before opening the dialog. Background polling
+                      // may refresh the detail while it is open; the server must still bind the
+                      // mutation to the revision the user selected here.
+                      setConfirmAction("fast-forward", detail.headOid);
+                      return;
+                    }
+                    setConfirmAction("merge");
+                  }}
                 >
-                  {pendingAction === "merge" ? (
+                  {pendingAction === "merge" || pendingAction === "fast-forward" ? (
                     <>
                       <LoaderIcon className="size-3.5 animate-spin" />
-                      Merging…
+                      {pendingAction === "fast-forward" ? "Fast-forwarding…" : "Merging…"}
                     </>
                   ) : (
-                    "Merge"
+                    selectedMergeStrategy === "fast-forward" ? "Fast-forward" : "Merge"
                   )}
                 </Button>
               ) : null}
@@ -608,12 +659,22 @@ export function PullRequestDetailPanel({
         <AlertDialogPopup>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {confirmAction === "merge" ? "Merge pull request?" : "Close pull request?"}
+              {confirmAction === "fast-forward"
+                ? "Fast-forward pull request?"
+                : confirmAction === "merge"
+                  ? "Merge pull request?"
+                  : "Close pull request?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {confirmAction === "merge"
-                ? `This will merge #${input.number} using ${selectedMergeMethod}.`
-                : `This will close #${input.number} without merging it.`}
+              {confirmAction === "fast-forward"
+                ? [
+                    `This moves the ${detail?.baseBranch ?? "base"} branch in ${detail?.repository ?? input.repository} directly to PR head ${confirmHeadOid?.slice(0, 7) ?? ""} without creating or rewriting commits.`,
+                    "It fails if the head changes or the update is no longer a fast-forward.",
+                    "GitHub applies your direct-push permissions and branch rules.",
+                  ].join(" ")
+                : confirmAction === "merge"
+                  ? `This will merge #${input.number} using ${selectedMergeStrategy}.`
+                  : `This will close #${input.number} without merging it.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -626,12 +687,20 @@ export function PullRequestDetailPanel({
               disabled={actionPending}
               onClick={() => {
                 const action = confirmAction;
+                const expectedHeadOid = confirmHeadOid;
                 setConfirmAction(null);
-                if (action === "merge") void runAction("merge", selectedMergeMethod);
+                if (action === "merge" && selectedMergeStrategy !== "fast-forward")
+                  void runAction("merge", selectedMergeStrategy);
+                if (action === "fast-forward" && expectedHeadOid)
+                  void runAction("fast-forward", undefined, expectedHeadOid);
                 if (action === "close") void runAction("close");
               }}
             >
-              {confirmAction === "merge" ? "Merge" : "Close"}
+              {confirmAction === "fast-forward"
+                ? "Fast-forward"
+                : confirmAction === "merge"
+                  ? "Merge"
+                  : "Close"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

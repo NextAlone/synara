@@ -206,45 +206,48 @@ describe("pullRequestActionMutationOptions", () => {
     expect(reviewCountRefreshStarted).toBe(true);
   });
 
-  it("invalidates the warm merged lists after a merge", async () => {
-    const queryClient = new QueryClient();
-    const projectId = "project-a" as ProjectId;
-    const input = {
-      projectId,
-      repository: "acme/widgets",
-      number: 42,
-      action: "merge",
-    } as const;
-    const openKey = pullRequestQueryKeys.list({ state: "open", projectId });
-    const mergedKey = pullRequestQueryKeys.list({ state: "merged", projectId });
-    const allProjectsMergedKey = pullRequestQueryKeys.list({ state: "merged", projectId: null });
-    const mergedExactKey = pullRequestQueryKeys.exactList({
-      involvement: "authored",
-      state: "merged",
-      projectId,
-    });
-    queryClient.setQueryData(openKey, {
-      entries: [{ ...input, state: "open", isDraft: false, isPinned: false }],
-    });
-    queryClient.setQueryData(mergedKey, { entries: [] });
-    queryClient.setQueryData(allProjectsMergedKey, { entries: [] });
-    queryClient.setQueryData(mergedExactKey, { entries: [] });
-    const options = pullRequestActionMutationOptions(queryClient);
-    if (!options.onMutate || !options.onSuccess) throw new Error("Action hooks are missing.");
+  it.each(["merge", "fast-forward"] as const)(
+    "invalidates the warm merged lists after a %s action",
+    async (action) => {
+      const queryClient = new QueryClient();
+      const projectId = "project-a" as ProjectId;
+      const input = {
+        projectId,
+        repository: "acme/widgets",
+        number: 42,
+        action,
+      } as const;
+      const openKey = pullRequestQueryKeys.list({ state: "open", projectId });
+      const mergedKey = pullRequestQueryKeys.list({ state: "merged", projectId });
+      const allProjectsMergedKey = pullRequestQueryKeys.list({ state: "merged", projectId: null });
+      const mergedExactKey = pullRequestQueryKeys.exactList({
+        involvement: "authored",
+        state: "merged",
+        projectId,
+      });
+      queryClient.setQueryData(openKey, {
+        entries: [{ ...input, state: "open", isDraft: false, isPinned: false }],
+      });
+      queryClient.setQueryData(mergedKey, { entries: [] });
+      queryClient.setQueryData(allProjectsMergedKey, { entries: [] });
+      queryClient.setQueryData(mergedExactKey, { entries: [] });
+      const options = pullRequestActionMutationOptions(queryClient);
+      if (!options.onMutate || !options.onSuccess) throw new Error("Action hooks are missing.");
 
-    const context = await Reflect.apply(options.onMutate, undefined, [input, undefined]);
-    await Reflect.apply(options.onSuccess, undefined, [
-      { workspaceRoot: "/repo" },
-      input,
-      context,
-      undefined,
-    ]);
+      const context = await Reflect.apply(options.onMutate, undefined, [input, undefined]);
+      await Reflect.apply(options.onSuccess, undefined, [
+        { workspaceRoot: "/repo" },
+        input,
+        context,
+        undefined,
+      ]);
 
-    expect(queryClient.getQueryState(openKey)?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(mergedKey)?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(allProjectsMergedKey)?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(mergedExactKey)?.isInvalidated).toBe(true);
-  });
+      expect(queryClient.getQueryState(openKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(mergedKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(allProjectsMergedKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(mergedExactKey)?.isInvalidated).toBe(true);
+    },
+  );
 
   it("rolls list-owned fields back even when no detail cache exists", async () => {
     const queryClient = new QueryClient();

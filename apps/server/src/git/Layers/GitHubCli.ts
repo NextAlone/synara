@@ -38,7 +38,7 @@ const GITHUB_HOST = "github.com";
 export const PULL_REQUEST_LIST_JSON_FIELDS =
   "number,title,url,author,headRefName,baseRefName,state,isDraft,additions,deletions,updatedAt,createdAt,reviewDecision,reviewRequests,labels,mergedAt,mergeable";
 export const PULL_REQUEST_DETAIL_JSON_FIELDS =
-  "number,title,body,url,author,state,isDraft,mergeable,mergeStateStatus,additions,deletions,changedFiles,headRefName,baseRefName,reviewDecision,reviewRequests,reviews,comments,statusCheckRollup,commits,labels,maintainerCanModify,createdAt,updatedAt,mergedAt,closedAt";
+  "number,title,body,url,author,state,isDraft,mergeable,mergeStateStatus,additions,deletions,changedFiles,headRefName,baseRefName,headRefOid,reviewDecision,reviewRequests,reviews,comments,statusCheckRollup,commits,labels,maintainerCanModify,createdAt,updatedAt,mergedAt,closedAt";
 
 function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown): GitHubCliError {
   if (error instanceof Error) {
@@ -170,6 +170,12 @@ const RawGitHubRepositoryCloneUrlsSchema = Schema.Struct({
   sshUrl: TrimmedNonEmptyString,
 });
 
+const RawGitHubReferenceSchema = Schema.Struct({
+  object: Schema.Struct({
+    sha: TrimmedNonEmptyString,
+  }),
+});
+
 // `gh pr view --json statusCheckRollup` mixes CheckRun and StatusContext nodes; both are
 // covered by one permissive shape and told apart by which fields are populated.
 const RawStatusCheckRollupItemSchema = Schema.Struct({
@@ -265,6 +271,7 @@ const RawPullRequestNumberSchema = Schema.Struct({
 const RawPullRequestDetailSchema = Schema.Struct({
   ...RawPullRequestListItemSchema.fields,
   body: Schema.optional(Schema.NullOr(Schema.String)),
+  headRefOid: Schema.optional(Schema.NullOr(Schema.String)),
   mergeable: Schema.optional(Schema.NullOr(Schema.String)),
   mergeStateStatus: Schema.optional(Schema.NullOr(Schema.String)),
   changedFiles: Schema.optional(Schema.NullOr(Schema.Number)),
@@ -597,6 +604,7 @@ function normalizePullRequestDetail(
   return {
     ...normalizePullRequestListItem(raw),
     body: raw.body ?? "",
+    headOid: raw.headRefOid?.trim() || null,
     mergeable: raw.mergeable?.trim() || null,
     mergeStateStatus: raw.mergeStateStatus?.trim() || null,
     changedFiles: nonNegativeCount(raw.changedFiles),
@@ -719,7 +727,8 @@ function decodeGitHubJson<S extends Schema.Top>(
     | "getPullRequestDetail"
     | "getPullRequestListItem"
     | "listReviewRequestedPullRequestNumbers"
-    | "getRepositoryMergeCapabilities",
+    | "getRepositoryMergeCapabilities"
+    | "fastForwardBranch",
   invalidDetail: string,
 ): Effect.Effect<S["Type"], GitHubCliError, S["DecodingServices"]> {
   return Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
@@ -976,6 +985,23 @@ const makeGitHubCli = Effect.sync(() => {
         );
   };
   const repositorySelector = (repository: string) => `${GITHUB_HOST}/${repository}`;
+  const branchReferenceEndpoint = (repository: string, branch: string) =>
+    `repos/${repository}/git/refs/heads/${branch
+      .split("/")
+      .map((segment) => encodeURIComponent(segment))
+      .join("/")}`;
+
+  const normalizeFastForwardBranchError = (error: GitHubCliError) => {
+    const nonFastForward = /not a fast[ -]forward|non-fast-forward/i.test(error.detail);
+    return new GitHubCliError({
+      operation: "fastForwardBranch",
+      detail: nonFastForward
+        ? "Fast-forward is no longer possible because the base branch is not an ancestor of the reviewed PR head. Update or rebase the PR and retry."
+        : error.detail,
+      ...(error.reason ? { reason: error.reason } : {}),
+      cause: error,
+    });
+  };
 
   // One implementation behind both list methods so the field list, decoding, and
   // normalization cannot drift between the open-only and any-state lookups.
@@ -1214,6 +1240,49 @@ const makeGitHubCli = Effect.sync(() => {
           ),
         ),
       ),
+    fastForwardBranch: (input) => {
+      const branch = input.branch.trim();
+      const targetOid = input.targetOid.trim();
+      if (branch.length === 0 || targetOid.length === 0) {
+        return Effect.fail(
+          new GitHubCliError({
+            operation: "fastForwardBranch",
+            detail: "GitHub returned an invalid base branch or PR head revision.",
+            reason: "other",
+          }),
+        );
+      }
+
+      return validateRepository(input.repository, "fastForwardBranch").pipe(
+        Effect.flatMap((repository) =>
+          execute({
+            cwd: input.cwd,
+            args: [
+              "api",
+              "--hostname",
+              GITHUB_HOST,
+              "--method",
+              "PATCH",
+              branchReferenceEndpoint(repository, branch),
+              "-f",
+              `sha=${targetOid}`,
+              "-F",
+              "force=false",
+            ],
+          }),
+        ),
+        Effect.flatMap((result) =>
+          decodeGitHubJson(
+            result.stdout.trim(),
+            RawGitHubReferenceSchema,
+            "fastForwardBranch",
+            "GitHub returned an invalid branch update response.",
+          ),
+        ),
+        Effect.map((reference) => ({ oid: reference.object.sha })),
+        Effect.mapError(normalizeFastForwardBranchError),
+      );
+    },
     runPullRequestAction: (input) =>
       validateRepository(input.repository, "runPullRequestAction").pipe(
         Effect.flatMap((repository) => {

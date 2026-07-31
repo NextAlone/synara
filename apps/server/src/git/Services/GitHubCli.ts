@@ -107,6 +107,7 @@ export interface GitHubPullRequestDetailData {
   readonly changedFiles: number;
   readonly headBranch: string;
   readonly baseBranch: string;
+  readonly headOid: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly mergedAt: string | null;
@@ -187,6 +188,18 @@ export interface GitHubCliShape {
     readonly repository: string;
     readonly number: number;
   }) => Effect.Effect<{ readonly patch: string; readonly truncated: boolean }, GitHubCliError>;
+
+  /**
+   * Move one GitHub branch ref to an existing commit without permitting a non-fast-forward
+   * update. The returned OID is decoded from GitHub's mutation response for immediate
+   * verification; callers still own pull-request state and reviewed-head checks.
+   */
+  readonly fastForwardBranch: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly branch: string;
+    readonly targetOid: string;
+  }) => Effect.Effect<{ readonly oid: string }, GitHubCliError>;
 
   readonly runPullRequestAction: (input: {
     readonly cwd: string;

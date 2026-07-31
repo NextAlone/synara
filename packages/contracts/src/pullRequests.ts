@@ -18,8 +18,22 @@ export type PullRequestState = typeof PullRequestState.Type;
 export const PullRequestMergeMethod = Schema.Literals(["merge", "squash", "rebase"]);
 export type PullRequestMergeMethod = typeof PullRequestMergeMethod.Type;
 
-export const PullRequestAction = Schema.Literals(["merge", "ready", "draft", "close", "reopen"]);
+export const PullRequestAction = Schema.Literals([
+  "merge",
+  "fast-forward",
+  "ready",
+  "draft",
+  "close",
+  "reopen",
+]);
 export type PullRequestAction = typeof PullRequestAction.Type;
+
+export const PullRequestFastForwardStatus = Schema.Literals([
+  "merged",
+  "base-updated",
+  "head-changed",
+]);
+export type PullRequestFastForwardStatus = typeof PullRequestFastForwardStatus.Type;
 
 export const PullRequestActor = Schema.Struct({
   login: TrimmedNonEmptyString,
@@ -206,6 +220,11 @@ export const PullRequestDetail = Schema.Struct({
   changedFiles: NonNegativeInt,
   headBranch: TrimmedNonEmptyString,
   baseBranch: TrimmedNonEmptyString,
+  // The optional default keeps a newer web client compatible with an older server during
+  // restarts. Fast-forward stays unavailable until an authoritative detail snapshot supplies it.
+  headOid: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   mergedAt: Schema.NullOr(IsoDateTime),
@@ -234,6 +253,9 @@ export const PullRequestActionInput = Schema.Struct({
   number: PositiveInt,
   action: PullRequestAction,
   mergeMethod: Schema.optional(PullRequestMergeMethod),
+  // Required by the server for fast-forward. It binds the mutation to the exact revision the
+  // user reviewed instead of silently including a commit pushed immediately before the click.
+  expectedHeadOid: Schema.optional(TrimmedNonEmptyString),
 });
 export type PullRequestActionInput = typeof PullRequestActionInput.Type;
 
@@ -270,6 +292,7 @@ export const PullRequestActionResult = Schema.Struct({
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   workspaceRoot: TrimmedNonEmptyString,
+  fastForwardStatus: Schema.optional(PullRequestFastForwardStatus),
 });
 export type PullRequestActionResult = typeof PullRequestActionResult.Type;
 

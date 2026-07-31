@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { Schema } from "effect";
 
 import {
+  PullRequestActionInput,
+  PullRequestActionResult,
   PullRequestCommentInput,
   PullRequestDetail,
   PullRequestListEntry,
@@ -9,8 +11,11 @@ import {
   PullRequestSetPinnedInput,
 } from "./pullRequests";
 
+const reviewedHeadOid = "2222222222222222222222222222222222222222";
 const decodeListEntry = Schema.decodeUnknownSync(PullRequestListEntry);
 const decodeDetail = Schema.decodeUnknownSync(PullRequestDetail);
+const decodeActionInput = Schema.decodeUnknownSync(PullRequestActionInput);
+const decodeActionResult = Schema.decodeUnknownSync(PullRequestActionResult);
 const decodeCommentInput = Schema.decodeUnknownSync(PullRequestCommentInput);
 const decodeSetPinnedInput = Schema.decodeUnknownSync(PullRequestSetPinnedInput);
 const decodeReviewRequestCountResult = Schema.decodeUnknownSync(
@@ -96,6 +101,30 @@ describe("PullRequestDetail", () => {
     });
 
     expect(decoded.mergeability).toBe("unknown");
+    expect(decoded.headOid).toBeNull();
+  });
+});
+
+describe("PullRequestAction", () => {
+  it("binds fast-forward input and acknowledgement to explicit revision metadata", () => {
+    expect(
+      decodeActionInput({
+        projectId: "project-1",
+        repository: "acme/widgets",
+        number: 42,
+        action: "fast-forward",
+        expectedHeadOid: reviewedHeadOid,
+      }),
+    ).toMatchObject({ action: "fast-forward", expectedHeadOid: reviewedHeadOid });
+    expect(
+      decodeActionResult({
+        projectId: "project-1",
+        repository: "acme/widgets",
+        number: 42,
+        workspaceRoot: "/workspace/project-one",
+        fastForwardStatus: "base-updated",
+      }).fastForwardStatus,
+    ).toBe("base-updated");
   });
 });
 

@@ -127,6 +127,79 @@ export function makePullRequestOperations(dependencies: {
       const project = yield* dependencies.findProject(input.projectId);
       const repository = yield* dependencies.validateProjectRepository(project, input.repository);
       const cwd = yield* dependencies.resolveGitHubCwd(project);
+      const finalizeCaches = dependencies.finalizeMutationCaches(repository, input.number, {
+        invalidateReviewMatches: true,
+      });
+
+      if (input.action === "fast-forward") {
+        const fastForwardStatus = yield* Effect.gen(function* () {
+          const expectedHeadOid = input.expectedHeadOid?.trim() ?? "";
+          if (expectedHeadOid.length === 0) {
+            return yield* Effect.fail(
+              new Error("Refresh the pull request before fast-forwarding its base branch."),
+            );
+          }
+
+          // Bind the mutation to the exact revision rendered to the user. A fresh read prevents
+          // a push that landed just before the click from being included without review.
+          const before = yield* dependencies.github.getPullRequestDetail({
+            cwd,
+            repository,
+            number: input.number,
+          });
+          if (before.state !== "open") {
+            return yield* Effect.fail(new Error("Only an open pull request can be fast-forwarded."));
+          }
+          if (before.isDraft) {
+            return yield* Effect.fail(
+              new Error("Mark the pull request ready for review before fast-forwarding it."),
+            );
+          }
+          if (!before.headOid) {
+            return yield* Effect.fail(
+              new Error("GitHub did not return the pull request head revision. Refresh and retry."),
+            );
+          }
+          if (before.headOid !== expectedHeadOid) {
+            return yield* Effect.fail(
+              new Error(
+                "The pull request received new commits after it was loaded. Refresh and review the new head before retrying.",
+              ),
+            );
+          }
+
+          const updated = yield* dependencies.github.fastForwardBranch({
+            cwd,
+            repository,
+            branch: before.baseBranch,
+            targetOid: expectedHeadOid,
+          });
+          if (updated.oid !== expectedHeadOid) {
+            return yield* Effect.fail(
+              new Error("GitHub returned an unexpected base branch revision after fast-forwarding."),
+            );
+          }
+
+          // The ref response above is the authoritative mutation acknowledgement. GitHub marks
+          // this as an indirect merge asynchronously, so a failed follow-up read must not turn a
+          // successful ref update into a retryable error.
+          const after = yield* dependencies.github
+            .getPullRequestDetail({ cwd, repository, number: input.number })
+            .pipe(Effect.catch(() => Effect.succeed(null)));
+          if (after?.state === "merged") return "merged" as const;
+          if (after?.headOid && after.headOid !== expectedHeadOid) return "head-changed" as const;
+          return "base-updated" as const;
+        }).pipe(Effect.ensuring(finalizeCaches));
+
+        return {
+          projectId: project.id,
+          repository,
+          number: input.number,
+          workspaceRoot: project.workspaceRoot,
+          fastForwardStatus,
+        };
+      }
+
       if (input.action === "merge") {
         const mergeMethod = input.mergeMethod ?? "merge";
         const capabilities = yield* dependencies.loadMergeCapabilities(cwd, repository);
@@ -145,11 +218,7 @@ export function makePullRequestOperations(dependencies: {
           ...(input.mergeMethod ? { mergeMethod: input.mergeMethod } : {}),
         })
         .pipe(
-          Effect.ensuring(
-            dependencies.finalizeMutationCaches(repository, input.number, {
-              invalidateReviewMatches: true,
-            }),
-          ),
+          Effect.ensuring(finalizeCaches),
         );
       return {
         projectId: project.id,

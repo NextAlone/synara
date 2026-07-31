@@ -2,12 +2,14 @@ import { ProjectId, type OrchestrationProject } from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
-import type { GitHubPullRequestDetailData } from "../git/Services/GitHubCli";
+import { GitHubCliError } from "../git/Errors";
+import type { GitHubCliShape, GitHubPullRequestDetailData } from "../git/Services/GitHubCli";
 import { createGitHubCliWithFakeGh } from "../git/testing/fakeGitHubCli";
 import type { ProjectPullRequestPinsShape } from "../persistence/Services/ProjectPullRequestPins";
 import { makePullRequestOperations } from "./pullRequestOperations";
 
 const now = "2026-07-15T00:00:00.000Z";
+const reviewedHeadOid = "2222222222222222222222222222222222222222";
 
 const project: OrchestrationProject = {
   id: ProjectId.makeUnsafe("project-detail"),
@@ -39,6 +41,7 @@ const detail: GitHubPullRequestDetailData = {
   changedFiles: 0,
   headBranch: "feature",
   baseBranch: "main",
+  headOid: reviewedHeadOid,
   createdAt: now,
   updatedAt: now,
   mergedAt: null,
@@ -50,6 +53,35 @@ const detail: GitHubPullRequestDetailData = {
   comments: [],
   commits: [],
 };
+
+type PullRequestOperationDependencies = Parameters<typeof makePullRequestOperations>[0];
+
+function makeDependencies(
+  github: GitHubCliShape,
+  overrides: Partial<PullRequestOperationDependencies> = {},
+): PullRequestOperationDependencies {
+  return {
+    github,
+    pins: {
+      listByProjectIds: () => Effect.succeed([]),
+      setPinned: () => Effect.void,
+    },
+    findProject: () => Effect.succeed(project),
+    validateRepository: (repository) => Effect.succeed(repository),
+    validateProjectRepository: (_project, repository) => Effect.succeed(repository),
+    resolveGitHubCwd: () => Effect.succeed(project.workspaceRoot),
+    loadMergeCapabilities: () =>
+      Effect.succeed({
+        merge: true,
+        squash: true,
+        rebase: true,
+        deleteBranchOnMerge: false,
+      }),
+    withGitHubRead: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,
+    finalizeMutationCaches: () => Effect.void,
+    ...overrides,
+  };
+}
 
 describe("makePullRequestOperations", () => {
   it("uses the backend-resolved Git cwd for pull-request diffs", async () => {
@@ -149,5 +181,109 @@ describe("makePullRequestOperations", () => {
         }),
       ),
     );
+  });
+
+  it("fast-forwards the explicit PR repository and base branch to the reviewed head", async () => {
+    const base = createGitHubCliWithFakeGh().service;
+    const getPullRequestDetail = vi
+      .fn()
+      .mockReturnValueOnce(Effect.succeed(detail))
+      .mockReturnValueOnce(
+        Effect.succeed({ ...detail, state: "merged" as const, mergedAt: now }),
+      );
+    const fastForwardBranch = vi.fn(() => Effect.succeed({ oid: reviewedHeadOid }));
+    const finalizeMutationCaches = vi.fn(() => Effect.void);
+    const operations = makePullRequestOperations(
+      makeDependencies(
+        { ...base, getPullRequestDetail, fastForwardBranch },
+        { finalizeMutationCaches },
+      ),
+    );
+
+    const result = await Effect.runPromise(
+      operations.action({
+        projectId: project.id,
+        repository: "acme/secondary",
+        number: 42,
+        action: "fast-forward",
+        expectedHeadOid: reviewedHeadOid,
+      }),
+    );
+
+    expect(fastForwardBranch).toHaveBeenCalledWith({
+      cwd: project.workspaceRoot,
+      repository: "acme/secondary",
+      branch: "main",
+      targetOid: reviewedHeadOid,
+    });
+    expect(result.fastForwardStatus).toBe("merged");
+    expect(finalizeMutationCaches).toHaveBeenCalledWith("acme/secondary", 42, {
+      invalidateReviewMatches: true,
+    });
+  });
+
+  it("rejects fast-forward when the PR head changed after the rendered snapshot", async () => {
+    const base = createGitHubCliWithFakeGh().service;
+    const fastForwardBranch = vi.fn(() => Effect.succeed({ oid: reviewedHeadOid }));
+    const operations = makePullRequestOperations(
+      makeDependencies({
+        ...base,
+        getPullRequestDetail: () =>
+          Effect.succeed({
+            ...detail,
+            headOid: "3333333333333333333333333333333333333333",
+          }),
+        fastForwardBranch,
+      }),
+    );
+
+    await expect(
+      Effect.runPromise(
+        operations.action({
+          projectId: project.id,
+          repository: "acme/widgets",
+          number: 42,
+          action: "fast-forward",
+          expectedHeadOid: reviewedHeadOid,
+        }),
+      ),
+    ).rejects.toThrow("received new commits");
+    expect(fastForwardBranch).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges the ref update when the follow-up PR read is unavailable", async () => {
+    const base = createGitHubCliWithFakeGh().service;
+    let detailReadCount = 0;
+    const getPullRequestDetail = vi.fn(() => {
+      detailReadCount += 1;
+      return detailReadCount === 1
+        ? Effect.succeed(detail)
+        : Effect.fail(
+            new GitHubCliError({
+              operation: "getPullRequestDetail",
+              detail: "GitHub detail refresh failed.",
+            }),
+          );
+    });
+    const operations = makePullRequestOperations(
+      makeDependencies({
+        ...base,
+        getPullRequestDetail,
+        fastForwardBranch: () => Effect.succeed({ oid: reviewedHeadOid }),
+      }),
+    );
+
+    const result = await Effect.runPromise(
+      operations.action({
+        projectId: project.id,
+        repository: "acme/widgets",
+        number: 42,
+        action: "fast-forward",
+        expectedHeadOid: reviewedHeadOid,
+      }),
+    );
+
+    expect(getPullRequestDetail).toHaveBeenCalledTimes(2);
+    expect(result.fastForwardStatus).toBe("base-updated");
   });
 });

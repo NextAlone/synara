@@ -58,6 +58,7 @@ export interface FakeGhScenario {
   reviewRequestedPullRequestNumbers?: number[];
   mergeCapabilities?: PullRequestMergeCapabilities;
   pullRequestDiff?: { patch: string; truncated: boolean };
+  fastForwardBranchOid?: string;
 }
 
 export type FakePullRequest = NonNullable<FakeGhScenario["pullRequest"]>;
@@ -320,6 +321,14 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
       getPullRequestDiff: (input) => {
         ghCalls.push(`pr diff ${input.number} --repo ${input.repository}`);
         return Effect.succeed(scenario.pullRequestDiff ?? { patch: "", truncated: false });
+      },
+      fastForwardBranch: (input) => {
+        ghCalls.push(
+          `api fast-forward ${input.repository} ${input.branch} ${input.targetOid} force=false`,
+        );
+        return scenario.failWith
+          ? Effect.fail(scenario.failWith)
+          : Effect.succeed({ oid: scenario.fastForwardBranchOid ?? input.targetOid });
       },
       runPullRequestAction: (input) => {
         ghCalls.push(
