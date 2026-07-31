@@ -2,6 +2,41 @@ export const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 64;
 export const SCROLL_END_EPSILON_PX = 1;
 export const TRANSCRIPT_BOTTOM_CLEARANCE_PX = 24;
 
+export type TranscriptFollowMode = "following" | "detached";
+export type TranscriptScrollDirection = "away" | "toward";
+
+export type TranscriptFollowEvent =
+  | { type: "arm" }
+  | {
+      type: "user-scroll-intent";
+      direction: TranscriptScrollDirection;
+      isAtEnd: boolean;
+    }
+  | {
+      type: "reached-end";
+      direction: TranscriptScrollDirection | null;
+    };
+
+/**
+ * Codex keeps follow intent separate from the current scroll geometry. A layout
+ * change can temporarily move the viewport away from the bottom, but only real
+ * user input is allowed to detach the transcript from live turn growth.
+ */
+export function transitionTranscriptFollowMode(
+  current: TranscriptFollowMode,
+  event: TranscriptFollowEvent,
+): TranscriptFollowMode {
+  switch (event.type) {
+    case "arm":
+      return "following";
+    case "user-scroll-intent":
+      if (event.direction === "away") return "detached";
+      return current === "following" || event.isAtEnd ? "following" : "detached";
+    case "reached-end":
+      return current === "following" || event.direction === "toward" ? "following" : "detached";
+  }
+}
+
 interface ScrollPosition {
   scrollTop: number;
   clientHeight: number;

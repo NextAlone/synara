@@ -5,7 +5,56 @@ import {
   getScrollContainerDistanceFromBottom,
   isScrollContainerAtEnd,
   isScrollContainerNearBottom,
+  transitionTranscriptFollowMode,
 } from "./chat-scroll";
+
+describe("transitionTranscriptFollowMode", () => {
+  it("keeps layout-driven movement attached until the user scrolls away", () => {
+    expect(
+      transitionTranscriptFollowMode("following", {
+        type: "reached-end",
+        direction: null,
+      }),
+    ).toBe("following");
+    expect(
+      transitionTranscriptFollowMode("following", {
+        type: "user-scroll-intent",
+        direction: "away",
+        isAtEnd: true,
+      }),
+    ).toBe("detached");
+  });
+
+  it("re-arms only after explicit movement toward the end or an arm event", () => {
+    expect(
+      transitionTranscriptFollowMode("following", {
+        type: "user-scroll-intent",
+        direction: "toward",
+        isAtEnd: false,
+      }),
+    ).toBe("following");
+    expect(
+      transitionTranscriptFollowMode("detached", {
+        type: "user-scroll-intent",
+        direction: "toward",
+        isAtEnd: false,
+      }),
+    ).toBe("detached");
+    expect(
+      transitionTranscriptFollowMode("detached", {
+        type: "reached-end",
+        direction: null,
+      }),
+    ).toBe("detached");
+    expect(
+      transitionTranscriptFollowMode("detached", {
+        type: "reached-end",
+        direction: "toward",
+      }),
+    ).toBe("following");
+    expect(transitionTranscriptFollowMode("detached", { type: "arm" })).toBe("following");
+  });
+});
 
 describe("getScrollContainerDistanceFromBottom", () => {
   it("returns the remaining distance when the viewport is above the bottom", () => {

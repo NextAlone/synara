@@ -2753,8 +2753,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       expect(scrollContainer.scrollTop).toBeGreaterThan(scrollTopBeforeTaskListGrowth);
 
       // A live work group grows immediately before the stable trailing Working row.
-      // It must expose the tail control when it overflows, without treating tool-only
-      // activity as assistant output and silently pulling the viewport down.
+      // Codex follows the latest turn's measured height rather than filtering by row
+      // kind, so command/tool chrome must remain visible while follow mode is armed.
       scrollToCalls.length = 0;
       const toolOnlyActivityText = "Inspect scroll tail after tasks";
       syncActiveThread((thread) => ({
@@ -2782,8 +2782,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
           const scrollButton = document.querySelector<HTMLButtonElement>(
             'button[aria-label="Scroll to bottom"]',
           );
-          expect(scrollButton?.getAttribute("aria-hidden")).toBe("false");
-          expect(scrollToCalls).toHaveLength(0);
+          expect(scrollButton?.getAttribute("aria-hidden")).toBe("true");
+          expect(scrollToCalls.length).toBeGreaterThan(0);
+          expect(isScrollContainerAtEnd(scrollContainer)).toBe(true);
         },
         { timeout: 4_000, interval: 16 },
       );
@@ -2801,7 +2802,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
       scrollContainer.scrollTop = 0;
       scrollContainer.dispatchEvent(new Event("scroll"));
       await waitForLayout();
-      const scrollTopBeforeAwayTaskListUpdate = scrollContainer.scrollTop;
       scrollToCalls.length = 0;
       syncActiveThread((thread) => ({
         ...thread,
@@ -2835,9 +2835,36 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       await waitForLayout();
       expect(scrollToCalls).toHaveLength(0);
-      expect(
-        Math.abs(scrollContainer.scrollTop - scrollTopBeforeAwayTaskListUpdate),
-      ).toBeLessThanOrEqual(1);
+      expect(isScrollContainerAtEnd(scrollContainer)).toBe(false);
+
+      syncActiveThread((thread) => ({
+        ...thread,
+        activities: [
+          ...thread.activities,
+          {
+            id: EventId.makeUnsafe("activity-auto-follow-tool-away"),
+            createdAt: isoAt(1_208 + 0.75),
+            kind: "tool.completed",
+            summary: "work update while reviewing history",
+            tone: "tool",
+            turnId: activeTurnId,
+            payload: {
+              itemType: "dynamic_tool_call",
+              toolName: "inspect-detached-scroll-tail",
+            },
+          },
+        ],
+        updatedAt: isoAt(1_208 + 0.75),
+      }));
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Inspect detached scroll tail");
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+      await waitForLayout();
+      expect(scrollToCalls).toHaveLength(0);
+      expect(isScrollContainerAtEnd(scrollContainer)).toBe(false);
 
       const scrollToBottomButton = await waitForElement(
         () =>

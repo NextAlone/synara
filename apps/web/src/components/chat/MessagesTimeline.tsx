@@ -419,10 +419,10 @@ interface MessagesTimelineProps {
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onIsAtEndChange?: (isAtEnd: boolean) => void;
   /**
-   * Runs after a changed tail item has had a chance to receive its virtualized
-   * layout. ChatView owns the resulting physical end/follow decision.
+   * Runs after latest-turn row data changes and LegendList has committed its
+   * measurements. ChatView owns the physical end/follow decision.
    */
-  onTailLayoutSettled?: (tail: MessagesTimelineTailLayout) => void;
+  onLatestTurnLayoutChange?: (layout: MessagesTimelineLatestTurnLayout) => void;
   /** Emits current + visible sent-message anchors as the viewport scrolls (drives the trail). */
   onTrailHighlightsChange?: (snapshot: ActiveTrailSnapshot) => void;
   onMessagesClickCapture?: ComponentProps<typeof LegendList>["onClickCapture"];
@@ -449,10 +449,7 @@ interface MessagesTimelineProps {
   contentInsetRightPx?: number | undefined;
 }
 
-export type MessagesTimelineTailKind = MessagesTimelineRow["kind"];
-
-export interface MessagesTimelineTailLayout {
-  kind: MessagesTimelineTailKind;
+export interface MessagesTimelineLatestTurnLayout {
   element: HTMLElement | null;
 }
 
@@ -488,7 +485,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isRevertingCheckpoint,
   onImageExpand,
   onIsAtEndChange,
-  onTailLayoutSettled,
+  onLatestTurnLayoutChange,
   onTrailHighlightsChange,
   onMessagesClickCapture,
   onMessagesMouseUp,
@@ -628,17 +625,95 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       if (!(candidate instanceof HTMLElement)) {
         return;
       }
-      const handlePointerOrTouchIntent = () => onUserScrollIntent(false);
-      const handleWheelIntent = (event: WheelEvent) => onUserScrollIntent(event.deltaY > 0);
-      candidate.addEventListener("pointerdown", handlePointerOrTouchIntent, { passive: true });
-      candidate.addEventListener("touchmove", handlePointerOrTouchIntent, { passive: true });
-      candidate.addEventListener("touchstart", handlePointerOrTouchIntent, { passive: true });
+      let scrollbarPointerStart: number | null = null;
+      let touchStart: { identifier: number; y: number } | null = null;
+
+      const handleWheelIntent = (event: WheelEvent) => {
+        if (event.deltaY !== 0) {
+          onUserScrollIntent(event.deltaY > 0);
+        }
+      };
+      const handleKeyIntent = (event: globalThis.KeyboardEvent) => {
+        if (event.defaultPrevented) return;
+        if (
+          event.target instanceof HTMLElement &&
+          event.target.closest("input, textarea, button, a, [contenteditable='true']")
+        ) {
+          return;
+        }
+
+        if (
+          event.key === "ArrowDown" ||
+          event.key === "PageDown" ||
+          event.key === "End" ||
+          (event.key === " " && !event.shiftKey)
+        ) {
+          onUserScrollIntent(true);
+        } else if (
+          event.key === "ArrowUp" ||
+          event.key === "PageUp" ||
+          event.key === "Home" ||
+          (event.key === " " && event.shiftKey)
+        ) {
+          onUserScrollIntent(false);
+        }
+      };
+      const handlePointerDown = (event: PointerEvent) => {
+        // Content clicks and text selection are not scroll intent. A pointer on
+        // the native scrollbar is resolved from the first resulting scroll.
+        if (event.pointerType === "mouse" && event.target === candidate) {
+          scrollbarPointerStart = candidate.scrollTop;
+        }
+      };
+      const clearScrollbarPointer = () => {
+        scrollbarPointerStart = null;
+      };
+      const handleScrollbarScroll = () => {
+        if (scrollbarPointerStart === null) return;
+        const nextScrollTop = candidate.scrollTop;
+        if (Math.abs(nextScrollTop - scrollbarPointerStart) < 0.5) return;
+        onUserScrollIntent(nextScrollTop > scrollbarPointerStart);
+        scrollbarPointerStart = nextScrollTop;
+      };
+      const handleTouchStart = (event: TouchEvent) => {
+        const touch = event.changedTouches.item(0);
+        touchStart = touch ? { identifier: touch.identifier, y: touch.clientY } : null;
+      };
+      const handleTouchMove = (event: TouchEvent) => {
+        if (!touchStart) return;
+        const touch = Array.from(event.touches).find(
+          (candidateTouch) => candidateTouch.identifier === touchStart?.identifier,
+        );
+        if (!touch) return;
+        const deltaY = touch.clientY - touchStart.y;
+        if (Math.abs(deltaY) < 8) return;
+        // Finger movement is opposite to the transcript's scroll direction.
+        onUserScrollIntent(deltaY < 0);
+        touchStart = { identifier: touch.identifier, y: touch.clientY };
+      };
+      const clearTouch = () => {
+        touchStart = null;
+      };
+
+      candidate.addEventListener("keydown", handleKeyIntent);
+      candidate.addEventListener("pointerdown", handlePointerDown, { passive: true });
+      candidate.addEventListener("scroll", handleScrollbarScroll, { passive: true });
+      candidate.addEventListener("touchend", clearTouch, { passive: true });
+      candidate.addEventListener("touchmove", handleTouchMove, { passive: true });
+      candidate.addEventListener("touchstart", handleTouchStart, { passive: true });
       candidate.addEventListener("wheel", handleWheelIntent, { passive: true });
+      window.addEventListener("pointercancel", clearScrollbarPointer, { passive: true });
+      window.addEventListener("pointerup", clearScrollbarPointer, { passive: true });
       scrollContainerCleanup = () => {
-        candidate.removeEventListener("pointerdown", handlePointerOrTouchIntent);
-        candidate.removeEventListener("touchmove", handlePointerOrTouchIntent);
-        candidate.removeEventListener("touchstart", handlePointerOrTouchIntent);
+        candidate.removeEventListener("keydown", handleKeyIntent);
+        candidate.removeEventListener("pointerdown", handlePointerDown);
+        candidate.removeEventListener("scroll", handleScrollbarScroll);
+        candidate.removeEventListener("touchend", clearTouch);
+        candidate.removeEventListener("touchmove", handleTouchMove);
+        candidate.removeEventListener("touchstart", handleTouchStart);
         candidate.removeEventListener("wheel", handleWheelIntent);
+        window.removeEventListener("pointercancel", clearScrollbarPointer);
+        window.removeEventListener("pointerup", clearScrollbarPointer);
       };
     }, 0);
     return () => {
@@ -686,31 +761,37 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     () => (latestMessageRowId ? { keys: [latestMessageRowId] } : undefined),
     [latestMessageRowId],
   );
-  const tailLayoutRow = rows.at(-1) ?? null;
-  const tailLayoutIndex = rows.length - 1;
-  const tailLayoutIndexRef = useRef(tailLayoutIndex);
+  const latestTurnTailRow = rows.at(-1) ?? null;
+  const latestTurnTailIndex = rows.length - 1;
+  const latestTurnTailIndexRef = useRef(latestTurnTailIndex);
   useLayoutEffect(() => {
-    tailLayoutIndexRef.current = tailLayoutIndex;
-  }, [tailLayoutIndex]);
+    latestTurnTailIndexRef.current = latestTurnTailIndex;
+  }, [latestTurnTailIndex]);
   useLayoutEffect(() => {
-    if (!tailLayoutRow || !onTailLayoutSettled) {
+    if (!latestTurnTailRow || !onLatestTurnLayoutChange) {
       return;
     }
 
-    const tailLayoutFrame = window.requestAnimationFrame(() => {
-      // LegendList 3.3 batches row measurements in the next frame. Re-run when
-      // any visible row changes: the trailing Working row keeps a stable identity
-      // while the live work group immediately before it grows.
-      onTailLayoutSettled({
-        kind: tailLayoutRow.kind,
-        element: readLegendListTailElement(resolvedListRef, tailLayoutIndexRef.current),
+    let settleFrame: number | null = null;
+    const settleTimeout = window.setTimeout(() => {
+      settleFrame = window.requestAnimationFrame(() => {
+        settleFrame = null;
+        onLatestTurnLayoutChange({
+          element: readLegendListTailElement(
+            resolvedListRef,
+            latestTurnTailIndexRef.current,
+          ),
+        });
       });
-    });
+    }, 0);
 
     return () => {
-      window.cancelAnimationFrame(tailLayoutFrame);
+      window.clearTimeout(settleTimeout);
+      if (settleFrame !== null) {
+        window.cancelAnimationFrame(settleFrame);
+      }
     };
-  }, [onTailLayoutSettled, resolvedListRef, rows, tailLayoutRow]);
+  }, [latestTurnTailRow, onLatestTurnLayoutChange, resolvedListRef, rows]);
   // The newest work group renders its rows inline while the turn is live; every
   // older run of tool calls folds into a "Ran N commands..." summary row.
   const lastLiveWorkGroupId = useMemo(() => findLastLiveWorkGroupId(rows), [rows]);

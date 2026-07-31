@@ -67,6 +67,7 @@ import {
   useState,
   type MouseEvent,
   type ReactNode,
+  type WheelEvent as ReactWheelEvent,
 } from "react";
 import { GoTasklist } from "react-icons/go";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -120,6 +121,9 @@ import { isElectron } from "../env";
 import {
   isScrollContainerAtEnd,
   isScrollContainerNearBottom,
+  transitionTranscriptFollowMode,
+  type TranscriptFollowMode,
+  type TranscriptScrollDirection,
 } from "../chat-scroll";
 import { stripDiffSearchParams } from "../diffRouteSearch";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
@@ -463,7 +467,7 @@ import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
 import type {
   MessagesTimelineController,
-  MessagesTimelineTailLayout,
+  MessagesTimelineLatestTurnLayout,
 } from "./chat/MessagesTimeline";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
@@ -1568,10 +1572,9 @@ export default function ChatView({
   const legendListRef = useRef<LegendListRef | null>(null);
   const timelineControllerRef = useRef<MessagesTimelineController | null>(null);
   const isAtEndRef = useRef(true);
-  const isUserScrollingTowardEndRef = useRef(false);
-  const hasExplicitTranscriptScrollIntentRef = useRef(false);
+  const transcriptFollowModeRef = useRef<TranscriptFollowMode>("following");
+  const transcriptUserScrollDirectionRef = useRef<TranscriptScrollDirection | null>(null);
   const autoFollowThreadIdRef = useRef<ThreadId | null>(null);
-  const postSendWorkingTailMessageIdRef = useRef<MessageId | null>(null);
   const pendingInteractionAnchorRef = useRef<{
     element: HTMLElement;
     top: number;
@@ -5000,23 +5003,22 @@ export default function ChatView({
       });
     }, 0);
   }, []);
-  const armTranscriptAutoFollow = useCallback(
-    (targetThreadId: ThreadId, postSendMessageId: MessageId | null = null) => {
-      const pendingAwayFromEndTimeout = pendingAwayFromEndTimeoutRef.current;
-      if (pendingAwayFromEndTimeout !== null) {
-        window.clearTimeout(pendingAwayFromEndTimeout);
-        pendingAwayFromEndTimeoutRef.current = null;
-      }
-      isUserScrollingTowardEndRef.current = false;
-      hasExplicitTranscriptScrollIntentRef.current = false;
-      autoFollowThreadIdRef.current = targetThreadId;
-      postSendWorkingTailMessageIdRef.current = postSendMessageId;
-      isAtEndRef.current = true;
-      showScrollDebouncer.current.cancel();
-      setShowScrollToBottom(false);
-    },
-    [],
-  );
+  const armTranscriptAutoFollow = useCallback((targetThreadId: ThreadId) => {
+    const pendingAwayFromEndTimeout = pendingAwayFromEndTimeoutRef.current;
+    if (pendingAwayFromEndTimeout !== null) {
+      window.clearTimeout(pendingAwayFromEndTimeout);
+      pendingAwayFromEndTimeoutRef.current = null;
+    }
+    transcriptFollowModeRef.current = transitionTranscriptFollowMode(
+      transcriptFollowModeRef.current,
+      { type: "arm" },
+    );
+    transcriptUserScrollDirectionRef.current = null;
+    autoFollowThreadIdRef.current = targetThreadId;
+    isAtEndRef.current = true;
+    showScrollDebouncer.current.cancel();
+    setShowScrollToBottom(false);
+  }, []);
   const followTranscriptAfterQueuedComposerSend = useCallback(
     (targetThreadId: ThreadId) => {
       // Persisting queued image previews can outlive the active thread. Never
@@ -5030,7 +5032,7 @@ export default function ChatView({
       armTranscriptAutoFollow(targetThreadId);
       scrollToEnd(false);
     },
-    [armTranscriptAutoFollow, scrollToEnd],
+    [activeThreadIdRef, armTranscriptAutoFollow, scrollToEnd],
   );
   const clearTranscriptAutoFollow = useCallback(() => {
     const pendingAwayFromEndTimeout = pendingAwayFromEndTimeoutRef.current;
@@ -5039,7 +5041,6 @@ export default function ChatView({
       pendingAwayFromEndTimeoutRef.current = null;
     }
     autoFollowThreadIdRef.current = null;
-    postSendWorkingTailMessageIdRef.current = null;
     scrollToEndRequestIdRef.current += 1;
     // User input must win over the short post-programmatic-scroll guard, otherwise
     // the next reflow can mistake an intentional upward scroll for an auto-scroll.
@@ -5047,8 +5048,16 @@ export default function ChatView({
   }, []);
   const onTranscriptUserScrollIntent = useCallback(
     (towardEnd: boolean) => {
-      hasExplicitTranscriptScrollIntentRef.current = true;
-      isUserScrollingTowardEndRef.current = towardEnd;
+      const direction = towardEnd ? "toward" : "away";
+      transcriptUserScrollDirectionRef.current = direction;
+      transcriptFollowModeRef.current = transitionTranscriptFollowMode(
+        transcriptFollowModeRef.current,
+        {
+          type: "user-scroll-intent",
+          direction,
+          isAtEnd: isAtEndRef.current,
+        },
+      );
       clearTranscriptAutoFollow();
     },
     [clearTranscriptAutoFollow],
@@ -5066,11 +5075,6 @@ export default function ChatView({
     }
     return null;
   }, [timelineEntries]);
-  useEffect(() => {
-    if (latestTranscriptMessage?.role === "assistant") {
-      postSendWorkingTailMessageIdRef.current = null;
-    }
-  }, [latestTranscriptMessage?.id, latestTranscriptMessage?.role]);
   const transcriptTailKey = buildTranscriptTailKey(latestTranscriptMessage);
   const transcriptAutoFollowSignal = buildTranscriptAutoFollowSignal({
     messageCount: transcriptMessageCount,
@@ -5086,13 +5090,14 @@ export default function ChatView({
         window.clearTimeout(pendingAwayFromEndTimeout);
         pendingAwayFromEndTimeoutRef.current = null;
       }
-      if (
-        !hasExplicitTranscriptScrollIntentRef.current ||
-        isUserScrollingTowardEndRef.current
-      ) {
-        hasExplicitTranscriptScrollIntentRef.current = false;
-      }
-      isUserScrollingTowardEndRef.current = false;
+      transcriptFollowModeRef.current = transitionTranscriptFollowMode(
+        transcriptFollowModeRef.current,
+        {
+          type: "reached-end",
+          direction: transcriptUserScrollDirectionRef.current,
+        },
+      );
+      transcriptUserScrollDirectionRef.current = null;
       showScrollDebouncer.current.cancel();
       setShowScrollToBottom(false);
     } else {
@@ -5113,8 +5118,8 @@ export default function ChatView({
       }, 0);
     }
   }, []);
-  const onTranscriptTailLayoutSettled = useCallback(
-    (tail: MessagesTimelineTailLayout) => {
+  const onTranscriptLatestTurnLayoutChange = useCallback(
+    (layout: MessagesTimelineLatestTurnLayout) => {
       const scrollContainer = legendListRef.current?.getScrollableNode?.();
       if (!(scrollContainer instanceof HTMLElement)) {
         return;
@@ -5123,32 +5128,33 @@ export default function ChatView({
       const scrollRect = scrollContainer.getBoundingClientRect();
       const composerTop = composerFormRef.current?.getBoundingClientRect().top;
       const visibleBottom = Math.min(scrollRect.bottom, composerTop ?? scrollRect.bottom);
-      const tailRect = tail.element?.isConnected
-        ? tail.element.getBoundingClientRect()
+      const tailRect = layout.element?.isConnected
+        ? layout.element.getBoundingClientRect()
         : null;
       const tailIsVisible = tailRect !== null && tailRect.bottom <= visibleBottom + 1;
+      const isAtPhysicalEnd = isScrollContainerAtEnd(scrollContainer);
 
-      if (tailIsVisible) {
-        if (isScrollContainerAtEnd(scrollContainer)) {
-          onIsAtEndChange(true);
-        }
+      if (isAtPhysicalEnd) {
+        onIsAtEndChange(true);
         return;
       }
 
       const shouldFollowPendingTurn =
         activeThreadId !== null && autoFollowThreadIdRef.current === activeThreadId;
-      const postSendMessageId = postSendWorkingTailMessageIdRef.current;
-      // Work rows remain excluded from generic transcript auto-follow. The initial
-      // Working row is different: it completes the explicit send transition before
-      // any assistant text exists, so keep that exact optimistic user message pinned.
-      const shouldFollowPostSendWorkingTail =
-        tail.kind === "working" &&
-        shouldFollowPendingTurn &&
-        postSendMessageId !== null;
-      if (
-        (tail.kind === "message" && (isAtEndRef.current || shouldFollowPendingTurn)) ||
-        shouldFollowPostSendWorkingTail
-      ) {
+      const latestMessageBelongsToLiveTurn =
+        hasLiveTurn &&
+        activeTurnIdForTranscript !== null &&
+        latestTranscriptMessage?.role === "assistant" &&
+        latestTranscriptMessage.turnId === activeTurnIdForTranscript;
+      // Tool/work rows never arm follow on their own. Once an explicit send or real
+      // assistant output has armed the current turn, every measured latest-turn row
+      // preserves that intent, matching the Codex app's turn-level observer.
+      const shouldFollowLatestTurn =
+        transcriptFollowModeRef.current === "following" &&
+        (shouldFollowPendingTurn ||
+          hasStreamingAssistantText ||
+          latestMessageBelongsToLiveTurn);
+      if (shouldFollowLatestTurn) {
         isAtEndRef.current = true;
         showScrollDebouncer.current.cancel();
         setShowScrollToBottom(false);
@@ -5156,15 +5162,22 @@ export default function ChatView({
         return;
       }
 
-      // Tool/status rows are intentionally not auto-follow content. Once one exceeds
-      // the visible transcript boundary, expose the escape hatch immediately instead
-      // of waiting for the virtualizer's broader near-end threshold or debounce.
-      // This is a layout overflow, not evidence that the user scrolled away. Keep
-      // the follow intent so the next real transcript message can still re-stick.
+      if (tailIsVisible) {
+        return;
+      }
+
       showScrollDebouncer.current.cancel();
       setShowScrollToBottom(true);
     },
-    [activeThreadId, onIsAtEndChange, scrollToEnd],
+    [
+      activeThreadId,
+      activeTurnIdForTranscript,
+      hasLiveTurn,
+      hasStreamingAssistantText,
+      latestTranscriptMessage,
+      onIsAtEndChange,
+      scrollToEnd,
+    ],
   );
   const desktopUpdateContinuation = useDesktopUpdateContinuation(threadId);
   const [continuingAfterDesktopUpdate, setContinuingAfterDesktopUpdate] = useState(false);
@@ -5231,9 +5244,14 @@ export default function ChatView({
   const onMessagesTouchStartBase = useCallback(() => {
     clearTranscriptAutoFollow();
   }, [clearTranscriptAutoFollow]);
-  const onMessagesWheelBase = useCallback(() => {
-    clearTranscriptAutoFollow();
-  }, [clearTranscriptAutoFollow]);
+  const onMessagesWheelBase = useCallback(
+    (event: ReactWheelEvent<HTMLDivElement>) => {
+      if (event.deltaY !== 0) {
+        onTranscriptUserScrollIntent(event.deltaY > 0);
+      }
+    },
+    [onTranscriptUserScrollIntent],
+  );
   useLayoutEffect(() => {
     const shouldFollowPendingTurn =
       activeThread?.id !== undefined && autoFollowThreadIdRef.current === activeThread.id;
@@ -5483,7 +5501,7 @@ export default function ChatView({
       const isContinuingProgrammaticFollow =
         performance.now() < programmaticScrollUntilRef.current;
       if (
-        !hasExplicitTranscriptScrollIntentRef.current &&
+        transcriptFollowModeRef.current === "following" &&
         (wasNearEndBeforeResize || isContinuingProgrammaticFollow)
       ) {
         scrollToEnd(false);
@@ -5502,8 +5520,8 @@ export default function ChatView({
 
   useEffect(() => {
     isAtEndRef.current = true;
-    isUserScrollingTowardEndRef.current = false;
-    hasExplicitTranscriptScrollIntentRef.current = false;
+    transcriptFollowModeRef.current = "following";
+    transcriptUserScrollDirectionRef.current = null;
     const pendingAwayFromEndTimeout = pendingAwayFromEndTimeoutRef.current;
     if (pendingAwayFromEndTimeout !== null) {
       window.clearTimeout(pendingAwayFromEndTimeout);
@@ -7991,7 +8009,7 @@ export default function ChatView({
     ]);
     // Mark the transcript as anchored before the optimistic row lands so the
     // re-snap effect on row count change pulls us to the new tail.
-    armTranscriptAutoFollow(threadIdForSend, messageIdForSend);
+    armTranscriptAutoFollow(threadIdForSend);
 
     setThreadError(threadIdForSend, null);
     if (expiredTerminalContextCount > 0) {
@@ -8735,7 +8753,7 @@ export default function ChatView({
         source: "native",
       },
     ]);
-    armTranscriptAutoFollow(threadIdForSend, messageIdForSend);
+    armTranscriptAutoFollow(threadIdForSend);
 
     // Nested function so the `try` body holds no value blocks — see the comment on
     // `deleteEmptyTerminalThread` above for why React Compiler requires this shape.
@@ -10438,8 +10456,11 @@ export default function ChatView({
   }, []);
   const onScrollToBottom = useCallback(() => {
     isAtEndRef.current = true;
-    isUserScrollingTowardEndRef.current = false;
-    hasExplicitTranscriptScrollIntentRef.current = false;
+    transcriptFollowModeRef.current = transitionTranscriptFollowMode(
+      transcriptFollowModeRef.current,
+      { type: "arm" },
+    );
+    transcriptUserScrollDirectionRef.current = null;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
     scrollToEnd(true);
@@ -11879,7 +11900,7 @@ export default function ChatView({
                     onExpandTimelineImage={onExpandTimelineImage}
                     followLiveOutput={hasStreamingAssistantText}
                     onIsAtEndChange={onIsAtEndChange}
-                    onTailLayoutSettled={onTranscriptTailLayoutSettled}
+                    onLatestTurnLayoutChange={onTranscriptLatestTurnLayoutChange}
                     markdownCwd={threadWorkspaceCwd ?? undefined}
                     resolvedTheme={resolvedTheme}
                     chatFontSizePx={settings.chatFontSizePx}
