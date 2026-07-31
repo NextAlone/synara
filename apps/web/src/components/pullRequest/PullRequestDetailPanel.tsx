@@ -1,7 +1,7 @@
 // FILE: PullRequestDetailPanel.tsx
 // Purpose: Orchestrator for the pull request detail surface — owns the queries, gh-backed
-//          actions (merge/fast-forward/ready/draft/close/reopen, fix findings, copy link), the
-//          header with its Summary/Timeline/Code tab switcher, the Code tab's diff viewport,
+//          actions (merge/fast-forward/ready/draft/close/reopen, review/fix findings, copy link),
+//          the header with its Summary/Timeline/Code tab switcher, the Code tab's diff viewport,
 //          and the confirm dialogs. Summary and Timeline rendering live in their own tabs.
 // Layer: Pull request presentation
 // Exports: PullRequestDetailPanel
@@ -26,6 +26,7 @@ import {
 import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
 import {
   buildFixFindingsPrompt,
+  buildReviewPullRequestPrompt,
   buildResolveConflictsPrompt,
 } from "~/components/chat/environment/environmentPullRequest.logic";
 import {
@@ -54,6 +55,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { appendComposerPromptText } from "~/lib/chatReferences";
 import {
   EllipsisIcon,
+  EyeIcon,
   ExternalLinkIcon,
   GitMergeConflictIcon,
   GitMergeIcon,
@@ -91,6 +93,7 @@ import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { PullRequestWarningNote } from "./PullRequestWarningNote";
 
 type DetailTab = "summary" | "timeline" | "code";
+type PullRequestThreadKind = "review" | "findings" | "conflicts";
 
 const ACTION_SUCCESS_LABELS: Record<PullRequestAction, string> = {
   merge: "Pull request merged",
@@ -197,7 +200,7 @@ export function PullRequestDetailPanel({
     next: "merge" | "fast-forward" | "close" | null,
     expectedHeadOid: string | null = null,
   ) => patchPanelState({ confirmAction: next, confirmHeadOid: expectedHeadOid });
-  const [preparingThread, setPreparingThread] = useState<"findings" | "conflicts" | null>(null);
+  const [preparingThread, setPreparingThread] = useState<PullRequestThreadKind | null>(null);
   const actionInFlightRef = useRef(false);
   const detailQuery = useQuery(pullRequestDetailQueryOptions(input, { pollingEnabled }));
   const actionMutation = useMutation(pullRequestActionMutationOptions(queryClient));
@@ -274,11 +277,11 @@ export function PullRequestDetailPanel({
       });
   };
 
-  // "Fix findings" and "Resolve conflicts" hand the PR to a fresh thread the same way:
+  // Review, "Fix findings", and "Resolve conflicts" hand the PR to a fresh thread the same way:
   // prepare a worktree on the PR branch, create the thread, and pre-fill the composer with
   // the task-specific prompt for the user to review and send.
   const startPullRequestThread = (
-    kind: "findings" | "conflicts",
+    kind: PullRequestThreadKind,
     prompt: string,
     errorTitle: string,
   ) => {
@@ -325,6 +328,23 @@ export function PullRequestDetailPanel({
       .finally(() => {
         setPreparingThread(null);
       });
+  };
+
+  const reviewPullRequest = () => {
+    if (!detail?.headOid) return;
+    void startPullRequestThread(
+      "review",
+      buildReviewPullRequestPrompt({
+        repository: detail.repository,
+        prNumber: detail.number,
+        prTitle: detail.title,
+        prUrl: detail.url,
+        headBranch: detail.headBranch,
+        baseBranch: detail.baseBranch,
+        headOid: detail.headOid,
+      }),
+      "Could not prepare review",
+    );
   };
 
   const fixFindings = () => {
@@ -530,6 +550,28 @@ export function PullRequestDetailPanel({
                   ) : null}
                 </ComposerPickerMenuPopup>
               </Menu>
+              <Button
+                variant="chrome-outline"
+                size="xs"
+                aria-label="Review pull request"
+                disabled={preparingThread !== null || !detail.headOid}
+                title={
+                  detail.headOid ? undefined : "Head revision unavailable; refresh the pull request"
+                }
+                onClick={reviewPullRequest}
+              >
+                {preparingThread === "review" ? (
+                  <>
+                    <LoaderIcon className="animate-spin" />
+                    Preparing…
+                  </>
+                ) : (
+                  <>
+                    <EyeIcon />
+                    Review
+                  </>
+                )}
+              </Button>
               {detail.state === "open" && detail.isDraft ? (
                 // A draft's primary action is publishing it for review — merge/conflicts
                 // only become relevant once it leaves draft.
