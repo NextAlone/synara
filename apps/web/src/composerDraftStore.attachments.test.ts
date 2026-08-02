@@ -6,6 +6,7 @@ import { COMPOSER_DRAFT_STORAGE_VERSION } from "./composerDraftDomain";
 import {
   captureComposerPromptHistorySavedDraft,
   COMPOSER_DRAFT_STORAGE_KEY,
+  COMPOSER_DRAFT_STORAGE_VERSION,
   findSupersededComposerImageBlobAttachments,
   isComposerImageBlobReferenced,
   partializeComposerDraftStoreState,

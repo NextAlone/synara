@@ -14,12 +14,14 @@ import {
   type OrchestrationThreadActivity,
   type OrchestrationThread,
   type OrchestrationThreadShell,
+  type ProviderKind,
   type ProviderRuntimeEvent,
   type RuntimeMode,
 } from "@synara/contracts";
 import { Cache, Cause, Deferred, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
+import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
   buildSubagentIdentityDirectory,
   collectSubagentProviderThreadIds,
@@ -53,6 +55,7 @@ import {
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
+import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProjectionSnapshotQuery,
@@ -1708,6 +1711,20 @@ const make = Effect.gen(function* () {
               : undefined;
 
           if (Option.isNone(existingThread)) {
+            // The read above hides soft-deleted threads, but `thread.create` is
+            // decided against a tombstone-inclusive read model, so re-creating a
+            // deleted child is rejected — durably, by command id. Replaying that
+            // event (startup open-turn rebuild, journal retry) would then keep
+            // failing on the stored rejection. A deleted subagent thread stays
+            // deleted: drop this child's projection instead of resurrecting it.
+            if (yield* projectionSnapshotQuery.threadIdExistsIncludingDeleted(childThreadId)) {
+              yield* Effect.logDebug("provider runtime ingestion skipped deleted subagent thread", {
+                eventId: event.eventId,
+                eventType: event.type,
+                threadId: childThreadId,
+              });
+              return undefined;
+            }
             const slot = yield* claimNativeChildSlot(parentThread.id, sourceTurnId, childThreadId);
             if (!slot.admitted) {
               const overflowId = EventId.makeUnsafe(
@@ -1935,17 +1952,19 @@ const make = Effect.gen(function* () {
         event.type === "turn.completed" ||
         event.type === "turn.aborted"
       ) {
-        const nextActiveTurnId =
-          event.type === "turn.started"
-            ? (eventTurnId ?? null)
-            : isTerminalTurnEvent ||
-                event.type === "session.exited" ||
-                (event.type === "session.state.changed" &&
-                  (event.payload.state === "ready" ||
-                    event.payload.state === "stopped" ||
-                    event.payload.state === "error"))
-              ? null
-              : activeTurnId;
+        let nextActiveTurnId = activeTurnId;
+        if (event.type === "turn.started") {
+          nextActiveTurnId = eventTurnId ?? null;
+        } else if (
+          isTerminalTurnEvent ||
+          event.type === "session.exited" ||
+          (event.type === "session.state.changed" &&
+            (event.payload.state === "ready" ||
+              event.payload.state === "stopped" ||
+              event.payload.state === "error"))
+        ) {
+          nextActiveTurnId = null;
+        }
         const status = (() => {
           switch (event.type) {
             case "session.state.changed":
@@ -1954,8 +1973,14 @@ const make = Effect.gen(function* () {
               return "running";
             case "session.exited":
               return "stopped";
-            case "turn.completed":
-              return runtimeTurnState(event) === "failed" ? "error" : "ready";
+            case "turn.completed": {
+              const turnState = runtimeTurnState(event);
+              if (turnState === "failed") return "error";
+              if (turnState === "interrupted" || turnState === "cancelled") {
+                return "interrupted";
+              }
+              return "ready";
+            }
             case "turn.aborted":
               return "interrupted";
             case "session.started":
@@ -1965,16 +1990,15 @@ const make = Effect.gen(function* () {
               return activeTurnId !== null ? "running" : "ready";
           }
         })();
-        const lastError =
-          event.type === "session.state.changed" && event.payload.state === "error"
-            ? (event.payload.reason ?? thread.session?.lastError ?? "Provider session error")
-            : status === "error"
-              ? (asString(runtimePayloadRecord(event)?.errorMessage) ??
-                thread.session?.lastError ??
-                "Turn failed")
-              : status === "ready" || status === "interrupted"
-                ? null
-                : (thread.session?.lastError ?? null);
+        let lastError = thread.session?.lastError ?? null;
+        if (event.type === "session.state.changed" && event.payload.state === "error") {
+          lastError = event.payload.reason ?? lastError ?? "Provider session error";
+        } else if (status === "error") {
+          lastError =
+            asString(runtimePayloadRecord(event)?.errorMessage) ?? lastError ?? "Turn failed";
+        } else if (status === "ready" || status === "interrupted") {
+          lastError = null;
+        }
 
         if (shouldApplyThreadLifecycle) {
           if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {
@@ -2461,11 +2485,16 @@ const make = Effect.gen(function* () {
       const thread = Option.getOrUndefined(
         yield* projectionSnapshotQuery.getThreadShellById(event.payload.threadId),
       );
-      const isCodexSteer =
+      // A native steer rides the live turn, so no later turn.started will
+      // arrive to match a pending delivery-mode request — bind to the live
+      // turn immediately instead.
+      const steerProvider = thread?.session?.providerName ?? thread?.modelSelection.provider;
+      const isNativeSteer =
         event.payload.dispatchMode === "steer" &&
-        (thread?.session?.providerName ?? thread?.modelSelection.provider) === "codex";
+        steerProvider !== undefined &&
+        providerSupportsNativeTurnSteering(steerProvider);
       let deliveryTurnId: TurnId | undefined;
-      if (isCodexSteer) {
+      if (isNativeSteer) {
         let activeTurnId = thread?.session?.activeTurnId ?? undefined;
         if (!activeTurnId) {
           const runtimeSession = (yield* providerService.listSessions()).find(
@@ -2495,8 +2524,7 @@ const make = Effect.gen(function* () {
       const flushEvent: ProviderRuntimeEvent = {
         type: "turn.started",
         eventId: event.eventId,
-        provider:
-          isCodexSteer || thread?.session?.providerName !== "claudeAgent" ? "codex" : "claudeAgent",
+        provider: (steerProvider ?? "codex") as ProviderKind,
         createdAt: event.payload.createdAt,
         threadId: event.payload.threadId,
         turnId: deliveryTurnId,
@@ -2562,6 +2590,41 @@ const make = Effect.gen(function* () {
   });
   const runtimeJournalDrainLock = yield* Semaphore.make(1);
 
+  // A deterministically failing row would otherwise pin the single global
+  // cursor forever: the drain never advances, the durable poller re-reads the
+  // same head row, and projection freezes for every thread and every provider
+  // — durably, across restarts. Once the poison gate trips (see the module for
+  // why it needs both an attempt and a wall-clock gate), the head row is
+  // dead-lettered: skipped with an error log so the journal flows again.
+  const poisonGate = makeRuntimeJournalPoisonGate();
+
+  const deadLetterPoisonHeadRow = Effect.gen(function* () {
+    const cursor = yield* runtimeEvents.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER);
+    if (!poisonGate.noteBlockedDrain(cursor, Date.now())) return false;
+    const highWater = yield* runtimeEvents.getHighWaterSequence;
+    const page = yield* runtimeEvents.readAfter({
+      sequenceExclusive: cursor,
+      throughSequenceInclusive: highWater,
+      limit: 1,
+    });
+    const poison = page[0];
+    if (poison === undefined) return false;
+    yield* Effect.logError("provider runtime journal dead-lettered a poison event", {
+      sequence: poison.sequence,
+      eventId: poison.event.eventId,
+      eventType: poison.event.type,
+      threadId: poison.event.threadId,
+      provider: poison.event.provider,
+    });
+    const advanced = yield* runtimeEvents.advanceConsumerCursor({
+      consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+      eventSequence: poison.sequence,
+      updatedAt: new Date().toISOString(),
+    });
+    poisonGate.reset();
+    return advanced;
+  });
+
   const drainRuntimeJournalThrough = (throughSequenceInclusive?: number) =>
     runtimeJournalDrainLock.withPermits(1)(
       Effect.gen(function* () {
@@ -2592,7 +2655,13 @@ const make = Effect.gen(function* () {
             }),
           );
           yield* worker.drain;
-          if (runtimeJournalPageBlocked) return;
+          if (runtimeJournalPageBlocked) {
+            // Either the poison threshold was reached and the head row was
+            // skipped (loop again from the fresh cursor), or the drain yields
+            // to the durable poller, which retries from the exact cursor.
+            if (yield* deadLetterPoisonHeadRow) continue;
+            return;
+          }
 
           const advancedCursor = yield* runtimeEvents.getConsumerCursor(
             PROVIDER_RUNTIME_INGESTION_CONSUMER,
@@ -2652,6 +2721,28 @@ const make = Effect.gen(function* () {
     );
   });
 
+  // This rebuild only restores bounded process-local caches — the durable
+  // effects it re-derives are already committed and deduplicated by command
+  // receipt. It also runs inside `start`, which is on the server's boot path
+  // and dies on failure, so a single unreplayable row (a stored command
+  // rejection, a decode failure) must degrade this thread's caches rather than
+  // make the backend unbootable: the state is rebuildable, the boot loop is not
+  // recoverable without deleting user data.
+  const rebuildAcceptedOpenTurnStateForEvent = (event: ProviderRuntimeEvent) =>
+    prepareAcceptedRuntimeEventReplay(event).pipe(
+      Effect.andThen(processRuntimeEvent(event)),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Effect.logWarning("provider runtime ingestion failed to rebuild open-turn state", {
+              eventId: event.eventId,
+              eventType: event.type,
+              threadId: event.threadId,
+              cause: Cause.pretty(cause),
+            }),
+      ),
+    );
+
   // Accepted open-turn rows may have updated only bounded process-local
   // aggregation state. Re-run them before new output; stable command receipts
   // deduplicate durable effects while the caches are rebuilt in event order.
@@ -2665,8 +2756,7 @@ const make = Effect.gen(function* () {
       });
       if (page.length === 0) return;
       for (const entry of page) {
-        yield* prepareAcceptedRuntimeEventReplay(entry.event);
-        yield* processRuntimeEvent(entry.event);
+        yield* rebuildAcceptedOpenTurnStateForEvent(entry.event);
         sequence = entry.sequence;
       }
       if (page.length < PROVIDER_RUNTIME_REPLAY_PAGE_SIZE) return;

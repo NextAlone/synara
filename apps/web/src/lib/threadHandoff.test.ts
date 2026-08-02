@@ -12,11 +12,18 @@ import { type Thread } from "../types";
 import {
   buildThreadHandoffImportedActivities,
   canCreateThreadHandoff,
+  buildThreadHandoffImportedMessages,
   resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffModelSelection,
   resolveThreadHandoffSource,
   resolveThreadHandoffTitle,
 } from "./threadHandoff";
+import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
+import {
+  appendBrowserAnnotationsToPrompt,
+  extractTrailingBrowserAnnotations,
+  type BrowserAnnotationDraft,
+} from "./browserAnnotations";
 
 const timestamp = (second: number): string =>
   `2026-07-26T00:00:${String(second).padStart(2, "0")}.000Z`;
@@ -341,28 +348,72 @@ describe("threadHandoff", () => {
       }),
     ).toBe(false);
   });
+  it("strips source-thread browser annotations and selections from imported messages", () => {
+    const sourceMessageId = MessageId.makeUnsafe("source-user-message");
+    const annotation: BrowserAnnotationDraft = {
+      id: "annotation-1",
+      ordinal: 1,
+      tabId: "tab-1",
+      source: { url: "https://example.test/docs", pageTitle: "Docs" },
+      selector: "main > button",
+      tagName: "button",
+      role: "button",
+      name: "Save",
+      text: "Save",
+      fingerprint: "button|save|main",
+      comment: "Remove this",
+      capturedAt: "2026-07-23T10:00:00.000Z",
+    };
+    const text = appendBrowserAnnotationsToPrompt(
+      appendAssistantSelectionsToPrompt("Update the page", [
+        { assistantMessageId: "assistant-1", text: "Quoted response" },
+      ]),
+      [annotation],
+      sourceMessageId,
+    );
 
-  it("does not import a source provider's configured context window", () => {
-    const activity = (kind: string): OrchestrationThreadActivity => ({
-      id: EventId.makeUnsafe(`activity-${kind}`),
-      createdAt: "2026-07-21T00:00:00.000Z",
-      tone: "info",
-      kind,
-      summary: kind,
-      payload: {},
-      turnId: null,
-    });
-
-    const imported = buildThreadHandoffImportedActivities({
-      activities: [
-        activity("context-window.configured"),
-        activity("context-window.updated"),
-        activity("tool.started"),
+    const [imported] = buildThreadHandoffImportedMessages({
+      messages: [
+        {
+          id: sourceMessageId,
+          role: "user",
+          text,
+          createdAt: "2026-07-23T10:00:00.000Z",
+          streaming: false,
+          source: "native",
+        },
       ],
     });
-
-    expect(imported.map(({ kind }) => kind)).toEqual(["context-window.updated"]);
+    expect(imported).toBeTruthy();
+    const extracted = extractTrailingBrowserAnnotations(imported!.text, imported!.messageId);
+    expect(imported!.messageId).not.toBe(sourceMessageId);
+    expect(extracted.promptText).toBe("Update the page");
+    expect(extracted.annotations).toEqual([]);
+    expect(imported!.text).not.toContain("<browser_annotations>");
+    expect(imported!.text).not.toContain("annotation-1");
+    expect(imported!.text).not.toContain("<assistant_selection>");
   });
+  it("does not import a source provider's configured context window", () => {
+  const activity = (kind: string): OrchestrationThreadActivity => ({
+    id: EventId.makeUnsafe(`activity-${kind}`),
+    createdAt: "2026-07-21T00:00:00.000Z",
+    tone: "info",
+    kind,
+    summary: kind,
+    payload: {},
+    turnId: null,
+  });
+
+  const imported = buildThreadHandoffImportedActivities({
+    activities: [
+      activity("context-window.configured"),
+      activity("context-window.updated"),
+      activity("tool.started"),
+    ],
+  });
+
+  expect(imported.map(({ kind }) => kind)).toEqual(["context-window.updated"]);
+});
 
   it("lists all supported handoff targets except the active provider", () => {
     const providers = [

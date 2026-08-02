@@ -215,6 +215,7 @@ import type {
   OrchestrationShellStreamItem,
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
+  OrchestrationUnsubscribeThreadInput,
 } from "./orchestration";
 import type { EditorId } from "./editor";
 import type { ThreadId, TurnId } from "./baseSchemas";
@@ -243,6 +244,7 @@ import type {
   StatsGetProfileTokenStatsInput,
   StatsGetProfileTokenStatsResult,
 } from "./stats";
+import type { BrowserAnnotationMethods } from "./browserAnnotations";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -477,16 +479,18 @@ export interface DesktopAppSnapErrorEvent {
   capturedAt: string;
 }
 
-export interface BrowserExecuteCdpInput extends BrowserTabInput {
-  method: string;
-  params?: Record<string, unknown>;
-}
-
 // Pushed from the desktop main process when the in-app browser copy-link chord fires
 // while the native page (not the React chrome) holds keyboard focus.
 export interface BrowserCopyLinkEvent {
   threadId: ThreadId;
   url: string;
+}
+
+// Pushed after the desktop browser host has accepted an agent request. Keeping
+// the requested thread in the event prevents whichever chat happens to be
+// visible from stealing the browser session.
+export interface BrowserUseOpenPanelRequest {
+  threadId: ThreadId;
 }
 
 interface BrowserControlMethods {
@@ -500,7 +504,6 @@ interface BrowserControlMethods {
   copyLink: (input: BrowserTabInput) => Promise<void>;
   copyScreenshotToClipboard: (input: BrowserTabInput) => Promise<void>;
   captureScreenshot: (input: BrowserTabInput) => Promise<BrowserCaptureScreenshotResult>;
-  executeCdp: (input: BrowserExecuteCdpInput) => Promise<unknown>;
   navigate: (input: BrowserNavigateInput) => Promise<ThreadBrowserState>;
   reload: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
   goBack: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
@@ -606,7 +609,10 @@ export interface DesktopBridge {
     ) => Promise<ServerVoiceTranscriptionResult>;
   };
   browser: BrowserControlMethods & {
-    onBrowserUseOpenPanelRequest: (listener: () => void) => () => void;
+    annotations: BrowserAnnotationMethods;
+    onBrowserUseOpenPanelRequest: (
+      listener: (request: BrowserUseOpenPanelRequest) => void,
+    ) => () => void;
     onBrowserCopyLink: (listener: (event: BrowserCopyLinkEvent) => void) => () => void;
   };
 }
@@ -858,7 +864,7 @@ export interface NativeApi {
     subscribeShell: () => Promise<void>;
     unsubscribeShell: () => Promise<void>;
     subscribeThread: (input: OrchestrationSubscribeThreadInput) => Promise<void>;
-    unsubscribeThread: (input: OrchestrationSubscribeThreadInput) => Promise<void>;
+    unsubscribeThread: (input: OrchestrationUnsubscribeThreadInput) => Promise<void>;
     onDomainEvent: (callback: (event: OrchestrationEvent) => void) => () => void;
     onShellEvent: (callback: (event: OrchestrationShellStreamItem) => void) => () => void;
     onThreadEvent: (callback: (event: OrchestrationThreadStreamItem) => void) => () => void;
@@ -879,6 +885,7 @@ export interface NativeApi {
     onEvent: (callback: (event: AutomationStreamEvent) => void) => () => void;
   };
   browser: BrowserControlMethods & {
+    annotations: BrowserAnnotationMethods;
     onCopyLink: (callback: (event: BrowserCopyLinkEvent) => void) => () => void;
   };
 }

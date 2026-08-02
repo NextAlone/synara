@@ -92,6 +92,34 @@ const makeCheckpointStore = Effect.gen(function* () {
       })
       .pipe(Effect.map((result) => result.code === 0));
 
+  const seedCheckpointIndex = (cwd: string, tempIndexPath: string) =>
+    Effect.gen(function* () {
+      const indexPathResult = yield* git.execute({
+        operation: "CheckpointStore.resolveWorkingIndex",
+        cwd,
+        args: ["rev-parse", "--git-path", "index"],
+        allowNonZeroExit: true,
+      });
+      const indexPathRaw = indexPathResult.stdout.trim();
+      if (indexPathResult.code !== 0 || indexPathRaw.length === 0) {
+        return false;
+      }
+
+      const indexPath = path.isAbsolute(indexPathRaw)
+        ? indexPathRaw
+        : path.resolve(cwd, indexPathRaw);
+      const indexExists = yield* fs.exists(indexPath).pipe(Effect.orElseSucceed(() => false));
+      if (!indexExists) {
+        return false;
+      }
+
+      // Preserve Git's stat cache in the throwaway index. Starting every
+      // checkpoint from `read-tree HEAD` discards it, forcing `git add -A` to
+      // rescan and re-hash the whole worktree before every user turn.
+      yield* fs.copyFile(indexPath, tempIndexPath);
+      return true;
+    });
+
   const resolveCheckpointCommit = (
     cwd: string,
     checkpointRef: CheckpointRef,
@@ -786,7 +814,8 @@ const makeCheckpointStore = Effect.gen(function* () {
             ...process.env,
             GIT_INDEX_FILE: tempIndexPath,
           };
-          if (yield* hasHeadCommit(cwd)) {
+          const seededFromWorkingIndex = yield* seedCheckpointIndex(cwd, tempIndexPath);
+          if (!seededFromWorkingIndex && (yield* hasHeadCommit(cwd))) {
             yield* git.execute({
               operation,
               cwd,

@@ -1,6 +1,6 @@
 export const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 64;
 export const SCROLL_END_EPSILON_PX = 1;
-export const TRANSCRIPT_BOTTOM_CLEARANCE_PX = 24;
+export const TRANSCRIPT_BOTTOM_CLEARANCE_PX = 64;
 
 export type TranscriptFollowMode = "following" | "detached";
 export type TranscriptScrollDirection = "away" | "toward";

@@ -49,8 +49,10 @@ import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewa
 import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
   acquireAgentGatewaySessionLease,
+  cancelAgentGatewayTurn,
   startAgentGatewaySessionLeaseExitWatcher,
   type AgentGatewaySessionLease,
+  withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
@@ -518,6 +520,10 @@ export function makeCursorAdapter(
       activePromptFiber: Fiber.Fiber<void, never> | undefined,
     ) =>
       Effect.gen(function* () {
+        if (ctx.activeTurnId !== turnId) {
+          return;
+        }
+        yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
         if (!clearCursorActiveTurn(ctx, turnId)) {
           return;
         }
@@ -548,6 +554,10 @@ export function makeCursorAdapter(
     const failCursorTurnAsTimedOut = (ctx: CursorSessionContext, turnId: TurnId, idleMs: number) =>
       Effect.gen(function* () {
         const promptFiber = ctx.activePromptFiber;
+        if (ctx.activeTurnId !== turnId) {
+          return;
+        }
+        yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
         if (!clearCursorActiveTurn(ctx, turnId)) {
           return;
         }
@@ -633,6 +643,7 @@ export function makeCursorAdapter(
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
+        yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, ctx.activeTurnId);
         ctx.gatewaySessionLease?.release();
         yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
@@ -1123,7 +1134,11 @@ export function makeCursorAdapter(
                 }
               }),
             ),
-          ).pipe(Effect.forkChild);
+            // The drain's lifetime is the session's, not the caller's. Forking it
+            // as a child of the fiber that called startSession killed it the moment
+            // that fiber returned, so every session/update — assistant text, tool
+            // calls, usage — was dropped and the transcript stayed empty.
+          ).pipe(Effect.forkIn(sessionScope));
 
           ctx.notificationFiber = nf;
           sessions.set(input.threadId, ctx);
@@ -1260,6 +1275,10 @@ export function makeCursorAdapter(
           Effect.matchEffect({
             onFailure: (error) =>
               Effect.gen(function* () {
+                if (ctx.activeTurnId !== turnId) {
+                  return;
+                }
+                yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
                 if (!clearCursorActiveTurn(ctx, turnId)) {
                   return;
                 }
@@ -1290,6 +1309,10 @@ export function makeCursorAdapter(
             onSuccess: (result) =>
               Effect.gen(function* () {
                 const failedToolDetail = ctx.activeTurnFailedToolDetail;
+                if (ctx.activeTurnId !== turnId) {
+                  return;
+                }
+                yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
                 if (!clearCursorActiveTurn(ctx, turnId)) {
                   return;
                 }
@@ -1380,22 +1403,37 @@ export function makeCursorAdapter(
         };
       });
 
-    const interruptTurn: CursorAdapterShape["interruptTurn"] = (threadId) =>
+    const interruptTurn: CursorAdapterShape["interruptTurn"] = (threadId, turnId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
-        yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
-        yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
-        const activePromptFiber = ctx.activePromptFiber;
-        yield* Effect.ignore(
-          ctx.acp.cancel.pipe(
-            Effect.mapError((error) =>
-              mapAcpToAdapterError(PROVIDER, threadId, "session/cancel", error),
-            ),
-          ),
-        );
-        if (activePromptFiber) {
-          yield* Fiber.interrupt(activePromptFiber);
+        if (turnId !== undefined && turnId !== ctx.activeTurnId) {
+          yield* Effect.logWarning("cursor.acp.stale_interrupt_ignored", {
+            threadId,
+            requestedTurnId: turnId,
+            activeTurnId: ctx.activeTurnId,
+          });
+          return;
         }
+        const activeTurnId = turnId ?? ctx.activeTurnId;
+        yield* withAgentGatewayTurnCancellation(
+          ctx.gatewaySessionLease,
+          activeTurnId,
+          Effect.gen(function* () {
+            yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
+            yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+            const activePromptFiber = ctx.activePromptFiber;
+            yield* Effect.ignore(
+              ctx.acp.cancel.pipe(
+                Effect.mapError((error) =>
+                  mapAcpToAdapterError(PROVIDER, threadId, "session/cancel", error),
+                ),
+              ),
+            );
+            if (activePromptFiber) {
+              yield* Fiber.interrupt(activePromptFiber);
+            }
+          }),
+        );
       });
 
     const respondToRequest: CursorAdapterShape["respondToRequest"] = (

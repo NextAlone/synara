@@ -13,6 +13,14 @@ const electronMocks = vi.hoisted(() => ({
   fromPartition: vi.fn(),
   partitionSetUserAgent: vi.fn(),
   onBeforeSendHeaders: vi.fn(),
+  protocolHandle: vi.fn(),
+  protocolUnhandle: vi.fn(),
+  netFetch: vi.fn(),
+  sessionOn: vi.fn(),
+  sessionRemoveListener: vi.fn(),
+  willDownloadListener: {
+    current: null as null | ((event: object, item: object, webContents: object) => void),
+  },
 }));
 
 vi.mock("electron", () => ({
@@ -25,6 +33,9 @@ vi.mock("electron", () => ({
   session: {
     fromPartition: electronMocks.fromPartition,
   },
+  net: {
+    fetch: electronMocks.netFetch,
+  },
 }));
 
 import { BROWSER_SESSION_PARTITION, BrowserSessionPolicy } from "./browserSessionPolicy";
@@ -33,12 +44,22 @@ describe("BrowserSessionPolicy", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     electronMocks.headerListener.current = null;
+    electronMocks.willDownloadListener.current = null;
     electronMocks.onBeforeSendHeaders.mockImplementation((listener) => {
       electronMocks.headerListener.current = listener;
     });
     electronMocks.fromPartition.mockReturnValue({
       setUserAgent: electronMocks.partitionSetUserAgent,
       webRequest: { onBeforeSendHeaders: electronMocks.onBeforeSendHeaders },
+      protocol: {
+        handle: electronMocks.protocolHandle,
+        unhandle: electronMocks.protocolUnhandle,
+      },
+      on: electronMocks.sessionOn,
+      removeListener: electronMocks.sessionRemoveListener,
+    });
+    electronMocks.sessionOn.mockImplementation((event, listener) => {
+      if (event === "will-download") electronMocks.willDownloadListener.current = listener;
     });
   });
 
@@ -52,6 +73,7 @@ describe("BrowserSessionPolicy", () => {
     expect(electronMocks.fromPartition).toHaveBeenCalledWith(BROWSER_SESSION_PARTITION);
     expect(electronMocks.partitionSetUserAgent).toHaveBeenCalledOnce();
     expect(electronMocks.onBeforeSendHeaders).toHaveBeenCalledOnce();
+    expect(electronMocks.protocolHandle).toHaveBeenCalledOnce();
   });
 
   it("replaces identity headers case-insensitively without Electron product tokens", () => {
@@ -97,6 +119,47 @@ describe("BrowserSessionPolicy", () => {
     expect(electronMocks.onBeforeSendHeaders).toHaveBeenCalledOnce();
   });
 
+  it("does not duplicate download listeners when protocol setup is retried", () => {
+    electronMocks.protocolHandle.mockImplementationOnce(() => {
+      throw new Error("protocol not ready");
+    });
+    const policy = new BrowserSessionPolicy(vi.fn());
+
+    policy.ensureConfigured();
+    expect(electronMocks.sessionOn).not.toHaveBeenCalled();
+
+    policy.ensureConfigured();
+    expect(electronMocks.protocolHandle).toHaveBeenCalledTimes(2);
+    expect(electronMocks.sessionOn).toHaveBeenCalledOnce();
+
+    policy.dispose();
+    expect(electronMocks.sessionRemoveListener).toHaveBeenCalledOnce();
+    expect(electronMocks.protocolUnhandle).toHaveBeenCalledOnce();
+  });
+
+  it("forwards partition downloads and removes the listener on disposal", () => {
+    const onDownload = vi.fn();
+    const policy = new BrowserSessionPolicy(onDownload);
+    const event = { preventDefault: vi.fn() };
+    const item = { getURL: () => "https://example.test/file.zip" };
+    const webContents = { id: 42 };
+
+    policy.ensureConfigured();
+    electronMocks.willDownloadListener.current?.(event, item, webContents);
+
+    expect(onDownload).toHaveBeenCalledWith({ event, item, webContents });
+    expect(electronMocks.sessionOn).toHaveBeenCalledWith(
+      "will-download",
+      electronMocks.willDownloadListener.current,
+    );
+    policy.dispose();
+    expect(electronMocks.sessionRemoveListener).toHaveBeenCalledWith(
+      "will-download",
+      expect.any(Function),
+    );
+    expect(electronMocks.protocolUnhandle).toHaveBeenCalledOnce();
+  });
+
   it("builds hardened popup options with an optional parent", () => {
     const policy = new BrowserSessionPolicy();
     const parent = {} as BrowserWindow;
@@ -126,5 +189,15 @@ describe("BrowserSessionPolicy", () => {
     expect(partitionUserAgent).not.toMatch(/Electron|Synara/iu);
     expect(firstContents.setUserAgent).toHaveBeenCalledWith(partitionUserAgent);
     expect(secondContents.setUserAgent).toHaveBeenCalledWith(partitionUserAgent);
+  });
+
+  it("keeps file URLs user-facing while assigning an opaque runtime origin", () => {
+    const policy = new BrowserSessionPolicy();
+    const sourceUrl = "file:///Users/example/project/index.html";
+
+    const runtimeUrl = policy.resolveRuntimeUrl(sourceUrl);
+
+    expect(runtimeUrl).toMatch(/^synara-local-preview:\/\/[a-f0-9]+\/index\.html$/u);
+    expect(policy.resolveDisplayUrl(runtimeUrl)).toBe(sourceUrl);
   });
 });

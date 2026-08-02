@@ -141,7 +141,11 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-index="0"');
     expect(markup).not.toContain('class="relative" style="height:');
     expect(markup).toContain('data-timeline-row-kind="message"');
-  }, 10_000);
+    // First test in the file pays the full dynamic-import cost of the
+    // MessagesTimeline module graph, which exceeds 10s under CI thread
+    // contention (observed flaking on 4-thread runners while passing in
+    // ~2s locally).
+  }, 30_000);
 
   it("renders assistant math through the shared markdown renderer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
@@ -2652,6 +2656,45 @@ describe("MessagesTimeline", () => {
     );
     expect(failedMarkup).toContain("Synara couldn&#x27;t create threads");
     expect(failedMarkup).toContain("Claude rejected reasoningEffort");
+  });
+
+  it("uses the Synara icon and action name for Synara browser calls", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "entry-inline-synara-browser",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-synara-browser",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "MCP tool call",
+              tone: "tool",
+              itemType: "mcp_tool_call",
+              toolName: "mcp__synara__browser_open",
+              toolStatus: "completed",
+              liveActivity: {
+                state: "completed",
+                label: "Synara: Browser Open",
+                startedAt: "2026-03-17T19:12:27.000Z",
+                lastActivityAt: "2026-03-17T19:12:28.000Z",
+                elapsedSeconds: 1,
+              },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('data-tool-icon="synara"');
+    expect(markup).toContain("Open browser tab");
+    // A settled call reads as its action alone — no lifecycle or timing tail.
+    expect(markup).not.toContain("elapsed");
+    expect(markup).not.toContain("Completed tool");
+    expect(markup).not.toContain("Synara: Browser Open");
   });
 
   it("renders Synara runtime reconciliation as completed activity, not a running tool", async () => {

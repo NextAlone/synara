@@ -946,8 +946,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             OR latest_turn.state = 'running'
             OR json_extract(runtime.runtime_payload_json, '$.activeTurnId') IS NOT NULL
           )
-          AND COALESCE(sessions.updated_at, threads.updated_at) <= ${updatedBefore}
-        ORDER BY COALESCE(sessions.updated_at, threads.updated_at) ASC, threads.thread_id ASC
+          -- Later of the session lifecycle timestamp and the thread timestamp:
+          -- threads.updated_at advances on every appended message, so a turn
+          -- that is actively streaming output is not a stale candidate.
+          AND MAX(COALESCE(sessions.updated_at, threads.updated_at), threads.updated_at) <= ${updatedBefore}
+        ORDER BY MAX(COALESCE(sessions.updated_at, threads.updated_at), threads.updated_at) ASC, threads.thread_id ASC
         LIMIT ${Math.max(1, Math.min(1_000, Math.floor(limit)))}
       `,
   });
@@ -1345,6 +1348,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM projection_projects
         WHERE project_id = ${projectId}
           AND deleted_at IS NULL
+        LIMIT 1
+      `,
+  });
+
+  // Deliberately NOT filtered by `deleted_at`. Every other thread lookup here
+  // hides soft-deleted rows, but `thread.create` is decided against the
+  // tombstone-inclusive command read model: a thread id stays bound to its
+  // aggregate forever. A caller that gates creation on an active-only lookup
+  // would keep re-creating a soft-deleted thread and be rejected every time.
+  const getAnyThreadIdRowById = SqlSchema.findOneOption({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionThreadIdLookupRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
         LIMIT 1
       `,
   });
@@ -2568,6 +2589,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       });
     });
 
+  const threadIdExistsIncludingDeleted: ProjectionSnapshotQueryShape["threadIdExistsIncludingDeleted"] =
+    (threadId) =>
+      getAnyThreadIdRowById({ threadId }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.threadIdExistsIncludingDeleted:query",
+            "ProjectionSnapshotQuery.threadIdExistsIncludingDeleted:decodeRow",
+          ),
+        ),
+        Effect.map(Option.isSome),
+      );
+
   const getThreadShellById: ProjectionSnapshotQueryShape["getThreadShellById"] = (threadId) =>
     sql
       .withTransaction(
@@ -2879,6 +2912,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     listGeneratedImageActivitiesByTurn,
     getFullThreadDiffContext,
     getThreadShellById,
+    threadIdExistsIncludingDeleted,
     findSyntheticSubagentParentThread,
     getThreadDetailById,
     getThreadDetailForExportById,

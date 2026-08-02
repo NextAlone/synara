@@ -22,6 +22,7 @@ import {
   type ServerVoiceTranscriptionResult,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
+  EventId,
   RuntimeItemId,
   RuntimeRequestId,
   RuntimeTaskId,
@@ -258,6 +259,11 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function asTrimmedString(value: unknown): string | undefined {
+  const stringValue = asString(value)?.trim();
+  return stringValue ? stringValue : undefined;
 }
 
 function asArray(value: unknown): unknown[] | undefined {
@@ -1491,27 +1497,30 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "deprecationNotice") {
+    const details = asTrimmedString(payload?.details);
     return [
       {
         type: "deprecation.notice",
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
-          summary: asString(payload?.summary) ?? "Deprecation notice",
-          ...(asString(payload?.details) ? { details: asString(payload?.details) } : {}),
+          summary: asTrimmedString(payload?.summary) ?? "Deprecation notice",
+          ...(details ? { details } : {}),
         },
       },
     ];
   }
 
   if (event.method === "configWarning") {
+    const details = asTrimmedString(payload?.details);
+    const path = asTrimmedString(payload?.path);
     return [
       {
         type: "config.warning",
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
-          summary: asString(payload?.summary) ?? "Configuration warning",
-          ...(asString(payload?.details) ? { details: asString(payload?.details) } : {}),
-          ...(asString(payload?.path) ? { path: asString(payload?.path) } : {}),
+          summary: asTrimmedString(payload?.summary) ?? "Configuration warning",
+          ...(details ? { details } : {}),
+          ...(path ? { path } : {}),
           ...(payload?.range !== undefined ? { range: payload.range } : {}),
         },
       },
@@ -1725,6 +1734,10 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       (manager) => Effect.promise(() => manager.stopAll()),
     );
 
+    const runtimeEventQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
+      PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+    );
+
     // Idle-progress backstop for codex turns. Same semantics as
     // AcpTurnIdleWatchdog (any inbound activity resets it, a pending human
     // decision pauses it), driven by one shared ticker because codex activity
@@ -1904,6 +1917,24 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           catch: (cause) => toRequestError(input.threadId, "turn/steer", cause),
         }).pipe(
           Effect.tap((result) => Effect.sync(() => armTurnWatchdog(input.threadId, result.turnId))),
+          // The `turn/steer` response carries no runtime event and the model
+          // only consumes injected input at its next turn boundary, so without
+          // this a landed steer is indistinguishable from a dropped one.
+          Effect.tap((result) => {
+            const message = input.input?.trim();
+            if (!message) {
+              return Effect.void;
+            }
+            return Queue.offer(runtimeEventQueue, {
+              type: "turn.steered",
+              eventId: EventId.makeUnsafe(crypto.randomUUID()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              turnId: result.turnId,
+              createdAt: new Date().toISOString(),
+              payload: { message, target: "turn" },
+            });
+          }),
           Effect.map((result) => ({
             ...result,
             threadId: input.threadId,
@@ -2126,10 +2157,6 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             cause,
           }),
       }).pipe(Effect.map((result) => result satisfies ServerVoiceTranscriptionResult));
-
-    const runtimeEventQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
-      PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
-    );
 
     yield* Effect.acquireRelease(
       Effect.gen(function* () {

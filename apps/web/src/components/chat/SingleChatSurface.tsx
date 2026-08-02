@@ -1,7 +1,7 @@
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { isWorkspaceRelativePathSafe } from "@synara/shared/path";
 import type { ProjectId, ThreadId, TurnId } from "@synara/contracts";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
   lazy,
@@ -24,6 +24,7 @@ import { useBrowserPanelDesktopBridge } from "../../hooks/useBrowserPanelDesktop
 import { useDockPaneRuntimeActivation } from "../../hooks/useDockPaneRuntimeActivation";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useWorkspaceFileActivation } from "../../hooks/useWorkspaceFileActivation";
+import { useRepoDiffTotals } from "../../hooks/useRepoDiffTotals";
 import {
   addChatFileComment,
   appendChatFileReference,
@@ -41,6 +42,7 @@ import type { FileCommentSelection } from "../../lib/fileComments";
 import { canComposerHandlePanelWidth } from "../../lib/panelResize";
 import { projectListDirectoriesQueryOptions } from "../../lib/projectReactQuery";
 import { getSidechatCreator } from "../../lib/sidechatCreatorRegistry";
+import { makeVcsQueryTarget, vcsReferencesQueryOptions } from "../../lib/vcsReactQuery";
 import {
   prefetchWorkspaceFile,
   resolveDockFileOpenTarget,
@@ -64,6 +66,7 @@ import { useStore } from "../../store";
 import {
   createProjectSelector,
   createSidebarThreadSummariesSelector,
+  createThreadExistsSelector,
   createThreadWorkspaceMetadataSelector,
 } from "../../storeSelectors";
 import { sortThreadsForSidebar } from "../Sidebar.logic";
@@ -77,12 +80,13 @@ import {
 } from "./ChatThreadSurfacePrimitives";
 import { PanelStateMessage } from "./PanelStateMessage";
 import { RightDock } from "./RightDock";
-import { RIGHT_DOCK_ADD_MENU_KINDS, getRightDockPaneMeta } from "./rightDockPaneMeta";
+import { getRightDockPaneMeta, resolveRightDockLauncherItems } from "./rightDockPaneMeta";
 import {
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
 } from "./composerPickerStyles";
+import { routeSingleBrowserPanelOpenRequest } from "./browserPanelOpenRequest";
 import {
   pullRequestDetailInputFromPane,
   pullRequestPaneTabLabel,
@@ -185,6 +189,9 @@ export function SingleChatSurface(props: {
   const activeProject = useStore(
     useMemo(() => createProjectSelector(props.projectId), [props.projectId]),
   );
+  const hasServerThread = useStore(
+    useMemo(() => createThreadExistsSelector(props.threadId), [props.threadId]),
+  );
   const threadWorkspaceMetadata = useStore(
     useMemo(() => createThreadWorkspaceMetadataSelector(props.threadId), [props.threadId]),
   );
@@ -205,8 +212,32 @@ export function SingleChatSurface(props: {
     threadWorkingDirectory:
       threadWorkspaceMetadata.workingDirectory ?? draftThread?.workingDirectory ?? null,
   });
-  const projects = useStore((store) => store.projects);
   const { settings: appSettings } = useAppSettings();
+  const dockVcsTarget = makeVcsQueryTarget(
+    activeProject,
+    hasServerThread ? props.threadId : null,
+    appSettings.vcsBackend,
+    {
+      threadWorkingDirectory:
+        activeProject?.kind === "studio" && hasServerThread
+          ? (threadWorkspaceMetadata.workingDirectory ?? null)
+          : null,
+    },
+  );
+  const dockVcsReferencesQuery = useQuery(vcsReferencesQueryOptions(dockVcsTarget));
+  const hasVcsRepository =
+    dockVcsTarget.backend !== null && dockVcsReferencesQuery.isSuccess;
+  const dockDiffTotals = useRepoDiffTotals({
+    target: dockVcsTarget,
+    isVcsRepo: hasVcsRepository,
+  });
+  const dockLauncherItems = resolveRightDockLauncherItems({
+    hasWorkspace: workspaceRoot !== null,
+    hasGitRepository: hasVcsRepository,
+    hasReview: dockDiffTotals.fileCount > 0,
+  });
+  const availableDockPaneKinds = dockLauncherItems.map(({ kind }) => kind);
+  const projects = useStore((store) => store.projects);
   const { handleNewThread } = useHandleNewThread();
   const queryClient = useQueryClient();
   const activateWorkspacePreview = useWorkspaceFileActivation(workspaceRoot);
@@ -288,6 +319,9 @@ export function SingleChatSurface(props: {
   const handleToggleBrowser = () => {
     requestImmediateDockHydration("browser");
     toggleSingletonPane(props.threadId, { kind: "browser" });
+  };
+  const handleToggleRightDock = () => {
+    setDockOpen(props.threadId, !dockState.open);
   };
   const handleOpenBrowserUrl = () => {
     requestImmediateDockHydration("browser");
@@ -535,9 +569,21 @@ export function SingleChatSurface(props: {
       requestImmediateDockHydration("browser");
       toggleSingletonPane(props.threadId, { kind: "browser" });
     },
-    onOpen: () => {
-      requestImmediateDockHydration("browser");
-      openPane(props.threadId, { kind: "browser" });
+    onOpen: (requestedThreadId) => {
+      routeSingleBrowserPanelOpenRequest({
+        currentThreadId: props.threadId,
+        requestedThreadId,
+        requestImmediateBrowserHydration: () => requestImmediateDockHydration("browser"),
+        openBrowserPane: (threadId) => openPane(threadId, { kind: "browser" }),
+        navigateToThread: (threadId, panel) => {
+          void navigate({
+            to: "/$threadId",
+            params: { threadId },
+            replace: true,
+            search: () => ({ panel }),
+          });
+        },
+      });
     },
   });
 
@@ -936,6 +982,7 @@ export function SingleChatSurface(props: {
               isFocusedPane
               panelState={chatPanelState}
               onToggleDiff={handleToggleDiff}
+              onToggleRightDock={handleToggleRightDock}
               onToggleBrowser={handleToggleBrowser}
               onOpenBrowserUrl={handleOpenBrowserUrl}
               onOpenTurnDiff={handleOpenTurnDiff}
@@ -953,7 +1000,8 @@ export function SingleChatSurface(props: {
           minWidth={SINGLE_PANEL_MIN_WIDTH}
           defaultWidth={DIFF_INLINE_DEFAULT_WIDTH}
           shouldAcceptWidth={shouldAcceptDockWidth}
-          addMenuKinds={RIGHT_DOCK_ADD_MENU_KINDS}
+          addMenuKinds={availableDockPaneKinds}
+          launcherItems={dockLauncherItems}
           motionKey={props.threadId}
           activePaneRuntimeMode={activePaneRuntimeMode}
           {...(paneLabelOverrides ? { paneLabelOverrides } : {})}

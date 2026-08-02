@@ -84,7 +84,6 @@ describe("getScrollContainerDistanceFromBottom", () => {
     ).toBe(0);
   });
 });
-
 describe("isScrollContainerNearBottom", () => {
   it("returns true when already at bottom", () => {
     expect(

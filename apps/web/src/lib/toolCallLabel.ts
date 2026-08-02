@@ -1,10 +1,11 @@
 // FILE: toolCallLabel.ts
 // Purpose: Normalizes generic tool-call titles and humanizes command executions for timeline rows.
 // Layer: UI utility
-// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, command icon classifiers, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle, extractWebFetchUrl
+// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, deriveFriendlyCommandTarget, command icon classifiers, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle, extractWebFetchUrl
 // Depends on: @synara/contracts tool lifecycle item types
 
-import type { ToolLifecycleItemType } from "@synara/contracts";
+import type { BrowserToolName, ToolLifecycleItemType } from "@synara/contracts";
+import { BROWSER_TOOL_TITLES } from "@synara/shared/browserAutomationPresentation";
 import { basenameOfPath } from "../file-icons";
 import { extractToolArgumentField } from "./toolArgumentSummary";
 
@@ -113,6 +114,17 @@ interface SynaraMcpToolPresentation {
   readonly completed: string;
   readonly failed: string;
 }
+
+type SynaraBrowserToolName = `synara_${BrowserToolName}`;
+const BROWSER_TOOL_NAMES = Object.keys(BROWSER_TOOL_TITLES) as BrowserToolName[];
+const BROWSER_TOOL_NAME_SET = new Set<string>(BROWSER_TOOL_NAMES);
+
+const SYNARA_BROWSER_TOOL_PRESENTATIONS = Object.fromEntries(
+  BROWSER_TOOL_NAMES.map((toolName) => {
+    const title = BROWSER_TOOL_TITLES[toolName];
+    return [`synara_${toolName}`, { running: title, completed: title, failed: title }];
+  }),
+) as Record<SynaraBrowserToolName, SynaraMcpToolPresentation>;
 
 const SYNARA_MCP_TOOL_PRESENTATIONS = {
   synara_context: {
@@ -255,6 +267,7 @@ const SYNARA_MCP_TOOL_PRESENTATIONS = {
     completed: "Synara stopped an automation",
     failed: "Synara couldn't stop an automation",
   },
+  ...SYNARA_BROWSER_TOOL_PRESENTATIONS,
 } as const satisfies Record<string, SynaraMcpToolPresentation>;
 
 function normalizeSynaraMcpIdentifier(value: string): string {
@@ -275,6 +288,9 @@ const SYNARA_MCP_TOOL_PRESENTATION_ENTRIES = Object.entries(SYNARA_MCP_TOOL_PRES
 );
 
 function extractSynaraMcpToolName(normalizedCandidate: string): string | null {
+  if (BROWSER_TOOL_NAME_SET.has(normalizedCandidate)) {
+    return `synara_${normalizedCandidate}`;
+  }
   if (normalizedCandidate.startsWith("mcp_synara_synara_")) {
     return normalizedCandidate.slice("mcp_synara_".length);
   }
@@ -764,6 +780,34 @@ export function deriveReadableCommandDisplay(
         fullCommand: rawCommand,
       };
   }
+}
+
+function firstCommandExecutable(rawCommand: string): string {
+  const trimmed = rawCommand.trim();
+  const match = /^(?:"([^"]+)"|'([^']+)'|(\S+))/u.exec(trimmed);
+  const executable = match?.[1] ?? match?.[2] ?? match?.[3] ?? "";
+  return executable.split(/[\\/]/u).at(-1)?.toLowerCase() ?? "";
+}
+
+// The object half of a command row's sentence ("Searched <for foo in src>"),
+// kept short enough to read inline. Shell wrappers that carry no meaning for a
+// human (a full pwsh.exe path) collapse to the shell's friendly name.
+export function deriveFriendlyCommandTarget(rawCommand: string): string {
+  const executable = firstCommandExecutable(rawCommand);
+  if (
+    executable === "pwsh" ||
+    executable === "pwsh.exe" ||
+    executable === "powershell" ||
+    executable === "powershell.exe"
+  ) {
+    return "PowerShell";
+  }
+  if (executable === "cmd" || executable === "cmd.exe") {
+    return "Command Prompt";
+  }
+
+  const target = deriveReadableCommandDisplay(rawCommand).target.trim();
+  return target.length <= 72 ? target : `${target.slice(0, 69).trimEnd()}…`;
 }
 
 // Whether a shell command is a read-only inspection (read/search/find/list).

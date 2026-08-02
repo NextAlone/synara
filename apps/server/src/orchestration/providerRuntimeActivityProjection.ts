@@ -847,6 +847,14 @@ export function projectProviderRuntimeActivities(
     }
 
     case "turn.steered": {
+      // A steer of the thread's own turn is already visible as the sent user
+      // message that produced it, so an activity row would just repeat the text
+      // under the bubble. Only a subagent delivery needs its own marker: it
+      // lands on the child thread, which never renders the message otherwise.
+      if (event.payload.target === "turn") {
+        return [];
+      }
+
       return [
         {
           id: event.eventId,
@@ -989,13 +997,20 @@ export function projectProviderRuntimeActivities(
       const state = runtimeTurnState(event);
       const modelUsage = compactTurnModelUsage(event.payload.modelUsage);
       const errorMessage = asString(runtimePayloadRecord(event)?.errorMessage);
+      const interrupted = state === "interrupted" || state === "cancelled";
+      let summary = "Turn completed";
+      if (state === "failed") {
+        summary = "Turn failed";
+      } else if (interrupted) {
+        summary = "Turn interrupted";
+      }
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: state === "failed" ? "error" : "info",
           kind: "turn.completed",
-          summary: state === "failed" ? "Turn failed" : "Turn completed",
+          summary,
           payload: toActivityPayload({
             state,
             ...(modelUsage ? { modelUsage } : {}),
