@@ -2,10 +2,30 @@ import "../../index.css";
 
 import { useState } from "react";
 import { page } from "vitest/browser";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-import { Menu, MenuItem, MenuPopupBase, MenuSub, MenuSubPopup, MenuSubTrigger } from "./menu";
+import { NATIVE_BROWSER_OVERLAY_SYNC_EVENT } from "~/lib/nativeBrowserOverlay";
+import {
+  Menu,
+  MenuItem,
+  MenuPopupBase,
+  MenuSub,
+  MenuSubPopup,
+  MenuSubTrigger,
+  MenuTrigger,
+} from "./menu";
+
+function OverlaySyncMenuFixture() {
+  return (
+    <Menu>
+      <MenuTrigger>Open actions</MenuTrigger>
+      <MenuPopupBase>
+        <MenuItem>Close actions</MenuItem>
+      </MenuPopupBase>
+    </Menu>
+  );
+}
 
 function HoverSubmenuFixture() {
   const [open, setOpen] = useState(true);
@@ -64,5 +84,30 @@ describe("Menu submenu hover", () => {
 
     await expect.element(page.getByText("Menu closed: item-press", { exact: true })).toBeVisible();
     await screen.unmount();
+  });
+
+  it("announces popup geometry changes for native browser occlusion", async () => {
+    let overlaySyncCount = 0;
+    const handleOverlaySync = () => {
+      overlaySyncCount += 1;
+    };
+    window.addEventListener(NATIVE_BROWSER_OVERLAY_SYNC_EVENT, handleOverlaySync);
+    const screen = await render(<OverlaySyncMenuFixture />);
+
+    try {
+      await page.getByRole("button", { name: "Open actions" }).click();
+      await expect.element(page.getByText("Close actions", { exact: true })).toBeVisible();
+      await vi.waitFor(() => expect(overlaySyncCount).toBeGreaterThan(0));
+
+      const openSyncCount = overlaySyncCount;
+      await page.getByText("Close actions", { exact: true }).click();
+      await vi.waitFor(() => {
+        expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
+        expect(overlaySyncCount).toBeGreaterThan(openSyncCount);
+      });
+    } finally {
+      window.removeEventListener(NATIVE_BROWSER_OVERLAY_SYNC_EVENT, handleOverlaySync);
+      await screen.unmount();
+    }
   });
 });

@@ -4,6 +4,7 @@ import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import { ChevronRightIcon } from "~/lib/icons";
 import * as React from "react";
 
+import { notifyNativeBrowserOverlayChanged } from "~/lib/nativeBrowserOverlay";
 import { cn } from "~/lib/utils";
 import {
   APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
@@ -23,6 +24,7 @@ type MenuProps = MenuPrimitive.Root.Props & {
 function Menu({
   keepOpenOnSubmenuInteraction: keepOpenOnSubmenuInteractionProp,
   onOpenChange,
+  onOpenChangeComplete,
   ...props
 }: MenuProps) {
   const keepOpenOnSubmenuInteraction = keepOpenOnSubmenuInteractionProp ?? false;
@@ -41,9 +43,22 @@ function Menu({
       return;
     }
     onOpenChange?.(nextOpen, eventDetails);
+    notifyNativeBrowserOverlayChanged();
+  };
+  const handleOpenChangeComplete: NonNullable<
+    MenuPrimitive.Root.Props["onOpenChangeComplete"]
+  > = (nextOpen) => {
+    onOpenChangeComplete?.(nextOpen);
+    notifyNativeBrowserOverlayChanged();
   };
 
-  return <MenuPrimitive.Root onOpenChange={handleOpenChange} {...props} />;
+  return (
+    <MenuPrimitive.Root
+      onOpenChange={handleOpenChange}
+      onOpenChangeComplete={handleOpenChangeComplete}
+      {...props}
+    />
+  );
 }
 
 const MenuPortal = MenuPrimitive.Portal;

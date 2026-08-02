@@ -46,7 +46,7 @@ import { isElectron } from "~/env";
 import { readNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
 import { IMAGE_SIZE_LIMIT_LABEL } from "~/lib/composerSend";
-import { PANEL_RESIZE_OVERLAY_SYNC_EVENT } from "~/lib/panelResize";
+import { NATIVE_BROWSER_OVERLAY_SYNC_EVENT } from "~/lib/nativeBrowserOverlay";
 import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
 import { cn, isMacPlatform } from "~/lib/utils";
 
@@ -122,6 +122,7 @@ const NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR = [
   "[data-slot='command-dialog-backdrop']",
   "[data-slot='command-dialog-popup']",
   "[data-slot='command-dialog-viewport']",
+  "[data-slot='menu-popup']",
   "[data-slot='toast-popup']",
   "[role='dialog'][aria-modal='true']",
 ].join(", ");
@@ -1159,7 +1160,7 @@ export function BrowserPanel({
     });
     observer.observe(element);
     window.addEventListener("resize", scheduleSyncBounds);
-    window.addEventListener(PANEL_RESIZE_OVERLAY_SYNC_EVENT, scheduleSyncBounds);
+    window.addEventListener(NATIVE_BROWSER_OVERLAY_SYNC_EVENT, scheduleSyncBounds);
     document.addEventListener("transitionrun", handleTransitionBounds, true);
     document.addEventListener("transitionend", handleTransitionBounds, true);
     document.addEventListener("transitioncancel", handleTransitionBounds, true);
@@ -1168,7 +1169,7 @@ export function BrowserPanel({
       setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, false);
       observer.disconnect();
       window.removeEventListener("resize", scheduleSyncBounds);
-      window.removeEventListener(PANEL_RESIZE_OVERLAY_SYNC_EVENT, scheduleSyncBounds);
+      window.removeEventListener(NATIVE_BROWSER_OVERLAY_SYNC_EVENT, scheduleSyncBounds);
       document.removeEventListener("transitionrun", handleTransitionBounds, true);
       document.removeEventListener("transitionend", handleTransitionBounds, true);
       document.removeEventListener("transitioncancel", handleTransitionBounds, true);
